@@ -38,7 +38,6 @@ fn Home() -> Element {
     let mut count = use_signal(|| 0);
 
     rsx! {
-        h1 { "Welcome to the High-Five counter! _test_" }
         Link {
             to: Route::Blog {
                 id: count()
