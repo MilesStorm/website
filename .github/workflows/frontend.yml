@@ -27,7 +27,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/yousofmersal/website
+          images: ${{ env.REGISTRY }}/yousofmersal/frontend
           tags: | 
             type=raw,value=latest
             type=sha
