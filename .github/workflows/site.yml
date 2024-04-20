@@ -1,0 +1,15 @@
+name: github pages
+
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-deploy:
+    runs-on: website_frontend
+    steps:
+      - name: "Dioxus Deploy"
+        uses: DioxusLabs/deploy-action@v0.1.2
+          
