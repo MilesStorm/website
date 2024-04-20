@@ -13,7 +13,10 @@ on:
     - .github/workflows/frontend.yml
 
 jobs:
-  build:
+  build:    
+    permissions:
+      contents: read
+      packages: write
     name: Build
     runs-on: self-hosted
     steps:
