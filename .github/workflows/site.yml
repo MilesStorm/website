@@ -1,5 +1,4 @@
-name: github pages
-
+name: site-build
 
 on:
   push:
@@ -11,5 +10,5 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: "Dioxus Deploy"
-        uses: DioxusLabs/deploy-action@v0.1.2
+        uses: DioxusLabs/deploy-action@v0.1.1
           
