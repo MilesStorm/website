@@ -1,5 +1,5 @@
 [package]
-name = "yousofmersal"
+name = "frontend"
 version = "0.1.0"
 authors = ["yousof"]
 edition = "2021"
