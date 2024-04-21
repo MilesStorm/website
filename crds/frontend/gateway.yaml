@@ -7,9 +7,20 @@ spec:
   selector:
     istio: ingressgateway  # use Istio default controller
   servers:
-  - port:
-      number: 80
-      name: http
-      protocol: HTTP
-    hosts:
-    - "*"
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE  # TLS termination at the gateway
+        credentialName: "frontend-cert"  # Kubernetes secret with TLS certificate
+      hosts:
+        - "yousofmersal.com"
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      tls:
+        httpsRedirect: true  # Redirect HTTP to HTTPS
+      hosts:
+        - "yousofmersal.com"

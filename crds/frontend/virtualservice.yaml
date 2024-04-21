@@ -5,7 +5,7 @@ metadata:
   namespace: frontend
 spec:
   hosts:
-  - "*"
+  - "yousofmersal.com"
   gateways:
   - istio-ingress/frontend-gateway  # Name of your gateway
   http:
@@ -16,4 +16,4 @@ spec:
     - destination:
         host: frontend-service.frontend.svc.cluster.local  # Name of your service
         port:
-          number: 80
+          number: 443
