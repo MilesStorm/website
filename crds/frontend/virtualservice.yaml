@@ -7,13 +7,13 @@ spec:
   hosts:
   - "*"
   gateways:
-  - frontend-gateway  # Name of your gateway
+  - istio-ingress/frontend-gateway  # Name of your gateway
   http:
   - match:
     - uri:
         exact: /
     route:
     - destination:
-        host: frontend-service  # Name of your service
+        host: frontend-service.frontend.svc.cluster.local  # Name of your service
         port:
           number: 80
