@@ -16,4 +16,4 @@ spec:
     - destination:
         host: frontend-service.frontend.svc.cluster.local  # Name of your service
         port:
-          number: 443
+          number: 80
