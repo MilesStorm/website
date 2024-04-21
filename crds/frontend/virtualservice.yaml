@@ -5,13 +5,13 @@ metadata:
   namespace: frontend
 spec:
   hosts:
-  - "yousofmersal.com"
+  - yousofmersal.com
   gateways:
   - istio-ingress/frontend-gateway  # Name of your gateway
   http:
   - match:
     - uri:
-        exact: /
+        prefix: /
     route:
     - destination:
         host: frontend-service.frontend.svc.cluster.local  # Name of your service
