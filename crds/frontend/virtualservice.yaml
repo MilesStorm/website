@@ -7,7 +7,7 @@ spec:
   hosts:
   - yousofmersal.com
   gateways:
-  - istio-system/public-gateway  # Name of your gateway
+  - public-gateway  # Name of your gateway
   http:
   - match:
     - uri:
@@ -16,4 +16,4 @@ spec:
     - destination:
         host: frontend-service.frontend.svc.cluster.local  # Name of your service
         port:
-          number: 443
+          number: 80
