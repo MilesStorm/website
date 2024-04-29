@@ -4,9 +4,9 @@ metadata:
   name: frontend-service
   namespace: frontend
 spec:
-  type: ClusterIP
   selector:
     app: frontend
   ports:
-    - port: 80
+    - protocol: TCP
+      port: 80
       targetPort: 80
