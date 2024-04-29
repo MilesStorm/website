@@ -3,6 +3,9 @@
 use dioxus::prelude::*;
 use log::LevelFilter;
 
+// Urls are relative to your Cargo.toml file
+const _TAILWIND_URL: &str = manganis::mg!(file("assets/main.css"));
+
 #[derive(Clone, Routable, Debug, PartialEq)]
 enum Route {
     #[route("/")]
@@ -45,9 +48,9 @@ fn Home() -> Element {
             "Go to blog"
         }
         div {
-            h1 { "High-Five counter: {count}" }
-            button { onclick: move |_| count += 1, "Up high!" }
-            button { onclick: move |_| count -= 1, "Down low!" }
+            h1 {  class: "", "High-Five counter: {count}"}
+            button { class: "btn btn-neutral", onclick: move |_| count += 1, "Up high!" }
+            button { class: "btn btn-neutral", onclick: move |_| count -= 1, "Down low!" }
         }
     }
 }
