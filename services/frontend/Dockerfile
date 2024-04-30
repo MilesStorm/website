@@ -27,7 +27,9 @@ COPY nginx.conf /etc/nginx/nginx.conf
 # Copy the built static files from the frontend-builder stage
 WORKDIR /usr/share/nginx/html
 COPY --from=builder /app/dist ./
-COPY --from=builder /app/dist ./
+COPY --from=builder /app/assets ./
+COPY --from=builder /app/Cargo.toml ./
+COPY --from=builder /app/Dioxus.toml ./
 
 # Expose port and run nginx
 EXPOSE 80
