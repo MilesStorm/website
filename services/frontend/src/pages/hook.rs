@@ -21,13 +21,15 @@ pub fn mode(theme_mode: Theme) {
 
     match theme_mode {
         Theme::Dark => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');");
+            js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');")
+                .expect("Failed to set theme");
             if theme_mode != Theme::Dark {
                 storage.set(Theme::Dark);
             }
         }
         Theme::Light => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'light');");
+            js_sys::eval("document.documentElement.setAttribute('data-theme', 'light');")
+                .expect("Failed to set theme");
             if theme_mode != Theme::Light {
                 storage.set(Theme::Light);
             }
@@ -41,12 +43,14 @@ pub fn mode(theme_mode: Theme) {
                     dioxus_sdk::color_scheme::PreferredColorScheme::Light => {
                         js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'dark');",
-                        );
+                        )
+                        .expect("Failed to set theme");
                     }
                     dioxus_sdk::color_scheme::PreferredColorScheme::Dark => {
                         js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'dark');",
-                        );
+                        )
+                        .expect("Failed to set theme");
                     }
                 }
 
@@ -55,7 +59,8 @@ pub fn mode(theme_mode: Theme) {
                 }
             } else {
                 gloo::console::log!("No preffered theme found, using default");
-                js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');");
+                js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');")
+                    .expect("Failed to set theme");
                 storage.set(Theme::Dark);
             };
         }
