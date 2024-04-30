@@ -17,6 +17,7 @@ RUN cargo chef cook --release --recipe-path recipe.json --target wasm32-unknown-
 
 # Copy over the source code and build the project
 FROM chef as builder
+WORKDIR /app
 COPY --from=cacher . .
 RUN dx build --release
 
@@ -28,8 +29,6 @@ COPY nginx.conf /etc/nginx/nginx.conf
 WORKDIR /usr/share/nginx/html
 COPY --from=builder /app/dist ./
 COPY --from=builder /app/assets ./
-COPY --from=builder /app/Cargo.toml ./
-COPY --from=builder /app/Dioxus.toml ./
 
 # Expose port and run nginx
 EXPOSE 80
