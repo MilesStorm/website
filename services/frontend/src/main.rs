@@ -1,7 +1,11 @@
 #![allow(non_snake_case)]
 
+mod pages;
+
 use dioxus::prelude::*;
 use log::LevelFilter;
+
+use crate::{hook::Theme, pages::*};
 
 // Urls are relative to your Cargo.toml file
 const _TAILWIND_URL: &str = manganis::mg!(file("assets/main.css"));
@@ -38,19 +42,8 @@ fn Blog(id: i32) -> Element {
 
 #[component]
 fn Home() -> Element {
-    let mut count = use_signal(|| 0);
-
+    hook::mode(Theme::Light);
     rsx! {
-        Link {
-            to: Route::Blog {
-                id: count()
-            },
-            "Go to blog"
-        }
-        div {
-            h1 {  class: "", "High-Five counter: {count}"}
-            button { class: "btn btn-neutral", onclick: move |_| count += 1, "Up high!" }
-            button { class: "btn btn-neutral", onclick: move |_| count -= 1, "Down low!" }
-        }
+        cv::Cv_page {}
     }
 }

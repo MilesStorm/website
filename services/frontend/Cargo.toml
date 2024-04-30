@@ -8,7 +8,7 @@ edition = "2021"
 
 [dependencies]
 
-dioxus = { git = "https://github.com/DioxusLabs/dioxus", features = ["web", "router"] }
+dioxus = { version = "0.5.1", features = ["web", "router"] }
 
 # Debug
 log = "0.4.19"
@@ -16,3 +16,8 @@ dioxus-logger = "0.4.1"
 console_error_panic_hook = "0.1.7"
 gloo= "0.11.0"
 manganis = "0.2.2"
+dioxus-sdk = { version = "0.5", features = ["clipboard", "storage", "utils", "web-sys", "color_scheme"] }
+js-sys = "0.3.69"
+serde = { version = "1.0.199", features = ["derive"] }
+serde_json = "1.0.116"
+tracing = { version = "0.1.40", features = ["log"] }
