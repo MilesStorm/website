@@ -78,7 +78,7 @@ pub fn Vitae() -> Element {
                                     "d": "M1.5 0C0.671875 0 0 0.671875 0 1.5C0 1.97187 0.221875 2.41562 0.6 2.7L7.4 7.8C7.75625 8.06563 8.24375 8.06563 8.6 7.8L15.4 2.7C15.7781 2.41562 16 1.97187 16 1.5C16 0.671875 15.3281 0 14.5 0H1.5ZM0 3.5V10C0 11.1031 0.896875 12 2 12H14C15.1031 12 16 11.1031 16 10V3.5L9.2 8.6C8.4875 9.13438 7.5125 9.13438 6.8 8.6L0 3.5Z"
                                 }
                             }
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                            a { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black", href: "mailto:yousofmersal@gmail.com",
                                 "\n            yousofmersal@gmail.com\n          "
                             }
                         }
@@ -96,7 +96,7 @@ pub fn Vitae() -> Element {
                                     "fill": "#0294DE"
                                 }
                             }
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                            a { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",href:"https://github.com/Yousofmersal", text_decoration: "none",
                                 "\n            github.com/YousofMersal\n          "
                             }
                         }
@@ -114,7 +114,7 @@ pub fn Vitae() -> Element {
                                     "d": "M13 0H0.996875C0.446875 0 0 0.453125 0 1.00938V12.9906C0 13.5469 0.446875 14 0.996875 14H13C13.55 14 14 13.5469 14 12.9906V1.00938C14 0.453125 13.55 0 13 0ZM4.23125 12H2.15625V5.31875H4.23438V12H4.23125ZM3.19375 4.40625C2.52812 4.40625 1.99063 3.86562 1.99063 3.20312C1.99063 2.54063 2.52812 2 3.19375 2C3.85625 2 4.39687 2.54063 4.39687 3.20312C4.39687 3.86875 3.85938 4.40625 3.19375 4.40625ZM12.0094 12H9.93437V8.75C9.93437 7.975 9.91875 6.97813 8.85625 6.97813C7.775 6.97813 7.60938 7.82188 7.60938 8.69375V12H5.53438V5.31875H7.525V6.23125H7.55312C7.83125 5.70625 8.50938 5.15312 9.51875 5.15312C11.6187 5.15312 12.0094 6.5375 12.0094 8.3375V12Z"
                                 }
                             }
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                            a { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black", href: "https://linkedin.com/in/YousofMersal", text_decoration: "none",
                                 "\n            linkedin.com/in/YousofMersal\n          "
                             }
                         }
@@ -132,7 +132,7 @@ pub fn Vitae() -> Element {
                                     "d": "M11.5 8.5C11.5 9.19375 11.4625 9.8625 11.3969 10.5H5.60313C5.53438 9.8625 5.5 9.19375 5.5 8.5C5.5 7.80625 5.5375 7.1375 5.60313 6.5H11.3969C11.4656 7.1375 11.5 7.80625 11.5 8.5ZM12.4 6.5H16.2469C16.4125 7.14062 16.5 7.80937 16.5 8.5C16.5 9.19063 16.4125 9.85938 16.2469 10.5H12.4C12.4656 9.85625 12.5 9.1875 12.5 8.5C12.5 7.8125 12.4656 7.14375 12.4 6.5ZM15.9187 5.5H12.2719C11.9594 3.50312 11.3406 1.83125 10.5437 0.7625C12.9906 1.40938 14.9812 3.18438 15.9156 5.5H15.9187ZM11.2594 5.5H5.74062C5.93125 4.3625 6.225 3.35625 6.58437 2.54063C6.9125 1.80313 7.27812 1.26875 7.63125 0.93125C7.98125 0.6 8.27187 0.5 8.5 0.5C8.72812 0.5 9.01875 0.6 9.36875 0.93125C9.72187 1.26875 10.0875 1.80313 10.4156 2.54063C10.7781 3.35313 11.0687 4.35938 11.2594 5.5ZM4.72813 5.5H1.08125C2.01875 3.18438 4.00625 1.40938 6.45625 0.7625C5.65938 1.83125 5.04063 3.50312 4.72813 5.5ZM0.753125 6.5H4.6C4.53437 7.14375 4.5 7.8125 4.5 8.5C4.5 9.1875 4.53437 9.85625 4.6 10.5H0.753125C0.5875 9.85938 0.5 9.19063 0.5 8.5C0.5 7.80937 0.5875 7.14062 0.753125 6.5ZM6.58437 14.4563C6.22187 13.6438 5.93125 12.6375 5.74062 11.5H11.2594C11.0687 12.6375 10.775 13.6438 10.4156 14.4563C10.0875 15.1938 9.72187 15.7281 9.36875 16.0656C9.01875 16.4 8.72812 16.5 8.5 16.5C8.27187 16.5 7.98125 16.4 7.63125 16.0688C7.27812 15.7313 6.9125 15.1969 6.58437 14.4594V14.4563ZM4.72813 11.5C5.04063 13.4969 5.65938 15.1687 6.45625 16.2375C4.00625 15.5906 2.01875 13.8156 1.08125 11.5H4.72813ZM15.9187 11.5C14.9812 13.8156 12.9937 15.5906 10.5469 16.2375C11.3438 15.1687 11.9594 13.4969 12.275 11.5H15.9187Z"
                                 }
                             }
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                            a { class: "flex-grow1 flex-shrink-0 text-base text-left text-black", href: "https://yousofmersal.com", text_decoration: "none",
                                 "yousofmersal.com"
                             }
                         }
@@ -140,6 +140,48 @@ pub fn Vitae() -> Element {
                     div { class: "flex flex-col justify-between items-start flex-grow-0 flex-shrink-0 h-[203px] w-[250px] relative overflow-hidden pl-2.5 py-2.5",
                         p { class: "flex-grow-0 flex-shrink-0 text-[29px] text-left text-[#0294de]",
                             "Interests"
+                        }
+                    div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
+                        svg {
+                            "preserveAspectRatio": "none",
+                            "viewBox": "0 0 6 6",
+                            "fill": "none",
+                            width: "6",
+                            height: "6",
+                            "xmlns": "http://www.w3.org/2000/svg",
+                            class: "flex-grow-0 flex-shrink-0",
+                            circle {
+                                "cx": "3",
+                                "r": "2",
+                                "fill": "#D9D9D9",
+                                "cy": "2.83331",
+                                "stroke": "#0294DE"
+                            }
+                        }
+                        p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                            "\n            Reinforcement Learning\n          "
+                        }
+                    }
+                        div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
+                            svg {
+                                height: "6",
+                                "viewBox": "0 0 6 6",
+                                width: "6",
+                                "fill": "none",
+                                "xmlns": "http://www.w3.org/2000/svg",
+                                "preserveAspectRatio": "none",
+                                class: "flex-grow-0 flex-shrink-0",
+                                circle {
+                                    "fill": "#D9D9D9",
+                                    "cy": "3.16666",
+                                    "cx": "3",
+                                    "r": "2",
+                                    "stroke": "#0294DE"
+                                }
+                            }
+                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                                "\n            Parallel Computation\n          "
+                            }
                         }
                         div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
                             svg {
@@ -202,48 +244,6 @@ pub fn Vitae() -> Element {
                             }
                             p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
                                 "\n            Raid-lead World of Warcraft\n          "
-                            }
-                        }
-                        div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
-                            svg {
-                                height: "6",
-                                "viewBox": "0 0 6 6",
-                                width: "6",
-                                "fill": "none",
-                                "xmlns": "http://www.w3.org/2000/svg",
-                                "preserveAspectRatio": "none",
-                                class: "flex-grow-0 flex-shrink-0",
-                                circle {
-                                    "fill": "#D9D9D9",
-                                    "cy": "3.16666",
-                                    "cx": "3",
-                                    "r": "2",
-                                    "stroke": "#0294DE"
-                                }
-                            }
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                "\n            Parallel Computation\n          "
-                            }
-                        }
-                        div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
-                            svg {
-                                "preserveAspectRatio": "none",
-                                "viewBox": "0 0 6 6",
-                                "fill": "none",
-                                width: "6",
-                                height: "6",
-                                "xmlns": "http://www.w3.org/2000/svg",
-                                class: "flex-grow-0 flex-shrink-0",
-                                circle {
-                                    "cx": "3",
-                                    "r": "2",
-                                    "fill": "#D9D9D9",
-                                    "cy": "2.83331",
-                                    "stroke": "#0294DE"
-                                }
-                            }
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                "\n            Reinforcement Learning\n          "
                             }
                         }
                         div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
@@ -771,88 +771,6 @@ pub fn Vitae() -> Element {
                         }
                         div { class: "flex justify-between items-center self-stretch flex-grow-0 flex-shrink-0 relative",
                             p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                "Danish"
-                            }
-                            div { class: "flex justify-center items-center flex-grow-0 flex-shrink-0 w-[45px] relative overflow-hidden gap-0.5 py-px",
-                                svg {
-                                    "fill": "none",
-                                    height: "6",
-                                    "xmlns": "http://www.w3.org/2000/svg",
-                                    "viewBox": "0 0 6 6",
-                                    width: "6",
-                                    "preserveAspectRatio": "none",
-                                    class: "flex-grow-0 flex-shrink-0",
-                                    circle {
-                                        "cx": "3",
-                                        "cy": "3.16669",
-                                        "r": "2.5",
-                                        "fill": "#0294DE"
-                                    }
-                                }
-                                svg {
-                                    "preserveAspectRatio": "none",
-                                    "fill": "none",
-                                    "xmlns": "http://www.w3.org/2000/svg",
-                                    width: "6",
-                                    "viewBox": "0 0 6 6",
-                                    height: "6",
-                                    class: "flex-grow-0 flex-shrink-0",
-                                    circle {
-                                        "r": "2.5",
-                                        "cx": "3",
-                                        "fill": "#0294DE",
-                                        "cy": "3.16669"
-                                    }
-                                }
-                                svg {
-                                    "fill": "none",
-                                    "xmlns": "http://www.w3.org/2000/svg",
-                                    "preserveAspectRatio": "none",
-                                    width: "6",
-                                    "viewBox": "0 0 6 6",
-                                    height: "6",
-                                    class: "flex-grow-0 flex-shrink-0",
-                                    circle {
-                                        "cx": "3",
-                                        "cy": "3.16669",
-                                        "r": "2.5",
-                                        "fill": "#0294DE"
-                                    }
-                                }
-                                svg {
-                                    height: "6",
-                                    width: "6",
-                                    "xmlns": "http://www.w3.org/2000/svg",
-                                    "preserveAspectRatio": "none",
-                                    "fill": "none",
-                                    "viewBox": "0 0 6 6",
-                                    class: "flex-grow-0 flex-shrink-0",
-                                    circle {
-                                        "fill": "#0294DE",
-                                        "r": "2.5",
-                                        "cy": "3.16669",
-                                        "cx": "3"
-                                    }
-                                }
-                                svg {
-                                    "xmlns": "http://www.w3.org/2000/svg",
-                                    width: "6",
-                                    "preserveAspectRatio": "none",
-                                    "viewBox": "0 0 6 6",
-                                    "fill": "none",
-                                    height: "6",
-                                    class: "flex-grow-0 flex-shrink-0",
-                                    circle {
-                                        "cy": "3.16669",
-                                        "r": "2.5",
-                                        "cx": "3",
-                                        "fill": "#0294DE"
-                                    }
-                                }
-                            }
-                        }
-                        div { class: "flex justify-between items-center self-stretch flex-grow-0 flex-shrink-0 relative",
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
                                 "English"
                             }
                             div { class: "flex justify-center items-center flex-grow-0 flex-shrink-0 w-[45px] relative overflow-hidden gap-0.5 py-px",
@@ -929,6 +847,88 @@ pub fn Vitae() -> Element {
                                         "cy": "2.83331",
                                         "r": "2.5",
                                         "cx": "3"
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "flex justify-between items-center self-stretch flex-grow-0 flex-shrink-0 relative",
+                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                                "Danish"
+                            }
+                            div { class: "flex justify-center items-center flex-grow-0 flex-shrink-0 w-[45px] relative overflow-hidden gap-0.5 py-px",
+                                svg {
+                                    "fill": "none",
+                                    height: "6",
+                                    "xmlns": "http://www.w3.org/2000/svg",
+                                    "viewBox": "0 0 6 6",
+                                    width: "6",
+                                    "preserveAspectRatio": "none",
+                                    class: "flex-grow-0 flex-shrink-0",
+                                    circle {
+                                        "cx": "3",
+                                        "cy": "3.16669",
+                                        "r": "2.5",
+                                        "fill": "#0294DE"
+                                    }
+                                }
+                                svg {
+                                    "preserveAspectRatio": "none",
+                                    "fill": "none",
+                                    "xmlns": "http://www.w3.org/2000/svg",
+                                    width: "6",
+                                    "viewBox": "0 0 6 6",
+                                    height: "6",
+                                    class: "flex-grow-0 flex-shrink-0",
+                                    circle {
+                                        "r": "2.5",
+                                        "cx": "3",
+                                        "fill": "#0294DE",
+                                        "cy": "3.16669"
+                                    }
+                                }
+                                svg {
+                                    "fill": "none",
+                                    "xmlns": "http://www.w3.org/2000/svg",
+                                    "preserveAspectRatio": "none",
+                                    width: "6",
+                                    "viewBox": "0 0 6 6",
+                                    height: "6",
+                                    class: "flex-grow-0 flex-shrink-0",
+                                    circle {
+                                        "cx": "3",
+                                        "cy": "3.16669",
+                                        "r": "2.5",
+                                        "fill": "#0294DE"
+                                    }
+                                }
+                                svg {
+                                    height: "6",
+                                    width: "6",
+                                    "xmlns": "http://www.w3.org/2000/svg",
+                                    "preserveAspectRatio": "none",
+                                    "fill": "none",
+                                    "viewBox": "0 0 6 6",
+                                    class: "flex-grow-0 flex-shrink-0",
+                                    circle {
+                                        "fill": "#0294DE",
+                                        "r": "2.5",
+                                        "cy": "3.16669",
+                                        "cx": "3"
+                                    }
+                                }
+                                svg {
+                                    "xmlns": "http://www.w3.org/2000/svg",
+                                    width: "6",
+                                    "preserveAspectRatio": "none",
+                                    "viewBox": "0 0 6 6",
+                                    "fill": "none",
+                                    height: "6",
+                                    class: "flex-grow-0 flex-shrink-0",
+                                    circle {
+                                        "cy": "3.16669",
+                                        "r": "2.5",
+                                        "cx": "3",
+                                        "fill": "#0294DE"
                                     }
                                 }
                             }
