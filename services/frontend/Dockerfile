@@ -18,7 +18,7 @@ RUN cargo chef cook --release --recipe-path recipe.json --target wasm32-unknown-
 # Copy over the source code and build the project
 FROM chef as builder
 WORKDIR /app
-COPY --from=cacher . .
+COPY --from=planner . .
 RUN dx build --release
 
 # Final stage: Copy the built files to an nginx image to serve the website
