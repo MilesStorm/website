@@ -1,8 +1,6 @@
 use std::env;
 
 fn main() {
-    // run tailwind
-    //
     if Ok("debug".to_owned()) == env::var("PROFILE") {
         let _ = std::process::Command::new("npx")
             .args([
