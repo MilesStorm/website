@@ -10,9 +10,6 @@ source:
   repoURL: 'git@github.com:YousofMersal/website.git'
   path: crds/frontend
   targetRevision: HEAD
-destination:
-  server: 'https://kubernetes.default.svc'
-  namespace: frontend
 syncPolicy:
   automated:
     prune: true
