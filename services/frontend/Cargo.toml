@@ -16,7 +16,7 @@ dioxus-logger = "0.4.1"
 console_error_panic_hook = "0.1.7"
 gloo= "0.11.0"
 manganis = "0.2.2"
-dioxus-sdk = { git = "https://github.com/DioxusLabs/sdk", features = ["clipboard", "storage", "color_scheme"] }
+dioxus-sdk = { git = "https://github.com/DioxusLabs/sdk", features = ["storage", "color_scheme"] }
 js-sys = "0.3.69"
 serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
