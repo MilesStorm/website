@@ -20,3 +20,5 @@ spec:
         image: ghcr.io/yousofmersal/frontend:latest 
         ports:
         - containerPort: 80  # Exposing internal port 80
+      imagePullSecrets:
+        - name: dockerconfigjson-github-com
