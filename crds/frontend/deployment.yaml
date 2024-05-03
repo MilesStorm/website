@@ -4,6 +4,7 @@ metadata:
   namespace: frontend
   name: frontend-deployment
   labels:
+    istio-injection: enabled
     app: frontend
 spec:
   replicas: 1  # Number of replicas

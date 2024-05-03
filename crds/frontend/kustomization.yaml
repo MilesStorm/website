@@ -4,7 +4,6 @@ kind: Kustomization
 labels:
   - pairs:
       app: frontend
-      istio-injection: enabled
 resources:
 - deployment.yaml
 - service.yaml
