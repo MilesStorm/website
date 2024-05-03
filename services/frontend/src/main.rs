@@ -1,11 +1,12 @@
 #![allow(non_snake_case)]
 
+mod components;
 mod pages;
 
 use dioxus::prelude::*;
 use log::LevelFilter;
 
-use crate::{cv::CvPage, hook::Theme, pages::*};
+use crate::{components::Navbar::Navbar, cv::CvPage, hook::Theme, pages::*};
 
 // Urls are relative to your Cargo.toml file
 const _TAILWIND_URL: &str = manganis::mg!(file("assets/main.css"));
@@ -45,5 +46,7 @@ fn Blog(id: i32) -> Element {
 #[component]
 fn Home() -> Element {
     hook::mode(Theme::Preffered);
-    rsx! {}
+    rsx! {
+        Navbar {}
+    }
 }
