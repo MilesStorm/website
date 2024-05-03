@@ -44,6 +44,6 @@ fn Blog(id: i32) -> Element {
 
 #[component]
 fn Home() -> Element {
-    hook::mode(Theme::Light);
+    hook::mode(Theme::Preffered);
     rsx! {}
 }

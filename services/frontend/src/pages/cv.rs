@@ -15,12 +15,11 @@ pub fn CvPage() -> Element {
 /// run through dioxus-cli translate command
 #[component]
 pub fn Vitae() -> Element {
-    mode(Theme::Light);
     rsx! {
-        div { class: "flex flex-col justify-start items-center overflow-hidden gap-2.5 px-26 bg-white",
-            div { class: "flex justify-start items-center flex-grow-0 flex-shrink-0 relative overflow-hidden gap-7",
+        div { class: "flex flex-col justify-start items-center gap-2.5 px-26 bg-white max-h-max min-h-screen",
+            div { class: "flex justify-start items-start flex-grow-0 flex-shrink-0 relative gap-7",
                 div { class: "flex flex-col justify-start items-center flex-grow-0 flex-shrink-0 gap-[45px] pt-16",
-                    div { class: "flex flex-col justify-between items-center flex-grow-0 flex-shrink-0 h-[295px] w-[250px] relative overflow-hidden",
+                    div { class: "flex flex-col justify-between items-center flex-grow-0 flex-shrink-0 h-[295px] w-[250px] relative",
                         img {
                             src: "{PROFILE_PIC}",
                             class: "flex-grow-0 flex-shrink-0 w-[178px] h-[178px] rounded-[163px] object-cover"
@@ -1022,11 +1021,11 @@ pub fn Vitae() -> Element {
                 svg {
                     "viewBox": "0 0 3 1080",
                     width: "3",
-                    height: "1080",
+                    height: "auto",
                     "xmlns": "http://www.w3.org/2000/svg",
                     "preserveAspectRatio": "xMidYMid meet",
                     "fill": "none",
-                    class: "flex-grow-0 flex-shrink-0",
+                    class: "flex-grow-0 flex-shrink-0 py-24",
                     line {
                         "y2": "1080",
                         "y1": "4.37114e-8",
@@ -1036,7 +1035,7 @@ pub fn Vitae() -> Element {
                         "stroke-width": "2"
                     }
                 }
-                div { class: "flex flex-col justify-start items-start flex-grow-0 flex-shrink-0 h-[1078px] max-w overflow-hidden gap-2.5 pl-[150px] pr-[70px] py-[54px]",
+                div { class: "flex flex-col justify-start items-start flex-grow-0 flex-shrink-0 max-w overflow-hidden gap-2.5 pl-12 py-16",
                     div { class: "flex flex-col justify-start items-start flex-grow-0 flex-shrink-0 relative overflow-hidden gap-2.5 pl-2.5 py-2.5",
                         p { class: "flex-grow-0 flex-shrink-0 text-[29px] text-left text-[#0294de]",
                             "Experience"
