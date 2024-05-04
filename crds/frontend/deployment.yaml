@@ -15,6 +15,7 @@ spec:
             - "curl"
             - "--request"
             - "POST"
+            - "-v"
             - "--url"
             - '$CLOUDFLARE_URL'
             - "--header"
