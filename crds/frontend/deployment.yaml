@@ -16,7 +16,7 @@ spec:
             - "--request"
             - "POST"
             - "--url"
-            - "$CLOUDFLARE_URL"
+            - '$CLOUDFLARE_URL'
             - "--header"
             - 'Content-Type: application/json'
             - "--header"
