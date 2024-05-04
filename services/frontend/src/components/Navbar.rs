@@ -37,7 +37,7 @@ pub fn Navbar() -> Element {
             }
             div { class: "navbar-center hidden lg:flex",
                 ul { class: "menu menu-horizontal px-1",
-                    li{ Link {to: "/", "Home" } }
+                    li{ Link {to: "/", "Landing" } }
                 }
             }
             div{ class: "navbar-end",

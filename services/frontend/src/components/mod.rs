@@ -1,2 +1,2 @@
-pub mod Navbar;
-pub mod icon;
+pub(crate) mod Navbar;
+pub(crate) mod icon;

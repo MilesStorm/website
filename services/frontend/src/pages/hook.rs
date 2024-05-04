@@ -34,6 +34,7 @@ pub fn mode(theme_mode: Theme) {
                 storage.set(Theme::Light);
             }
         }
+
         Theme::Preffered => {
             let pref = dioxus_sdk::color_scheme::use_preferred_color_scheme();
             if let Ok(prefference) = pref {
