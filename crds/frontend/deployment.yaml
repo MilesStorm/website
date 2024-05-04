@@ -7,6 +7,9 @@ metadata:
     argocd.argoproj.io/hook-delete-policy: HookSucceeded
 spec:
   template:
+    metedata:
+      annotations:
+        sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: cloudflare-cache-hook
