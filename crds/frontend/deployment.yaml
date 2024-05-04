@@ -15,15 +15,20 @@ spec:
         - name: cloudflare-cache-hook
           image: curlimages/curl
           command:
-              - "sh"
-              - "-c"
-              - |
-               curl -4 -v --request POST \
-                   --url "$CLOUDFLARE_URL" \
-                   --header "Content-Type: application/json" \
-                   --header "X-Auth-Email: $CLOUDFLARE_EMAIL" \
-                   --header "X-Auth-Key: $CLOUDFLARE_TOKEN" \
-                   --data '{"purge_everything":true}'
+            - "sh"
+            - "-c"
+            - |
+              echo "$CLOUDFLARE_URL"
+          # command:
+          #     - "sh"
+          #     - "-c"
+          #     - |
+          #      curl -4 -v --request POST \
+          #          --url "$CLOUDFLARE_URL" \
+          #          --header "Content-Type: application/json" \
+          #          --header "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+          #          --header "X-Auth-Key: $CLOUDFLARE_TOKEN" \
+          #          --data '{"purge_everything":true}'
           env:
             - name: CLOUDFLARE_URL
               valueFrom:
