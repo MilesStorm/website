@@ -16,12 +16,31 @@ spec:
             - "--request"
             - "POST"
             - "--url"
+            - "$CLOUDFLARE_URL"
             - "--header"
             - 'Content-Type: application/json'
             - "--header"
+            - 'X-Auth-Email: $CLOUDFLARE_EMAIL'
             - "--header"
+            - 'X-Auth-Key: $CLOUDFLARE_TOKEN'
             - "--data"
             - '{"purge_everything":true}'
+          env:
+            - name: CLOUDFLARE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-secrets
+                  key: url
+            - name: CLOUDFLARE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-secrets
+                  key: token
+            - name: CLOUDFLARE_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-secrets
+                  key: email
       restartPolicy: Never
   backoffLimit: 2
 ---
