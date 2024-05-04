@@ -15,7 +15,7 @@ spec:
               - "sh"
               - "-c"
               - |
-               curl -v \
+               curl \
                    --url "$CLOUDFLARE_URL" \
                    --header "Content-Type: application/json" \
                    --header "X-Auth-Email: $CLOUDFLARE_EMAIL" \
