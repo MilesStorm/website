@@ -8,4 +8,3 @@ resources:
 - deployment.yaml
 - service.yaml
 - virtualservice.yaml
-- application.yaml
