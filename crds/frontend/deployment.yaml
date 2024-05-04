@@ -1,3 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: frontend-cloudflare-cache
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  template:
+    spec:
+      containers:
+        - name: cloudflare-cache-hook
+          image: curlimages/curl
+          command:
+            - "curl"
+            - "--request"
+            - "POST"
+            - "--url"
+            - "--header"
+            - 'Content-Type: application/json'
+            - "--header"
+            - "--header"
+            - "--data"
+            - '{"purge_everything":true}'
+      restartPolicy: Never
+  backoffLimit: 2
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
