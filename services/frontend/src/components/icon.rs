@@ -7,6 +7,8 @@ pub struct IconProps {
     class: Option<String>,
 }
 
+const DEFAULT_PROFILE: manganis::ImageAsset = manganis::mg!(image("assets/default_profile.png"));
+
 pub fn Logo(props: IconProps) -> Element {
     rsx! {
         svg {
@@ -44,6 +46,18 @@ pub fn Logo_c(props: IconProps) -> Element {
                 style: "-inkscape-stroke:none;",
                 transform: "matrix(1.5 0 0 1.5 149.34 149.15)"
             }
+        }
+    }
+}
+
+pub fn default_profile_picture(props: IconProps) -> Element {
+    rsx! {
+        img {
+            src: "{DEFAULT_PROFILE}",
+            alt: "profile picture",
+            width: "{props.width}",
+            height: "{props.height}",
+            class: "rounded-full"
         }
     }
 }

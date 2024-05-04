@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::components::icon::Logo_c;
+use crate::components::icon::{default_profile_picture, Logo_c};
 
 pub fn Navbar() -> Element {
     // let is_hidden = use_state(cx , || "hidden");
@@ -65,7 +65,7 @@ pub fn Navbar() -> Element {
                     div {class: "dropdown dropdown-end",
                         label { tabindex: "0", class: "btn btn-ghost btn-circle avatar",
                             div { class: "w-10 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2",
-                                img { src: "https://www.tenforums.com/geek/gars/images/2/types/thumb_15951118880user.png" }
+                                default_profile_picture {width: 40, height: 40}
                             }
                         }
                         ul {
