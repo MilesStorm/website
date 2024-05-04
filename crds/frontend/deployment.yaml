@@ -11,21 +11,16 @@ spec:
       containers:
         - name: cloudflare-cache-hook
           image: curlimages/curl
-          command:
-            - "curl"
-            - "--request"
-            - "POST"
-            - "-v"
-            - "--url"
-            - '$CLOUDFLARE_URL'
-            - "--header"
-            - 'Content-Type: application/json'
-            - "--header"
-            - 'X-Auth-Email: $CLOUDFLARE_EMAIL'
-            - "--header"
-            - 'X-Auth-Key: $CLOUDFLARE_TOKEN'
-            - "--data"
-            - '{"purge_everything":true}'
+          command: ["sh", "-c"]
+          args:
+             |
+             curl -v \
+             --url '$CLOUDFLARE_URL' \
+             --header 'Content-Type: application/json' \
+             --header 'X-Auth-Email: $CLOUDFLARE_EMAIL' \
+             --header 'X-Auth-Key: $CLOUDFLARE_TOKEN' \
+             --data '{"purge_everything":true}' \ 
+             --show-error
           env:
             - name: CLOUDFLARE_URL
               valueFrom:
