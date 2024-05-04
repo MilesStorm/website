@@ -16,12 +16,11 @@ spec:
               - "-c"
               - |
                curl -v \
-                   --url '$CLOUDFLARE_URL' \
-                   --header 'Content-Type: application/json' \
-                   --header 'X-Auth-Email: $CLOUDFLARE_EMAIL' \
-                   --header 'X-Auth-Key: $CLOUDFLARE_TOKEN' \
-                   --data '{"purge_everything":true}' \ 
-                   --show-error
+                   --url "$CLOUDFLARE_URL" \
+                   --header "Content-Type: application/json" \
+                   --header "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+                   --header "X-Auth-Key: $CLOUDFLARE_TOKEN" \
+                   --data '{"purge_everything":true}'
           env:
             - name: CLOUDFLARE_URL
               valueFrom:
