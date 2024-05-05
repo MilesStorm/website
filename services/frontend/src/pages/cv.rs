@@ -1,7 +1,5 @@
 use dioxus::prelude::*;
 
-use crate::hook::{mode, Theme};
-
 const PROFILE_PIC: manganis::ImageAsset = manganis::mg!(image("assets/profile.jpg"));
 
 #[component]

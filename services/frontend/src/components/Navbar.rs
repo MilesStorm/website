@@ -78,7 +78,7 @@ pub fn Navbar() -> Element {
                                 span { class: "badge", "New" }
                                 }
                             }
-                            li { a { class: "justify-between", "Settings" } }
+                            li { a { class: "justify-between","Settings" } }
                             li { a {"test"} }
                             li { a { class: "justify-between", "Logout" } }
                         }

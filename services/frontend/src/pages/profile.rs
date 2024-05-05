@@ -2,12 +2,14 @@ use dioxus::prelude::*;
 
 use crate::{
     components::Navbar::Navbar,
-    pages::{mode, Theme},
+    get_mode,
+    pages::{set_mode, Theme},
 };
 use gloo::console::log;
 
 const PROFILE_PIC: manganis::ImageAsset = manganis::mg!(image("assets/default_profile.png"));
 
+#[component]
 pub fn Profile() -> Element {
     rsx! {
         Navbar {}
@@ -15,6 +17,7 @@ pub fn Profile() -> Element {
     }
 }
 
+#[component]
 pub fn Profile_form() -> Element {
     rsx! {
         div { class: "container mx-auto mt-10",
@@ -51,8 +54,15 @@ pub fn Profile_form() -> Element {
                         select { class: "select select-primary w-full max-w-xs",
                             onchange: move |evt: Event<FormData>| {
                                 let choise = evt.value();
-                                let d = Theme::from(choise);
-                                mode(d);
+                                let new_theme = Theme::from(choise);
+                                set_mode(new_theme);
+                            },
+                            value: {
+                                match get_mode() {
+                                    Theme::Dark => "Dark",
+                                    Theme::Light => "Light",
+                                    Theme::Preffered => "System",
+                                }
                             },
                             option { "Dark" }
                             option { "Light" }
