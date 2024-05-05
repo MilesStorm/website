@@ -37,7 +37,7 @@ pub fn Navbar() -> Element {
             }
             div { class: "navbar-center hidden lg:flex",
                 ul { class: "menu menu-horizontal px-1",
-                    li{ Link {to: "/", "Landing" } }
+                    li{ Link {to: "/", "Home" } }
                 }
             }
             div{ class: "navbar-end",
@@ -72,12 +72,14 @@ pub fn Navbar() -> Element {
                             tabindex: "0",
                             class: "mt-3 p-2 shadow menu menu-compact dropdown-content bg-base-200 rounded-box w-52",
                             li {
-                                a { class: "justify-between",
+                                Link { class: "justify-between",
+                                 to:"/profile",
                                 "Profile"
                                 span { class: "badge", "New" }
                                 }
                             }
                             li { a { class: "justify-between", "Settings" } }
+                            li { a {"test"} }
                             li { a { class: "justify-between", "Logout" } }
                         }
                     }

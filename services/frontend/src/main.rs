@@ -19,6 +19,8 @@ enum Route {
     Blog { id: i32 },
     #[route("/cv")]
     CvPage {},
+    #[route("/profile")]
+    Profile {},
 }
 
 fn main() {
@@ -30,6 +32,7 @@ fn main() {
 }
 
 fn App() -> Element {
+    hook::mode(Theme::Preffered);
     rsx! {
         Router::<Route> {}
     }
@@ -45,7 +48,6 @@ fn Blog(id: i32) -> Element {
 
 #[component]
 fn Home() -> Element {
-    hook::mode(Theme::Preffered);
     rsx! {
         Landing {}
     }

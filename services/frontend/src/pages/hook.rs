@@ -10,6 +10,18 @@ pub enum Theme {
     Preffered,
 }
 
+impl Theme {
+    pub fn from(input: String) -> Theme {
+        let input = input.to_lowercase();
+        match input.as_str() {
+            "dark" => Theme::Dark,
+            "light" => Theme::Light,
+            "preffered" | "system" => Theme::Preffered,
+            _ => Theme::Preffered,
+        }
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Theme::Preffered
