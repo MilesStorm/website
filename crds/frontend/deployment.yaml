@@ -53,7 +53,12 @@ metadata:
     istio-injection: enabled
     app: frontend
 spec:
-  replicas: 1  # Number of replicas
+  replicas: 2  # Number of replicas
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: frontend
@@ -62,6 +67,13 @@ spec:
       labels:
         app: frontend
     spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: frontend
       containers:
       - name: frontend
         image: ghcr.io/yousofmersal/frontend:latest 
