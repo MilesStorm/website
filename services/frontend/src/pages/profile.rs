@@ -58,14 +58,19 @@ pub fn Profile_form() -> Element {
                             },
                             value: {
                                 match get_mode() {
-                                    Theme::Dark => "Dark",
-                                    Theme::Light => "Light",
-                                    Theme::Preffered => "System",
+                                    Theme::Dark=>"Dark",
+                                    Theme::Light=>"Light",
+                                    Theme::Preffered=>"System",
+                                    Theme::Dracula => "Dracula",
+                                    Theme::Synthwave => "Synthwave",
+                                    Theme::Retro => "Retro",
+                                    Theme::Dim => "Dim",
+                                    Theme::Corporate => "Corporate",
                                 }
                             },
-                            option { "Dark" }
-                            option { "Light" }
-                            option { "System" }
+                            for theme in Theme::iterator() {
+                                 option { "{theme}" }
+                            }
                         }
                     }
                     div { class: "mb-4",

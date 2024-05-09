@@ -1,3 +1,4 @@
+use core::slice::Iter;
 use dioxus::signals::Writable;
 use dioxus_sdk::storage::*;
 use js_sys;
@@ -7,6 +8,11 @@ use serde::{Deserialize, Serialize};
 pub enum Theme {
     Dark,
     Light,
+    Dracula,
+    Synthwave,
+    Retro,
+    Dim,
+    Corporate,
     Preffered,
 }
 
@@ -16,9 +22,27 @@ impl Theme {
         match input.as_str() {
             "dark" => Theme::Dark,
             "light" => Theme::Light,
+            "dracula" => Theme::Dracula,
+            "synthwave" => Theme::Synthwave,
+            "Retro" => Theme::Retro,
+            "dim" => Theme::Dim,
+            "corporate" => Theme::Corporate,
             "preffered" | "system" => Theme::Preffered,
             _ => Theme::Preffered,
         }
+    }
+
+    pub fn iterator() -> Iter<'static, Theme> {
+        static THEMES: [Theme; 7] = [
+            Theme::Dark,
+            Theme::Light,
+            Theme::Dracula,
+            Theme::Synthwave,
+            Theme::Retro,
+            Theme::Dim,
+            Theme::Corporate,
+        ];
+        THEMES.iter()
     }
 
     pub fn to_css_class(&self) -> String {
@@ -26,6 +50,11 @@ impl Theme {
         match self {
             Theme::Dark => "dark".to_string(),
             Theme::Light => "light".to_string(),
+            Theme::Dracula => "dracula".to_string(),
+            Theme::Synthwave => "synthwave".to_string(),
+            Theme::Retro => "retro".to_string(),
+            Theme::Dim => "dim".to_string(),
+            Theme::Corporate => "corporate".to_string(),
             Theme::Preffered => if let Ok(prefference) = pref {
                 tracing::info!("Preffered theme found: {:?}", prefference);
 
@@ -38,6 +67,21 @@ impl Theme {
                 "dark"
             }
             .to_owned(),
+        }
+    }
+}
+
+impl ToString for Theme {
+    fn to_string(&self) -> String {
+        match self {
+            Theme::Dark => "Dark".to_string(),
+            Theme::Light => "Light".to_string(),
+            Theme::Dracula => "Dracula".to_string(),
+            Theme::Synthwave => "Synthwave".to_string(),
+            Theme::Retro => "Retro".to_string(),
+            Theme::Dim => "Dim".to_string(),
+            Theme::Corporate => "Corporate".to_string(),
+            Theme::Preffered => "System".to_string(),
         }
     }
 }
@@ -85,7 +129,26 @@ pub fn set_mode(theme_mode: Theme) {
             js_sys::eval("document.documentElement.setAttribute('data-theme', 'light');")
                 .expect("Failed to set theme");
         }
-
+        Theme::Dracula => {
+            js_sys::eval("document.documentElement.setAttribute('data-theme', 'dracula');")
+                .expect("Failed to set theme");
+        }
+        Theme::Synthwave => {
+            js_sys::eval("document.documentElement.setAttribute('data-theme', 'synthwave');")
+                .expect("Failed to set theme");
+        }
+        Theme::Retro => {
+            js_sys::eval("document.documentElement.setAttribute('data-theme', 'retro');")
+                .expect("Failed to set theme");
+        }
+        Theme::Dim => {
+            js_sys::eval("document.documentElement.setAttribute('data-theme', 'dim');")
+                .expect("Failed to set theme");
+        }
+        Theme::Corporate => {
+            js_sys::eval("document.documentElement.setAttribute('data-theme', 'corporate');")
+                .expect("Failed to set theme");
+        }
         Theme::Preffered => {
             if let Ok(prefference) = pref {
                 tracing::info!("Preffered theme found: {:?}", prefference);
