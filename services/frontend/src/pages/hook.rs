@@ -24,7 +24,7 @@ impl Theme {
             "light" => Theme::Light,
             "dracula" => Theme::Dracula,
             "synthwave" => Theme::Synthwave,
-            "Retro" => Theme::Retro,
+            "retro" => Theme::Retro,
             "dim" => Theme::Dim,
             "corporate" => Theme::Corporate,
             "preffered" | "system" => Theme::Preffered,
@@ -33,7 +33,7 @@ impl Theme {
     }
 
     pub fn iterator() -> Iter<'static, Theme> {
-        static THEMES: [Theme; 7] = [
+        static THEMES: [Theme; 8] = [
             Theme::Dark,
             Theme::Light,
             Theme::Dracula,
@@ -41,6 +41,7 @@ impl Theme {
             Theme::Retro,
             Theme::Dim,
             Theme::Corporate,
+            Theme::Preffered,
         ];
         THEMES.iter()
     }
