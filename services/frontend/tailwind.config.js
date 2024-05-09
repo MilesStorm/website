@@ -4,7 +4,7 @@ module.exports = {
   content: ["./src/**/*.{rs,html,css}", "./dist/**/*.html"],
   darkMode: ["class", '[data-theme="dark"]'],
   daisyui: {
-    themes: ['light', 'dark'],
+    themes: ['light', 'dark', 'synthwave', 'dracula', 'retro', 'dim', 'corporate'],
     style: true,
     base: true,
     utils: true,

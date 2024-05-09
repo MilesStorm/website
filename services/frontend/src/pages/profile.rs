@@ -5,7 +5,6 @@ use crate::{
     get_mode,
     pages::{set_mode, Theme},
 };
-use gloo::console::log;
 
 const PROFILE_PIC: manganis::ImageAsset = manganis::mg!(image("assets/default_profile.png"));
 

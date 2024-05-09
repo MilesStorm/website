@@ -1,4 +1,4 @@
-use dioxus::signals::{GlobalSignal, Readable, Writable};
+use dioxus::signals::Writable;
 use dioxus_sdk::storage::*;
 use js_sys;
 use serde::{Deserialize, Serialize};
@@ -49,11 +49,14 @@ impl Default for Theme {
 }
 
 pub fn get_mode() -> Theme {
-    use_persistent("theme-mode", || Theme::Preffered)()
+    // use_persistent("theme-mode", || Theme::Preffered)()
+    use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered)()
 }
 
 pub fn setup_mode() {
-    let mode = use_persistent("theme-mode", || Theme::default());
+    // let mode = use_persistent("theme-mode", || Theme::default());
+    let mode =
+        use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered);
 
     js_sys::eval(
         format!(
@@ -66,7 +69,9 @@ pub fn setup_mode() {
 }
 
 pub fn set_mode(theme_mode: Theme) {
-    let mut storage = use_persistent("theme-mode", || Theme::default());
+    // let mut storage = use_persistent("theme-mode", || Theme::default());
+    let mut storage =
+        use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered);
 
     storage.set(theme_mode);
     let pref = dioxus_sdk::color_scheme::use_preferred_color_scheme();
