@@ -57,16 +57,7 @@ pub fn Profile_form() -> Element {
                                 set_mode(new_theme);
                             },
                             value: {
-                                match get_mode() {
-                                    Theme::Dark=>"Dark",
-                                    Theme::Light=>"Light",
-                                    Theme::Preffered=>"System",
-                                    Theme::Dracula => "Dracula",
-                                    Theme::Synthwave => "Synthwave",
-                                    Theme::Retro => "Retro",
-                                    Theme::Dim => "Dim",
-                                    Theme::Corporate => "Corporate",
-                                }
+                                get_mode().to_string()
                             },
                             for theme in Theme::iterator() {
                                  option { "{theme}" }

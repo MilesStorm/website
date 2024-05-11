@@ -95,7 +95,7 @@ pub fn Vitae() -> Element {
                                     "fill": "#0294DE"
                                 }
                             }
-                            a { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",href:"https://github.com/Yousofmersal", text_decoration: "none",
+                            a { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black", href:"https://github.com/Yousofmersal", text_decoration: "none",
                                 "\n            github.com/YousofMersal\n          "
                             }
                         }

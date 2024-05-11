@@ -2,14 +2,18 @@
 
 mod components;
 mod pages;
+mod utils;
 
 use dioxus::prelude::*;
+use dioxus::signals::GlobalSignal;
 use log::LevelFilter;
+use utils::LogInStatus;
 
 use crate::{cv::CvPage, pages::*};
 
 // Urls are relative to your Cargo.toml file
 const _TAILWIND_URL: &str = manganis::mg!(file("assets/main.css"));
+pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 
 #[derive(Clone, Routable, Debug, PartialEq)]
 enum Route {
@@ -21,6 +25,10 @@ enum Route {
     CvPage {},
     #[route("/profile")]
     Profile {},
+    #[route("/login")]
+    Login {},
+    #[route("/:..segments")]
+    NotFound { segments: Vec<String> },
 }
 
 fn main() {

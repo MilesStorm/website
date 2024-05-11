@@ -1,7 +1,12 @@
 use dioxus::prelude::*;
 
-use crate::components::icon::{default_profile_picture, Logo_c};
+use crate::{
+    components::icon::{default_profile_picture, Logo_c},
+    utils::LogInStatus,
+    LOGIN_STATUS,
+};
 
+#[component]
 pub fn Navbar() -> Element {
     // let is_hidden = use_state(cx , || "hidden");
 
@@ -80,7 +85,23 @@ pub fn Navbar() -> Element {
                             }
                             li { a { class: "justify-between","Settings" } }
                             li { a {"test"} }
-                            li { a { class: "justify-between", "Logout" } }
+                            li {
+                                match *LOGIN_STATUS.read() {
+                                    LogInStatus::LoggedOut => rsx! {a { class: "justify-between", key: "{LOGIN_STATUS}", Link { to: "/login", "Log in"} }},
+                                    LogInStatus::LoggedIn(_) => rsx! {
+                                        a { class: "justify-between", key: "{LOGIN_STATUS}",
+                                            onclick: move |_evt| {
+                                            // LOGIN_STATUS.write(LogInStatus::LoggedOut);
+                                        },
+                                    "Logout"
+                                    }}
+                                }
+                                // if login_status == LogInStatus::LoggedOut {
+                                //     a { class: "justify-between", "Login" }
+                                // } else {
+                                //     a { class: "justify-between", "Logout" }
+                                // }
+                            }
                         }
                     }
                 }
