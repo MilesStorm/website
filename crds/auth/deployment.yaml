@@ -40,6 +40,8 @@ spec:
                 key: DATABASE_URL
           - name: SERVER_IP
             value: "0.0.0.0"
+          - name: RUST_LOG
+            value: "info"
           - name: CLIENT_ID
             valuefrom:
               secretKeyRef:
