@@ -32,7 +32,15 @@ pub struct Auth {
 
 impl Auth {
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        if let Ok(_) = dotenvy::dotenv() {}
+        match dotenvy::dotenv() {
+            Ok(_) => {
+                tracing::debug!("Loaded .env file");
+            }
+            Err(_) => {
+                tracing::debug!("Loaded .env file");
+                tracing::debug!("assuming environment variables are set");
+            }
+        }
 
         let client_id = env::var("CLIENT_ID")
             .map(ClientId::new)
@@ -46,7 +54,8 @@ impl Auth {
 
         let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url));
 
-        let db = PgPool::connect(&env::var("DATABASE_URL")?).await?;
+        let db_connection = env::var("DATABASE_URL").expect("DATABASE_URL should be provided");
+        let db = PgPool::connect(&db_connection).await?;
         sqlx::migrate!().run(&db).await?;
 
         Ok(Auth { db, client })
