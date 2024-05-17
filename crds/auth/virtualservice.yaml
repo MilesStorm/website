@@ -1,0 +1,19 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: auth-virtual-service
+  namespace: istio-system
+spec:
+  hosts:
+  - yousofmersal.com
+  gateways:
+  - public-gateway  # Name of your gateway
+  http:
+  - match:
+    - uri:
+        prefix: /api
+    route:
+    - destination:
+        host: auth-service.auth.svc.cluster.local  # Name of your service
+        port:
+          number: 80

@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: auth
+  name: auth-deployment
+  labels:
+    istio-injection: enabled
+    app: auth
+spec:
+  replicas: 2  # Number of replicas
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: auth
+      containers:
+      - name: auth
+        image: ghcr.io/yousofmersal/auth:latest 
+        ports:
+        - containerPort: 7070
+      imagePullSecrets:
+        - name: dockerconfigjson-github-com
