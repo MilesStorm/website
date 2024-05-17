@@ -17,7 +17,12 @@ console_error_panic_hook = "0.1.7"
 gloo= "0.11.0"
 manganis = "0.2.2"
 dioxus-sdk = { git = "https://github.com/DioxusLabs/sdk", features = ["storage", "color_scheme"] }
-js-sys = "0.3.69"
+# js-sys = "0.3.69"
+web-sys = "0.3.69"
 serde = { version = "1.0.199", features = ["derive"] }
 serde_json = "1.0.116"
 tracing = { version = "0.1.40", features = ["log"] }
+reqwest = { version = "0.12.4", features = ["json", "cookies"] }
+wasm-cookies = "0.2.1"
+# async-recursion = "1.1.1"
+# futures = "0.3.30"

@@ -8,8 +8,6 @@ use crate::{
 
 #[component]
 pub fn Navbar() -> Element {
-    // let is_hidden = use_state(cx , || "hidden");
-
     rsx! {
         header { class: "sticky top-0 z-50 navbar bg-base-200 shadow-xl rounded-box",
             div { class: "navbar-start",
@@ -76,32 +74,43 @@ pub fn Navbar() -> Element {
                         ul {
                             tabindex: "0",
                             class: "mt-3 p-2 shadow menu menu-compact dropdown-content bg-base-200 rounded-box w-52",
-                            li {
-                                Link { class: "justify-between",
-                                 to:"/profile",
-                                "Profile"
-                                span { class: "badge", "New" }
-                                }
+                            match *LOGIN_STATUS.read() {
+                                LogInStatus::LoggedOut => rsx! {
+                                    li { Link { to: "/login", "Log in" } }
+                                    li { Link { to: "/register", a {class: "text-accent", "Register" } } }
+                                },
+                                LogInStatus::LoggedIn(_) => rsx! {
+                                    // li { Link { to: "/login", "Log in" } }
+                                    { "Logged in" }
+                                    li { Link { to: "/profile", "Profile" } }
+                                },
                             }
-                            li { a { class: "justify-between","Settings" } }
-                            li { a {"test"} }
-                            li {
-                                match *LOGIN_STATUS.read() {
-                                    LogInStatus::LoggedOut => rsx! {a { class: "justify-between", key: "{LOGIN_STATUS}", Link { to: "/login", "Log in"} }},
-                                    LogInStatus::LoggedIn(_) => rsx! {
-                                        a { class: "justify-between", key: "{LOGIN_STATUS}",
-                                            onclick: move |_evt| {
-                                            // LOGIN_STATUS.write(LogInStatus::LoggedOut);
-                                        },
-                                    "Logout"
-                                    }}
-                                }
+                            // li {
+                            //     Link { class: "justify-between",
+                            //      to:"/profile",
+                            //     "Profile"
+                            //     span { class: "badge", "New" }
+                            //     }
+                            // }
+                            // li { a { class: "justify-between","Settings" } }
+                            // li { a {"test"} }
+                            // li {
+                                // match *LOGIN_STATUS.read() {
+                                //     LogInStatus::LoggedOut => rsx! {a { class: "justify-between", key: "{LOGIN_STATUS}", Link { to: "/login", "Log in"} }},
+                                //     LogInStatus::LoggedIn(_) => rsx! {
+                                //         a { class: "justify-between", key: "{LOGIN_STATUS}",
+                                //             onclick: move |_evt| {
+                                //             // LOGIN_STATUS.write(LogInStatus::LoggedOut);
+                                //         },
+                                //     "Logout"
+                                //     }}
+                                // }
                                 // if login_status == LogInStatus::LoggedOut {
                                 //     a { class: "justify-between", "Login" }
                                 // } else {
                                 //     a { class: "justify-between", "Logout" }
                                 // }
-                            }
+                            // }
                         }
                     }
                 }

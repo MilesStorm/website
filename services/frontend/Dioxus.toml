@@ -36,6 +36,9 @@ style = ["main.css"]
 # Javascript code file
 script = []
 
+[[web.proxy]]
+backend = "http://localhost:7070/api"
+
 [web.resource.dev]
 
 # Javascript code file

@@ -13,7 +13,16 @@ module.exports = {
     prefix: '',
   },
   theme: {
-    extend: {},
+    extend: {
+      keyframes: {
+        'gradient': {
+          to: { 'background-position': '200% center' }
+        }
+      },
+      animation: {
+        'gradient': 'gradient 8s linear infinite'
+      }
+    }
   },
   plugins: [require("@tailwindcss/typography"), require("daisyui")]
 };

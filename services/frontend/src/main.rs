@@ -21,19 +21,25 @@ enum Route {
     Home {},
     #[route("/blog/:id")]
     Blog { id: i32 },
-    #[route("/cv")]
+    #[route("/resume")]
     CvPage {},
     #[route("/profile")]
     Profile {},
     #[route("/login")]
     Login {},
+    #[route("/register")]
+    Register {},
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
 }
 
 fn main() {
     // Init debug
-    dioxus_logger::init(LevelFilter::Info).expect("failed to init logger");
+    if cfg!(debug_assertions) {
+        dioxus_logger::init(LevelFilter::Info).expect("failed to init logger");
+    } else {
+        dioxus_logger::init(LevelFilter::Error).expect("failed to init logger");
+    }
     console_error_panic_hook::set_once();
 
     launch(App);

@@ -1,8 +1,8 @@
 use core::slice::Iter;
 use dioxus::signals::Writable;
 use dioxus_sdk::storage::*;
-use js_sys;
 use serde::{Deserialize, Serialize};
+use web_sys;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Theme {
@@ -103,7 +103,7 @@ pub fn setup_mode() {
     let mode =
         use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered);
 
-    js_sys::eval(
+    web_sys::js_sys::eval(
         format!(
             "document.documentElement.setAttribute('data-theme', '{}');",
             mode().to_css_class()
@@ -122,33 +122,39 @@ pub fn set_mode(theme_mode: Theme) {
     let pref = dioxus_sdk::color_scheme::use_preferred_color_scheme();
     match theme_mode {
         Theme::Dark => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');")
+            web_sys::js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');")
                 .expect("Failed to set theme");
             // storage.set(Theme::Dark);
         }
         Theme::Light => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'light');")
+            web_sys::js_sys::eval("document.documentElement.setAttribute('data-theme', 'light');")
                 .expect("Failed to set theme");
         }
         Theme::Dracula => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'dracula');")
-                .expect("Failed to set theme");
+            web_sys::js_sys::eval(
+                "document.documentElement.setAttribute('data-theme', 'dracula');",
+            )
+            .expect("Failed to set theme");
         }
         Theme::Synthwave => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'synthwave');")
-                .expect("Failed to set theme");
+            web_sys::js_sys::eval(
+                "document.documentElement.setAttribute('data-theme', 'synthwave');",
+            )
+            .expect("Failed to set theme");
         }
         Theme::Retro => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'retro');")
+            web_sys::js_sys::eval("document.documentElement.setAttribute('data-theme', 'retro');")
                 .expect("Failed to set theme");
         }
         Theme::Dim => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'dim');")
+            web_sys::js_sys::eval("document.documentElement.setAttribute('data-theme', 'dim');")
                 .expect("Failed to set theme");
         }
         Theme::Corporate => {
-            js_sys::eval("document.documentElement.setAttribute('data-theme', 'corporate');")
-                .expect("Failed to set theme");
+            web_sys::js_sys::eval(
+                "document.documentElement.setAttribute('data-theme', 'corporate');",
+            )
+            .expect("Failed to set theme");
         }
         Theme::Preffered => {
             if let Ok(prefference) = pref {
@@ -156,13 +162,13 @@ pub fn set_mode(theme_mode: Theme) {
 
                 match prefference {
                     dioxus_sdk::color_scheme::PreferredColorScheme::Light => {
-                        js_sys::eval(
+                        web_sys::js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'light');",
                         )
                         .expect("Failed to set theme");
                     }
                     dioxus_sdk::color_scheme::PreferredColorScheme::Dark => {
-                        js_sys::eval(
+                        web_sys::js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'dark');",
                         )
                         .expect("Failed to set theme");
@@ -170,8 +176,10 @@ pub fn set_mode(theme_mode: Theme) {
                 }
             } else {
                 gloo::console::log!("No preffered theme found, using default");
-                js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');")
-                    .expect("Failed to set theme");
+                web_sys::js_sys::eval(
+                    "document.documentElement.setAttribute('data-theme', 'dark');",
+                )
+                .expect("Failed to set theme");
             };
         }
     };
