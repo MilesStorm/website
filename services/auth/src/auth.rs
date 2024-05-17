@@ -45,17 +45,24 @@ impl Auth {
         let client_id = env::var("CLIENT_ID")
             .map(ClientId::new)
             .expect("CLIENT_ID should be provided");
+        tracing::trace!("client_id: {:?}", client_id);
         let client_secret = env::var("CLIENT_SECRET")
             .map(ClientSecret::new)
             .expect("CLIENT_SECRET should be provided");
+        tracing::trace!("client_id: {:?}", client_id);
 
         let auth_url = AuthUrl::new("https://github.com/login/oauth/authorize".to_string())?;
+        tracing::trace!("auth_url: {:?}", auth_url);
         let token_url = TokenUrl::new("https://github.com/login/oauth/access_token".to_string())?;
+        tracing::trace!("token_url: {:?}", token_url);
 
         let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url));
+        tracing::trace!("client: {:?}", client);
 
         let db_connection = env::var("DATABASE_URL").expect("DATABASE_URL should be provided");
+        tracing::trace!("db_connection: {:?}", db_connection);
         let db = PgPool::connect(&db_connection).await?;
+        tracing::trace!("db: {:?}", db);
         sqlx::migrate!().run(&db).await?;
 
         Ok(Auth { db, client })
