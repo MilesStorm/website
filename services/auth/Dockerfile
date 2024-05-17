@@ -27,7 +27,7 @@ RUN useradd -m -d /home/appuser appuser
 USER appuser
 
 # Copy the built static files from the frontend-builder stage
-COPY --from=builder /app/target/release/server /usr/local/bin/server
+COPY --from=builder /app/target/release/auth /usr/local/bin/auth
 
 
 ENV SERVER_IP=
@@ -38,4 +38,4 @@ ENV CLIENT_SECRET=
 
 # Expose port and run nginx
 EXPOSE 7070
-CMD ["server"]
+CMD ["auth"]
