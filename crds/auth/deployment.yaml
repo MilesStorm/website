@@ -32,5 +32,23 @@ spec:
         image: ghcr.io/yousofmersal/auth:latest 
         ports:
         - containerPort: 7070
+        env:
+          - name: DATABASE_URL
+            valuefrom:
+              secretKeyRef:
+                name: db-secret
+                key: DATABASE_URL
+          - name: SERVER_IP
+            value: "0.0.0.0"
+          - name: CLIENT_ID
+            valuefrom:
+              secretKeyRef:
+                name: client-id-secret
+                key: CLIENT_ID
+          - name: CLIENT_SECRET
+            valuefrom:
+              secretKeyRef:
+                name: client-secret-secret
+                key: CLIENT_SECRET
       imagePullSecrets:
         - name: dockerconfigjson-github-com
