@@ -34,23 +34,25 @@ spec:
         - containerPort: 7070
         env:
           - name: DATABASE_URL
-            valuefrom:
+            valueFrom:
+          - name: DATABASE_URL
+            valueFrom:
               secretKeyRef:
                 name: db-secret
                 key: DATABASE_URL
-          - name: SERVER_IP
-            value: "0.0.0.0"
-          - name: RUST_LOG
-            value: "info"
           - name: CLIENT_ID
-            valuefrom:
+            valueFrom:
               secretKeyRef:
                 name: client-id-secret
                 key: CLIENT_ID
           - name: CLIENT_SECRET
-            valuefrom:
+            valueFrom:
               secretKeyRef:
                 name: client-secret-secret
                 key: CLIENT_SECRET
+          - name: SERVER_IP
+            value: "0.0.0.0"
+          - name: RUST_LOG
+            value: "info"
       imagePullSecrets:
         - name: dockerconfigjson-github-com
