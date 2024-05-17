@@ -1,4 +1,4 @@
-name: site-build
+name: auth-build
 
 env:
   REGISTRY: ghcr.io
