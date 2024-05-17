@@ -59,7 +59,6 @@ mod post {
             match result {
                 Ok(mut user) => {
                     user.password = None;
-
                     (
                         axum::http::StatusCode::OK,
                         Json(ApiResponse {
@@ -104,14 +103,11 @@ mod post {
             mut auth_session: AuthSession,
             Form(creds): Form<PasswordCreds>,
         ) -> impl IntoResponse {
-            let user = match auth_session
+            let mut user = match auth_session
                 .authenticate(Credentials::Password(creds.clone()))
                 .await
             {
-                Ok(Some(mut user)) => {
-                    user.password = None;
-                    user
-                }
+                Ok(Some(user)) => user,
                 Ok(None) => {
                     return (StatusCode::UNAUTHORIZED, "invalid password".to_string())
                         .into_response()
@@ -123,9 +119,13 @@ mod post {
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
+            user.password = None;
+            dbg!(&user);
+
             if let Some(ref next) = creds.next {
                 Redirect::to(next).into_response()
             } else {
+                // Redirect::to("/").into_response()
                 Json(ApiResponse {
                     message: "Login successful".to_string(),
                     user: Some(user),
@@ -157,13 +157,10 @@ mod post {
 }
 
 mod get {
-    use axum::{body::Body, http::Request};
-
     use super::*;
     use axum::Json;
 
-    pub async fn login(auth_session: AuthSession, req: Request<Body>) -> impl IntoResponse {
-        // dbg!(&req);
+    pub async fn login(auth_session: AuthSession) -> impl IntoResponse {
         if let Some(mut user) = auth_session.user {
             user.password = None;
             Json(ApiResponse {

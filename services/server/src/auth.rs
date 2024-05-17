@@ -32,7 +32,7 @@ pub struct Auth {
 
 impl Auth {
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        dotenvy::dotenv()?;
+        if let Ok(_) = dotenvy::dotenv() {}
 
         let client_id = env::var("CLIENT_ID")
             .map(ClientId::new)
@@ -81,7 +81,7 @@ impl Auth {
         let listener = tokio::net::TcpListener::bind(format!(
             "{}:{}",
             std::env::var("SERVER_IP").unwrap_or("localhost".to_string()),
-            std::env::var("SERVER_PORT").expect("Server port has to be provided")
+            std::env::var("SERVER_PORT").unwrap_or("7070".to_string())
         ))
         .await
         .unwrap();
