@@ -28,6 +28,10 @@ pub fn router() -> Router<()> {
 }
 
 mod get {
+    use axum::Json;
+
+    use crate::auth::core::{ApiResponse, NextUrl};
+
     use super::*;
 
     pub async fn callback(
@@ -48,7 +52,7 @@ mod get {
             new_state,
         });
 
-        let user: User = match auth_session.authenticate(creds).await {
+        let mut user: User = match auth_session.authenticate(creds).await {
             Ok(Some(user)) => user,
             Ok(None) => {
                 return (StatusCode::UNAUTHORIZED, "Invalid CSRF state.".to_string())
@@ -61,10 +65,17 @@ mod get {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
-        if let Ok(Some(next)) = session.remove::<String>(NEXT_URL_KEY).await {
-            Redirect::to(&next).into_response()
+        user.password = None;
+        dbg!(&user);
+
+        if let Ok(next) = session.remove::<String>(NEXT_URL_KEY).await {
+            if let Some(next) = next {
+                Json(NextUrl::new(Some(next))).into_response()
+            } else {
+                Json(NextUrl::new(None)).into_response()
+            }
         } else {
-            Redirect::to("/").into_response()
+            Json(ApiResponse::new("Login successful", Some(user))).into_response()
         }
     }
 }

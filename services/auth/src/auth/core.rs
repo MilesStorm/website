@@ -34,6 +34,12 @@ pub struct NextUrl {
     next: Option<String>,
 }
 
+impl NextUrl {
+    pub fn new(next: Option<String>) -> Self {
+        Self { next }
+    }
+}
+
 pub fn router() -> Router<()> {
     Router::new()
         .route(
