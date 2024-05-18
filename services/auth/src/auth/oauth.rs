@@ -24,7 +24,7 @@ pub struct AuthzResp {
 use crate::auth::user::{AuthSession, Credentials};
 
 pub fn router() -> Router<()> {
-    Router::new().route("/api/login/oauth/callback", get(self::get::callback))
+    Router::new().route("/api/login/github/callback", get(self::get::callback))
 }
 
 mod get {

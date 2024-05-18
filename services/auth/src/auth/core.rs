@@ -29,7 +29,7 @@ impl ApiResponse {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct NextUrl {
     next: Option<String>,
 }
@@ -41,7 +41,7 @@ pub fn router() -> Router<()> {
             post(self::post::register::password),
         )
         .route("/api/login/password", post(self::post::login::password))
-        .route("/api/login/oauth", post(self::post::login::oauth))
+        .route("/api/login/github", post(self::post::login::oauth))
         .route("/api/login", get(self::get::login))
         .route("/api/logout", get(self::get::logout))
 }
@@ -132,7 +132,11 @@ mod post {
             dbg!(&user);
 
             if let Some(ref next) = creds.next {
-                Redirect::to(next).into_response()
+                // Redirect::to(next).into_response();
+                Json(NextUrl {
+                    next: Some(next.clone()),
+                })
+                .into_response()
             } else {
                 // Redirect::to("/").into_response()
                 Json(ApiResponse {
@@ -160,7 +164,11 @@ mod post {
                 .await
                 .expect("Serialization should not fail.");
 
-            Redirect::to(auth_url.as_str()).into_response()
+            // Redirect::to(auth_url.as_str()).into_response();
+            Json(NextUrl {
+                next: Some(auth_url.to_string()),
+            })
+            .into_response()
         }
     }
 }
