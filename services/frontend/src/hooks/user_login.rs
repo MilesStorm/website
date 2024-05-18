@@ -49,7 +49,11 @@ impl LogInStatus {
                 //     *LOGIN_STATUS.write() = LogInStatus::LoggedIn(username);
                 // };
                 let json_value: Json = res.json().await.expect("cannot convert to json");
-                LogInStatus::LoggedIn(json_value["user"]["username"].as_str().unwrap().to_string())
+                if let Some(username) = json_value["user"]["username"].as_str() {
+                    LogInStatus::LoggedIn(username.to_string())
+                } else {
+                    LogInStatus::LoggedOut
+                }
             }
             Err(_) => {
                 tracing::warn!("Could not log in, server resonse warn");
