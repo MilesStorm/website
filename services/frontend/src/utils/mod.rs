@@ -2,10 +2,17 @@ use std::fmt::Display;
 
 use dioxus::{
     prelude::navigator,
-    signals::{Readable, Signal, Writable},
+    signals::{GlobalSignal, Readable, Signal, Writable},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value as Json;
+
+pub static ROOT_DOMAIN: GlobalSignal<String> = Signal::global(|| {
+    web_sys::js_sys::eval("location.protocol + '//' + location.host")
+        .expect("cannot get domain")
+        .as_string()
+        .expect("cannot convert to string")
+});
 
 use crate::LOGIN_STATUS;
 
@@ -17,7 +24,7 @@ pub enum LogInStatus {
 
 impl LogInStatus {
     pub async fn is_logged_in() {
-        let resp = reqwest::get("http://localhost:8080/api/login").await;
+        let resp = reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
 
         if let Ok(res) = resp {
             let json_value: Json = res.json().await.expect("cannot convert to json");
@@ -66,7 +73,11 @@ pub async fn register(
         ("password", password),
     ];
 
-    let response = post_reqwest("http://localhost:8080/api/register/password", &params).await;
+    let response = post_reqwest(
+        format!("{}/api/register/password", ROOT_DOMAIN()).as_str(),
+        &params,
+    )
+    .await;
 
     match response {
         Ok(res) => {
@@ -94,9 +105,13 @@ pub async fn login(
     let params = [("username", username), ("password", password)];
     tracing::debug!("params: {:?}", params);
 
-    let response = post_reqwest("http://localhost:8080/api/login/password", &params).await;
+    let response = post_reqwest(
+        format!("{}/api/login/password", ROOT_DOMAIN()).as_str(),
+        &params,
+    )
+    .await;
 
-    reqwest::get("http://localhost:8080/api/login").await;
+    reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
     match response {
         Ok(res) => {
             let json_value: Json = res.json().await?;
@@ -116,6 +131,7 @@ pub async fn post_reqwest(
     url: &str,
     params: &[(&str, &str)],
 ) -> Result<reqwest::Response, reqwest::Error> {
+    tracing::info!("ROOT_DOMAIN: {:?}", ROOT_DOMAIN());
     let res = REQWEST_CLIENT().post(url).form(params).send().await?;
 
     Ok(res)
