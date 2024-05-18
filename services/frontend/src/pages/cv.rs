@@ -1162,10 +1162,10 @@ pub fn Vitae() -> Element {
                                     "DM564: Database Systems"
                                 }
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                    "DM885: Microservices og Dev(Sec)Ops"
+                                    "DM571: Software Engineering"
                                 }
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                    "DM571: Software Engineering"
+                                    "DM885: Microservices og Dev(Sec)Ops"
                                 }
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
                                     "DM883: Distributed Systems"
