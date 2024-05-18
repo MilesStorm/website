@@ -1,9 +1,6 @@
 use std::fmt::Display;
 
-use dioxus::{
-    prelude::navigator,
-    signals::{GlobalSignal, Readable, Signal, Writable},
-};
+use dioxus::signals::{GlobalSignal, Signal};
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value as Json;
 
@@ -42,12 +39,8 @@ impl LogInStatus {
 
     pub async fn is_logged_in() -> LogInStatus {
         let resp = reqwest::get(format!("{}/api/login/status", ROOT_DOMAIN()).as_str()).await;
-
         match resp {
             Ok(res) => {
-                // if let Some(username) = res.json().await.expect("cannot convert to json") {
-                //     *LOGIN_STATUS.write() = LogInStatus::LoggedIn(username);
-                // };
                 let json_value: Json = res.json().await.expect("cannot convert to json");
                 if let Some(username) = json_value["user"]["username"].as_str() {
                     LogInStatus::LoggedIn(username.to_string())
@@ -141,7 +134,7 @@ pub async fn login(
     let params = [("username", username), ("password", password)];
     tracing::debug!("params: {:?}", params);
 
-    let response = post_reqwest(
+    let _ = post_reqwest(
         format!("{}/api/login/password", ROOT_DOMAIN()).as_str(),
         &params,
     )
@@ -157,6 +150,22 @@ pub async fn login(
                     .as_str()
                     .map(|s| s.to_string()),
             ))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub async fn github_oauth() -> Result<String, reqwest::Error> {
+    let response = post_reqwest(format!("{}/api/login/github", ROOT_DOMAIN()).as_str(), &[]).await;
+
+    // if the request succeeds, get the url from the json response.
+    match response {
+        Ok(res) => {
+            let json_value: Json = res.json().await?;
+            Ok(json_value["next"]
+                .as_str()
+                .expect("cannot convert to string")
+                .to_string())
         }
         Err(e) => Err(e),
     }

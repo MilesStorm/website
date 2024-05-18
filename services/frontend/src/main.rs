@@ -48,7 +48,7 @@ fn main() {
 
 fn App() -> Element {
     hooks::setup_mode();
-    let mut future = use_resource(|| async move {
+    let _ = use_resource(|| async move {
         *LOGIN_STATUS.write() = LogInStatus::is_logged_in().await;
     });
 

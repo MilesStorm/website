@@ -5,7 +5,6 @@ pub mod page_404;
 pub mod profile;
 
 pub use auth::*;
-pub use cv::*;
 pub use landing::*;
 pub use page_404::*;
 pub use profile::*;

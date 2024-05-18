@@ -1,11 +1,10 @@
 use dioxus::prelude::*;
-use serde::Deserialize;
 
-use crate::hooks::{login, register, LogInStatus};
+use crate::hooks::{github_oauth, login, register, LogInStatus};
 
 #[component]
 pub fn Login() -> Element {
-    let mut req_res = use_signal(|| String::new());
+    let _ = use_signal(|| String::new());
 
     let component_login = move |evt: Event<FormData>| {
         spawn(async move {
@@ -17,7 +16,7 @@ pub fn Login() -> Element {
             match reg_attempt {
                 Ok(att) => {
                     LogInStatus::set_logged_in().await;
-                    if let Some(user) = att.1 {
+                    if let Some(_) = att.1 {
                         navigator().push("/");
                     };
                 }
@@ -83,6 +82,21 @@ pub fn Login() -> Element {
 pub fn Register() -> Element {
     let mut req_res = use_signal(|| String::new());
 
+    let oauth_call = move |_| {
+        spawn(async move {
+            let res = github_oauth().await;
+
+            tracing::info!("OAuth response: {:?}", res);
+            match res {
+                Ok(url) => {
+                    tracing::info!("OAuth success: {:?}", url);
+                    navigator().push(url.as_str());
+                }
+                Err(e) => tracing::warn!("OAuth failed: {:?}", e),
+            }
+        });
+    };
+
     let component_register = move |evt: Event<FormData>| {
         spawn(async move {
             let form_data = evt.values();
@@ -111,13 +125,15 @@ pub fn Register() -> Element {
                 h2 { class: "text-center text-2xl font-bold mb-6", "Sign Up" }
                 div { class: "flex flex-col space-y-4 mb-6",
                     button {
-                        "onclick": "location.href='/auth/github'",
+                        onclick: oauth_call,
                         class: "btn btn-outline btn-accent w-full",
                         "Sign up with\n        GitHub"
                     }
                     button {
-                        "onclick": "location.href='/auth/google'",
-                        class: "btn btn-outline btn-accent w-full",
+                        onclick: |_| {tracing::info!("Google OAuth clicked")},
+                        "data-tip": "Disabled while waiting for verification",
+                        class: "btn btn-disabled btn-outline btn-accent w-full tooltip",
+                        "disabled": "disabled",
                         "Sign up with\n        Google"
                     }
                 }
