@@ -1159,16 +1159,22 @@ pub fn Vitae() -> Element {
                         div { class: "flex flex-col justify-center items-start self-stretch flex-grow-0 flex-shrink-0 gap-[5px]",
                             div { class: "flex flex-col justify-center items-start flex-grow-0 flex-shrink-0 relative overflow-hidden pl-10",
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                    "Database Systems"
+                                    "DM564: Database Systems"
                                 }
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                    "Dev(Sec)Ops"
+                                    "DM885: Microservices og Dev(Sec)Ops"
                                 }
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                    "\n              Software Engineering\n            "
+                                    "DM571: Software Engineering"
                                 }
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                    "\n              Distributed Systems\n            "
+                                    "DM883: Distributed Systems"
+                                }
+                                p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                                    "DM887: Reinforcement learning"
+                                }
+                                p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                                    "DM895: Applied Cyber Security"
                                 }
                             }
                         }
