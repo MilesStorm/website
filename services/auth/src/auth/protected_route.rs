@@ -1,4 +1,5 @@
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
+use serde_json::Serializer;
 
 // #[derive(Template)]
 // #[template(path = "protected.html")]
@@ -7,17 +8,25 @@ use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 // }
 
 pub fn router() -> Router<()> {
-    Router::new().route("/api/profile", get(self::get::protected))
+    Router::new().route("/api/login/status", get(self::get::protected))
 }
 
 mod get {
+    use axum::Json;
+
     use super::*;
-    use crate::auth::user::AuthSession;
+    use crate::auth::{core::ApiResponse, user::AuthSession};
 
     pub async fn protected(auth_session: AuthSession) -> impl IntoResponse {
         match auth_session.user {
-            Some(user) => user.username.to_string().into_response(),
-            None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Some(mut user) => {
+                user.password = None;
+                user.access_token = None;
+                Json(ApiResponse::new("Logged in", Some(user)))
+            }
+            // None => json!({"username": None, "error": Some("Not logged in")}),
+            None => Json(ApiResponse::new("Not logged in", None)),
         }
+        .into_response()
     }
 }

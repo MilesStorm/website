@@ -16,14 +16,14 @@ pub static ROOT_DOMAIN: GlobalSignal<String> = Signal::global(|| {
 
 use crate::LOGIN_STATUS;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum LogInStatus {
     LoggedOut,
     LoggedIn(String),
 }
 
 impl LogInStatus {
-    pub async fn is_logged_in() {
+    pub async fn set_logged_in() {
         let resp = reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
 
         if let Ok(res) = resp {
@@ -36,8 +36,32 @@ impl LogInStatus {
                 );
             }
         } else {
-            // LOGIN_STATUS.set(LogInStatus::LoggedOut);
             *LOGIN_STATUS.write() = LogInStatus::LoggedOut;
+        }
+    }
+
+    pub async fn is_logged_in() -> LogInStatus {
+        let resp = reqwest::get(format!("{}/api/login/status", ROOT_DOMAIN()).as_str()).await;
+
+        match resp {
+            Ok(res) => {
+                // if let Some(username) = res.json().await.expect("cannot convert to json") {
+                //     *LOGIN_STATUS.write() = LogInStatus::LoggedIn(username);
+                // };
+                let json_value: Json = res.json().await.expect("cannot convert to json");
+                LogInStatus::LoggedIn(json_value["user"]["username"].as_str().unwrap().to_string())
+            }
+            Err(_) => {
+                tracing::warn!("Could not log in, server resonse warn");
+                LogInStatus::LoggedOut
+            }
+        }
+    }
+
+    pub fn username(&self) -> Option<String> {
+        match self {
+            LogInStatus::LoggedOut => None,
+            LogInStatus::LoggedIn(name) => Some(name.clone()),
         }
     }
 }
@@ -98,6 +122,14 @@ pub async fn register(
     }
 }
 
+pub async fn logout() -> Result<(), reqwest::Error> {
+    let resp = reqwest::get(format!("{}/api/logout", ROOT_DOMAIN()).as_str()).await?;
+    tracing::info!("logout response: {:?}", resp);
+    *LOGIN_STATUS.write() = LogInStatus::LoggedOut;
+
+    Ok(())
+}
+
 pub async fn login(
     username: &str,
     password: &str,
@@ -111,7 +143,7 @@ pub async fn login(
     )
     .await;
 
-    reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
+    let response = reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
     match response {
         Ok(res) => {
             let json_value: Json = res.json().await?;

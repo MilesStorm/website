@@ -15,9 +15,18 @@ use crate::auth::{oauth::CSRF_STATE_KEY, user::AuthSession};
 use super::user::User;
 
 #[derive(Serialize)]
-struct ApiResponse {
+pub struct ApiResponse {
     message: String,
     user: Option<User>, // Optionally include user info if registration succeeds
+}
+
+impl ApiResponse {
+    pub fn new(message: &str, user: Option<User>) -> Self {
+        Self {
+            message: message.to_string(),
+            user,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

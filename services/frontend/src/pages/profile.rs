@@ -2,8 +2,7 @@ use dioxus::prelude::*;
 
 use crate::{
     components::Navbar::Navbar,
-    get_mode,
-    pages::{set_mode, Theme},
+    hooks::theme::{get_mode, set_mode, Theme},
 };
 
 const PROFILE_PIC: manganis::ImageAsset = manganis::mg!(image("assets/default_profile.png"));

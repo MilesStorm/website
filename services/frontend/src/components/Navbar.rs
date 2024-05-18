@@ -2,12 +2,20 @@ use dioxus::prelude::*;
 
 use crate::{
     components::icon::{default_profile_picture, Logo_c},
-    utils::LogInStatus,
+    hooks::{logout, LogInStatus},
     LOGIN_STATUS,
 };
 
 #[component]
 pub fn Navbar() -> Element {
+    let user = LOGIN_STATUS.read().clone();
+
+    let logout_action = move |_| {
+        spawn(async move {
+            logout().await;
+        });
+    };
+
     rsx! {
         header { class: "sticky top-0 z-50 navbar bg-base-200 shadow-xl rounded-box",
             div { class: "navbar-start",
@@ -74,16 +82,16 @@ pub fn Navbar() -> Element {
                         ul {
                             tabindex: "0",
                             class: "mt-3 p-2 shadow menu menu-compact dropdown-content bg-base-200 rounded-box w-52",
-                            match *LOGIN_STATUS.read() {
+                            match user {
                                 LogInStatus::LoggedOut => rsx! {
-                                    li { Link { to: "/login", "Log in" } }
-                                    li { Link { to: "/register", a {class: "text-accent", "Register" } } }
+                                    li { Link { to: "/login", "Login" } }
+                                    li { Link {class: "underline font-bold", to: "/register", "Register" } }
                                 },
-                                LogInStatus::LoggedIn(_) => rsx! {
-                                    // li { Link { to: "/login", "Log in" } }
-                                    { "Logged in" }
-                                    li { Link { to: "/profile", "Profile" } }
-                                },
+                                LogInStatus::LoggedIn(user) => rsx! {
+                                    li { Link { to: "/profile", "Profile: {user}" } }
+                                    li { Link { to: "/settings", "Settings" } }
+                                    li { p {onclick: logout_action, "Logout" } }
+                                }
                             }
                             // li {
                             //     Link { class: "justify-between",
@@ -94,23 +102,6 @@ pub fn Navbar() -> Element {
                             // }
                             // li { a { class: "justify-between","Settings" } }
                             // li { a {"test"} }
-                            // li {
-                                // match *LOGIN_STATUS.read() {
-                                //     LogInStatus::LoggedOut => rsx! {a { class: "justify-between", key: "{LOGIN_STATUS}", Link { to: "/login", "Log in"} }},
-                                //     LogInStatus::LoggedIn(_) => rsx! {
-                                //         a { class: "justify-between", key: "{LOGIN_STATUS}",
-                                //             onclick: move |_evt| {
-                                //             // LOGIN_STATUS.write(LogInStatus::LoggedOut);
-                                //         },
-                                //     "Logout"
-                                //     }}
-                                // }
-                                // if login_status == LogInStatus::LoggedOut {
-                                //     a { class: "justify-between", "Login" }
-                                // } else {
-                                //     a { class: "justify-between", "Logout" }
-                                // }
-                            // }
                         }
                     }
                 }

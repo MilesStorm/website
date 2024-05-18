@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use serde::Deserialize;
 
-use crate::utils::{login, register, LogInStatus};
+use crate::hooks::{login, register, LogInStatus};
 
 #[component]
 pub fn Login() -> Element {
@@ -16,7 +16,7 @@ pub fn Login() -> Element {
 
             match reg_attempt {
                 Ok(att) => {
-                    LogInStatus::is_logged_in().await;
+                    LogInStatus::set_logged_in().await;
                     if let Some(user) = att.1 {
                         navigator().push("/");
                     };

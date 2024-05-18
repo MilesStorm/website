@@ -1,18 +1,19 @@
 #![allow(non_snake_case)]
 
 mod components;
+mod hooks;
 mod pages;
-mod utils;
 
 use dioxus::prelude::*;
 use dioxus::signals::GlobalSignal;
+use hooks::LogInStatus;
 use log::LevelFilter;
-use utils::LogInStatus;
 
 use crate::{cv::CvPage, pages::*};
 
 // Urls are relative to your Cargo.toml file
 const _TAILWIND_URL: &str = manganis::mg!(file("assets/main.css"));
+// pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 
 #[derive(Clone, Routable, Debug, PartialEq)]
@@ -46,9 +47,15 @@ fn main() {
 }
 
 fn App() -> Element {
-    hook::setup_mode();
+    hooks::setup_mode();
+    let mut future = use_resource(|| async move {
+        *LOGIN_STATUS.write() = LogInStatus::is_logged_in().await;
+    });
+
     rsx! {
-        Router::<Route> {}
+        div {
+            Router::<Route> {}
+        }
     }
 }
 
