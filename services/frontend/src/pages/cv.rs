@@ -184,6 +184,27 @@ pub fn Vitae() -> Element {
                         }
                         div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
                             svg {
+                                width: "6",
+                                "fill": "none",
+                                height: "5",
+                                "preserveAspectRatio": "none",
+                                "xmlns": "http://www.w3.org/2000/svg",
+                                "viewBox": "0 0 6 5",
+                                class: "flex-grow-0 flex-shrink-0",
+                                circle {
+                                    "fill": "#D9D9D9",
+                                    "cx": "3",
+                                    "cy": "2.5",
+                                    "stroke": "#0294DE",
+                                    "r": "2"
+                                }
+                            }
+                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
+                                "Sustainability"
+                            }
+                        }
+                        div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
+                            svg {
                                 height: "6",
                                 "preserveAspectRatio": "none",
                                 "viewBox": "0 0 6 6",
@@ -243,27 +264,6 @@ pub fn Vitae() -> Element {
                             }
                             p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
                                 "\n            Raid-lead World of Warcraft\n          "
-                            }
-                        }
-                        div { class: "flex justify-start items-center self-stretch flex-grow-0 flex-shrink-0 relative gap-[5px]",
-                            svg {
-                                width: "6",
-                                "fill": "none",
-                                height: "5",
-                                "preserveAspectRatio": "none",
-                                "xmlns": "http://www.w3.org/2000/svg",
-                                "viewBox": "0 0 6 5",
-                                class: "flex-grow-0 flex-shrink-0",
-                                circle {
-                                    "fill": "#D9D9D9",
-                                    "cx": "3",
-                                    "cy": "2.5",
-                                    "stroke": "#0294DE",
-                                    "r": "2"
-                                }
-                            }
-                            p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
-                                "Sustainability"
                             }
                         }
                     }
@@ -1136,7 +1136,7 @@ pub fn Vitae() -> Element {
                         div { class: "flex flex-col justify-center items-start self-stretch flex-grow-0 flex-shrink-0 gap-[5px]",
                             div { class: "flex justify-start items-center flex-grow-0 flex-shrink-0 relative overflow-hidden gap-2.5",
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-[#0294de]",
-                                    "\n              Sep. 1014 - June 2018\n            "
+                                    "\n              Sep. 2014 - June 2018\n            "
                                 }
                                 p { class: "flex-grow-0 flex-shrink-0 text-base text-left text-black",
                                     "High School"
