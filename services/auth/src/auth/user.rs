@@ -1,10 +1,12 @@
+use std::borrow::Cow;
+
 use axum::{async_trait, Json};
 use axum_login::{AuthUser, AuthnBackend, UserId};
 use oauth2::{
     basic::{BasicClient, BasicRequestTokenError},
     http::header::{AUTHORIZATION, USER_AGENT},
     reqwest::{async_http_client, AsyncHttpClientError},
-    AuthorizationCode, CsrfToken, Scope, TokenResponse,
+    AuthorizationCode, CsrfToken, RedirectUrl, Scope, TokenResponse,
 };
 use password_auth::verify_password;
 use reqwest::Url;
@@ -177,6 +179,12 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(db: sqlx::PgPool, client: BasicClient, g_client: BasicClient) -> Self {
+        let g_client = g_client.set_redirect_uri(
+            RedirectUrl::new(String::from(
+                "https://yousofmersal.com/api/login/github/callback",
+            ))
+            .expect("invalid redirect uri"),
+        );
         Self {
             db,
             client,

@@ -16,7 +16,7 @@ use axum_login::{
     },
     AuthManagerLayerBuilder,
 };
-use oauth2::{basic::BasicClient, AuthUrl, ClientId, ClientSecret, Scope, TokenUrl};
+use oauth2::{basic::BasicClient, AuthUrl, ClientId, ClientSecret, TokenUrl};
 use sqlx::PgPool;
 use tower_sessions_sqlx_store::PostgresStore;
 

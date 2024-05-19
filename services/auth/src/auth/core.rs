@@ -179,13 +179,13 @@ mod post {
             Form(NextUrl { next }): Form<NextUrl>,
         ) -> impl IntoResponse {
             let (auth_url, csrf_state) = auth_session.backend.authorize_g_url();
-            tracing::info!("auth_url: {:?}", auth_url);
 
             session
                 .insert(CSRF_STATE_KEY, csrf_state.secret())
                 .await
                 .expect("Serialization should not fail.");
 
+            tracing::info!("next: {:?}", &next.clone());
             session
                 .insert(NEXT_URL_KEY, next)
                 .await
