@@ -54,6 +54,7 @@ mod get {
         let Ok(Some(old_state)) = session.get(CSRF_STATE_KEY).await else {
             return StatusCode::BAD_REQUEST.into_response();
         };
+        tracing::info!("Old state: {:?}", old_state);
 
         let creds = match provider {
             "github" => Credentials::AccessToken(OAuthCreds {

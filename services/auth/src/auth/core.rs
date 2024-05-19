@@ -178,7 +178,8 @@ mod post {
             session: Session,
             Form(NextUrl { next }): Form<NextUrl>,
         ) -> impl IntoResponse {
-            let (auth_url, csrf_state) = auth_session.backend.authorize_url();
+            let (auth_url, csrf_state) = auth_session.backend.authorize_g_url();
+            tracing::info!("auth_url: {:?}", auth_url);
 
             session
                 .insert(CSRF_STATE_KEY, csrf_state.secret())
@@ -190,6 +191,7 @@ mod post {
                 .await
                 .expect("Serialization should not fail.");
 
+            tracing::info!("auth_url: {:?}", auth_url);
             // Redirect::to(auth_url.as_str()).into_response();
             Json(NextUrl {
                 next: Some(auth_url.to_string()),

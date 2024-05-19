@@ -161,6 +161,7 @@ pub async fn google_oauth() -> Result<String, reqwest::Error> {
     // if the request succeeds, get the url from the json response.
     match response {
         Ok(res) => {
+            tracing::info!("response: {:?}", res);
             let json_value: Json = res.json().await?;
             Ok(json_value["next"]
                 .as_str()

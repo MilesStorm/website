@@ -4,7 +4,7 @@ use oauth2::{
     basic::{BasicClient, BasicRequestTokenError},
     http::header::{AUTHORIZATION, USER_AGENT},
     reqwest::{async_http_client, AsyncHttpClientError},
-    AuthorizationCode, CsrfToken, TokenResponse,
+    AuthorizationCode, CsrfToken, Scope, TokenResponse,
 };
 use password_auth::verify_password;
 use reqwest::Url;
@@ -188,6 +188,15 @@ impl Backend {
         self.client.authorize_url(CsrfToken::new_random).url()
     }
 
+    pub fn authorize_g_url(&self) -> (Url, CsrfToken) {
+        self.g_client
+            .authorize_url(CsrfToken::new_random)
+            .add_scope(Scope::new(String::from(
+                "https://www.googleapis.com/auth/userinfo.profile",
+            )))
+            .url()
+    }
+
     pub async fn register_user(
         &self,
         username: &str,
@@ -264,6 +273,7 @@ impl AuthnBackend for Backend {
                 .await?
             }
             Credentials::AccessToken(oauth_cred) => {
+                tracing::debug!("oauth_cred: {:?}", oauth_cred);
                 if oauth_cred.old_state.secret() != oauth_cred.new_state.secret() {
                     return Ok(None);
                 }
@@ -307,6 +317,7 @@ impl AuthnBackend for Backend {
                 Ok(Some(user))
             }
             Credentials::GoogleToken(oauth_cred) => {
+                tracing::info!("Google token: {:?}", oauth_cred);
                 if oauth_cred.old_state.secret() != oauth_cred.new_state.secret() {
                     return Ok(None);
                 }
