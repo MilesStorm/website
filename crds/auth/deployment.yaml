@@ -48,6 +48,16 @@ spec:
               secretKeyRef:
                 name: client-secret-secret
                 key: CLIENT_SECRET
+          - name: G_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: google-client-id-secret
+                key: G_CLIENT_ID
+          - name: G_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: google-client-secret-secret
+                key: G_CLIENT_SECRET
           - name: SERVER_IP
             value: "0.0.0.0"
           - name: RUST_LOG
