@@ -34,18 +34,13 @@ pub struct NextUrl {
     next: Option<String>,
 }
 
-impl NextUrl {
-    pub fn new(next: Option<String>) -> Self {
-        Self { next }
-    }
-}
-
 pub fn router() -> Router<()> {
     Router::new()
         .route(
             "/api/register/password",
             post(self::post::register::password),
         )
+        .route("/api/register/github", post(self::post::register::github))
         .route("/api/login/password", post(self::post::login::password))
         .route("/api/login/github", post(self::post::login::oauth))
         .route("/api/login", get(self::get::login))
@@ -106,6 +101,8 @@ mod post {
             }
             .into_response()
         }
+
+        pub async fn github() -> impl IntoResponse {}
     }
 
     pub(super) mod login {
@@ -124,8 +121,9 @@ mod post {
             {
                 Ok(Some(user)) => user,
                 Ok(None) => {
+                    tracing::info!("Invalid password");
                     return (StatusCode::UNAUTHORIZED, "invalid password".to_string())
-                        .into_response()
+                        .into_response();
                 }
                 Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             };

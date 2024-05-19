@@ -79,7 +79,7 @@ impl Auth {
 
         let session_layer = SessionManagerLayer::new(session_store)
             .with_secure(false)
-            .with_same_site(SameSite::Strict)
+            .with_same_site(SameSite::Lax)
             .with_expiry(Expiry::OnInactivity(Duration::days(2)));
 
         // Auth Service

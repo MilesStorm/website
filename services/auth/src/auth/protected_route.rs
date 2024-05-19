@@ -1,11 +1,4 @@
-use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
-use serde_json::Serializer;
-
-// #[derive(Template)]
-// #[template(path = "protected.html")]
-// struct ProtectedTemplate<'a> {
-//     username: &'a str,
-// }
+use axum::{response::IntoResponse, routing::get, Router};
 
 pub fn router() -> Router<()> {
     Router::new().route("/api/login/status", get(self::get::protected))
