@@ -28,6 +28,7 @@ use self::{
 pub struct Auth {
     db: PgPool,
     client: BasicClient,
+    g_client: BasicClient,
 }
 
 impl Auth {
@@ -49,14 +50,36 @@ impl Auth {
         let client_secret = env::var("CLIENT_SECRET")
             .map(ClientSecret::new)
             .expect("CLIENT_SECRET should be provided");
-        tracing::trace!("client_id: {:?}", client_id);
+
+        let g_client_id = env::var("G_CLIENT_ID")
+            .map(ClientId::new)
+            .expect("CLIENT_ID should be provided");
+        tracing::trace!("google client_id: {:?}", client_id);
+
+        let g_client_secret = env::var("G_CLIENT_SECRET")
+            .map(ClientSecret::new)
+            .expect("CLIENT_SECRET should be provided");
+        tracing::trace!("google client_id: {:?}", client_id);
 
         let auth_url = AuthUrl::new("https://github.com/login/oauth/authorize".to_string())?;
         tracing::trace!("auth_url: {:?}", auth_url);
         let token_url = TokenUrl::new("https://github.com/login/oauth/access_token".to_string())?;
         tracing::trace!("token_url: {:?}", token_url);
 
+        let g_auth_url = AuthUrl::new("https://google.com/login/oauth/authorize".to_string())?;
+        tracing::trace!("auth_url: {:?}", auth_url);
+        let g_token_url = TokenUrl::new("https://google.com/login/oauth/access_token".to_string())?;
+        tracing::trace!("token_url: {:?}", token_url);
+
         let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url));
+        tracing::trace!("client: {:?}", client);
+
+        let g_client = BasicClient::new(
+            g_client_id,
+            Some(g_client_secret),
+            g_auth_url,
+            Some(g_token_url),
+        );
         tracing::trace!("client: {:?}", client);
 
         let db_connection = env::var("DATABASE_URL").expect("DATABASE_URL should be provided");
@@ -65,7 +88,11 @@ impl Auth {
         tracing::trace!("db: {:?}", db);
         sqlx::migrate!().run(&db).await?;
 
-        Ok(Auth { db, client })
+        Ok(Auth {
+            db,
+            client,
+            g_client,
+        })
     }
 
     pub async fn server(self) -> Result<(), Box<dyn std::error::Error>> {
@@ -83,7 +110,7 @@ impl Auth {
             .with_expiry(Expiry::OnInactivity(Duration::days(2)));
 
         // Auth Service
-        let backend = Backend::new(self.db, self.client);
+        let backend = Backend::new(self.db, self.client, self.g_client);
         let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
 
         let app = protected_route::router()

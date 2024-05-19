@@ -28,6 +28,13 @@ pub struct ClientUser {
     pub email: Option<String>,
 }
 
+#[derive(Clone, Serialize, Deserialize, FromRow)]
+pub struct GoogleUserInfo {
+    email: String,
+    name: Option<String>,
+    picture: Option<String>,
+}
+
 impl std::fmt::Debug for ClientUser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClientUser")
@@ -83,6 +90,7 @@ impl AuthUser for User {
 pub enum Credentials {
     Password(PasswordCreds),
     AccessToken(OAuthCreds),
+    GoogleToken(OAuthCreds),
 }
 
 #[derive(Debug)]
@@ -164,11 +172,16 @@ pub enum BackendError {
 pub struct Backend {
     db: sqlx::PgPool,
     client: BasicClient,
+    g_client: BasicClient,
 }
 
 impl Backend {
-    pub fn new(db: sqlx::PgPool, client: BasicClient) -> Self {
-        Self { db, client }
+    pub fn new(db: sqlx::PgPool, client: BasicClient, g_client: BasicClient) -> Self {
+        Self {
+            db,
+            client,
+            g_client,
+        }
     }
 
     pub fn authorize_url(&self) -> (Url, CsrfToken) {
@@ -286,6 +299,49 @@ impl AuthnBackend for Backend {
                     "#,
                 )
                 .bind(user_info.login)
+                .bind(token_res.access_token().secret())
+                .fetch_one(&self.db)
+                .await
+                .map_err(Self::Error::Sqlx)?;
+
+                Ok(Some(user))
+            }
+            Credentials::GoogleToken(oauth_cred) => {
+                if oauth_cred.old_state.secret() != oauth_cred.new_state.secret() {
+                    return Ok(None);
+                }
+
+                let token_res = self
+                    .g_client
+                    .exchange_code(AuthorizationCode::new(oauth_cred.code))
+                    .request_async(async_http_client)
+                    .await
+                    .map_err(BackendError::OAuth2)?;
+
+                let user_info = reqwest::Client::new()
+                    .get("https://www.googleapis.com/oauth2/v2/userinfo")
+                    .header(USER_AGENT.as_str(), "axum-login")
+                    .header(
+                        AUTHORIZATION.as_str(),
+                        format!("Bearer {}", token_res.access_token().secret()),
+                    )
+                    .send()
+                    .await
+                    .map_err(Self::Error::Reqwest)?
+                    .json::<GoogleUserInfo>()
+                    .await
+                    .map_err(Self::Error::Reqwest)?;
+
+                let user = sqlx::query_as(
+                    r#"
+                    insert into users (email, access_token)
+                    values ($1, $2)
+                    on conflict(email) do update
+                    set access_token = excluded.access_token
+                    returning *
+                    "#,
+                )
+                .bind(&user_info.email)
                 .bind(token_res.access_token().secret())
                 .fetch_one(&self.db)
                 .await

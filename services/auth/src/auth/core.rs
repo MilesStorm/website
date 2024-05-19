@@ -40,9 +40,9 @@ pub fn router() -> Router<()> {
             "/api/register/password",
             post(self::post::register::password),
         )
-        .route("/api/register/github", post(self::post::register::github))
         .route("/api/login/password", post(self::post::login::password))
-        .route("/api/login/github", post(self::post::login::oauth))
+        .route("/api/login/github", post(self::post::login::github))
+        .route("/api/login/google", post(self::post::login::google))
         .route("/api/login", get(self::get::login))
         .route("/api/logout", get(self::get::logout))
 }
@@ -101,8 +101,6 @@ mod post {
             }
             .into_response()
         }
-
-        pub async fn github() -> impl IntoResponse {}
     }
 
     pub(super) mod login {
@@ -151,7 +149,31 @@ mod post {
             }
         }
 
-        pub async fn oauth(
+        pub async fn github(
+            auth_session: AuthSession,
+            session: Session,
+            Form(NextUrl { next }): Form<NextUrl>,
+        ) -> impl IntoResponse {
+            let (auth_url, csrf_state) = auth_session.backend.authorize_url();
+
+            session
+                .insert(CSRF_STATE_KEY, csrf_state.secret())
+                .await
+                .expect("Serialization should not fail.");
+
+            session
+                .insert(NEXT_URL_KEY, next)
+                .await
+                .expect("Serialization should not fail.");
+
+            // Redirect::to(auth_url.as_str()).into_response();
+            Json(NextUrl {
+                next: Some(auth_url.to_string()),
+            })
+            .into_response()
+        }
+
+        pub async fn google(
             auth_session: AuthSession,
             session: Session,
             Form(NextUrl { next }): Form<NextUrl>,

@@ -155,6 +155,22 @@ pub async fn login(
     }
 }
 
+pub async fn google_oauth() -> Result<String, reqwest::Error> {
+    let response = post_reqwest(format!("{}/api/login/google", ROOT_DOMAIN()).as_str(), &[]).await;
+
+    // if the request succeeds, get the url from the json response.
+    match response {
+        Ok(res) => {
+            let json_value: Json = res.json().await?;
+            Ok(json_value["next"]
+                .as_str()
+                .expect("cannot convert to string")
+                .to_string())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub async fn github_oauth() -> Result<String, reqwest::Error> {
     let response = post_reqwest(format!("{}/api/login/github", ROOT_DOMAIN()).as_str(), &[]).await;
 

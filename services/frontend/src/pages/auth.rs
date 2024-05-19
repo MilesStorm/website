@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::hooks::{github_oauth, login, register, LogInStatus};
+use crate::hooks::{github_oauth, google_oauth, login, register, LogInStatus};
 
 #[component]
 pub fn Login() -> Element {
@@ -82,6 +82,20 @@ pub fn Login() -> Element {
 pub fn Register() -> Element {
     let mut req_res = use_signal(|| String::new());
 
+    let google_oauth_call = move |_| {
+        spawn(async move {
+            let res = google_oauth().await;
+
+            tracing::info!("OAuth response: {:?}", res);
+            match res {
+                Ok(url) => {
+                    tracing::info!("OAuth success: {:?}", url);
+                    navigator().push(url.as_str());
+                }
+                Err(e) => tracing::warn!("OAuth failed: {:?}", e),
+            }
+        });
+    };
     let oauth_call = move |_| {
         spawn(async move {
             let res = github_oauth().await;
@@ -130,11 +144,11 @@ pub fn Register() -> Element {
                         "Sign up with\n        GitHub"
                     }
                     button {
-                        onclick: |_| {tracing::info!("Google OAuth clicked")},
-                        "data-tip": "Disabled while waiting for verification",
-                        class: "btn btn-disabled btn-outline btn-accent w-full tooltip",
-                        "disabled": "disabled",
-                        "Sign up with\n        Google"
+                        onclick: google_oauth_call,
+                        // "data-tip": "Disabled while waiting for verification",
+                        class: "btn btn-outline btn-accent w-full tooltip",
+                        // "disabled": "disabled",
+                        "Sign up with Google"
                     }
                 }
                 div { class: "divider", "OR" }
