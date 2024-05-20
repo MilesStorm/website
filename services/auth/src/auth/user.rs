@@ -158,6 +158,9 @@ pub enum BackendError {
     #[error(transparent)]
     Sqlx(sqlx::Error),
 
+    #[error("An account with this email already exists and was created with a password")]
+    EmailAlreadyInUse,
+
     #[error(transparent)]
     Reqwest(reqwest::Error),
 
@@ -178,14 +181,11 @@ pub struct Backend {
 impl Backend {
     pub fn new(db: sqlx::PgPool, client: BasicClient, g_client: BasicClient) -> Self {
         let g_client = g_client.set_redirect_uri(
-            RedirectUrl::new(String::from(
-                if cfg!(debug_assertions) {
-                    "http://localhost:8080/api/login/google/callback"
-                } else {
-                    "https://yousofmersal.com/api/login/google/callback"
-                },
-                // "https://yousofmersal.com/api/login/github/callback",
-            ))
+            RedirectUrl::new(String::from(if cfg!(debug_assertions) {
+                "http://localhost:8080/api/login/google/callback"
+            } else {
+                "https://yousofmersal.com/api/login/google/callback"
+            }))
             .expect("invalid redirect uri"),
         );
         Self {
@@ -344,6 +344,8 @@ impl AuthnBackend for Backend {
                     .await
                     .map_err(BackendError::OAuth2)?;
 
+                tracing::info!("token_res: {:?}", token_res);
+
                 let user_info = reqwest::Client::new()
                     .get("https://www.googleapis.com/oauth2/v2/userinfo")
                     .header(USER_AGENT.as_str(), "axum-login")
@@ -357,6 +359,24 @@ impl AuthnBackend for Backend {
                     .json::<GoogleUserInfo>()
                     .await
                     .map_err(Self::Error::Reqwest)?;
+
+                let existing_user_test: Option<User> = sqlx::query_as(
+                    r#"
+                    select * from users where email = $1
+                    "#,
+                )
+                .bind(&user_info.email)
+                .fetch_optional(&self.db)
+                .await
+                .map_err(Self::Error::Sqlx)?;
+                tracing::info!("existing_user_test: {:?}", existing_user_test);
+
+                if let Some(user) = existing_user_test {
+                    if user.password.is_some() {
+                        tracing::error!("An account with this email already exists!");
+                        return Err(BackendError::EmailAlreadyInUse);
+                    }
+                }
 
                 let user = sqlx::query_as(
                     r#"

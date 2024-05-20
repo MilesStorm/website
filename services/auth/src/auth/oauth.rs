@@ -36,6 +36,8 @@ pub fn router() -> Router<()> {
 }
 
 mod get {
+    use crate::auth::user::BackendError;
+
     use super::*;
 
     pub async fn github_callback(
@@ -105,28 +107,39 @@ mod get {
         });
 
         tracing::info!("trying to authenticate: {:?}", creds);
-        let user: User = match auth_session.authenticate(creds).await {
-            Ok(Some(user)) => user,
+        match auth_session.authenticate(creds).await {
+            Ok(Some(user)) => {
+                tracing::info!("found User: {:?}", user);
+                if auth_session.login(&user).await.is_err() {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+
+                if let Ok(Some(next)) = session.remove::<String>(NEXT_URL_KEY).await {
+                    Redirect::to(&next).into_response()
+                } else {
+                    Redirect::to("/").into_response()
+                }
+            }
             Ok(None) => {
                 tracing::error!("Error authenticating user");
-                return (StatusCode::UNAUTHORIZED, "Invalid CSRF state.".to_string())
-                    .into_response();
+                (StatusCode::UNAUTHORIZED, "Invalid CSRF state.".to_string()).into_response()
             }
-            Err(e) => {
-                tracing::error!("Error authenticating user: {:?}", e);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
-        tracing::info!("found User: {:?}", user);
-
-        if auth_session.login(&user).await.is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-
-        if let Ok(Some(next)) = session.remove::<String>(NEXT_URL_KEY).await {
-            Redirect::to(&next).into_response()
-        } else {
-            Redirect::to("/").into_response()
+            Err(e) => match e {
+                axum_login::Error::Backend(be) => match be {
+                    BackendError::EmailAlreadyInUse => {
+                        tracing::error!("Error authenticating user: {:?}", &be);
+                        Redirect::to("/login?error=email_exists").into_response()
+                    }
+                    _ => {
+                        tracing::error!("Error authenticating user backend: {:?}", &be);
+                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    }
+                },
+                axum_login::Error::Session(_) => {
+                    tracing::error!("Error authenticating user session: {:?}", &e);
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            },
         }
     }
 }

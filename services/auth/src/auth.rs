@@ -4,9 +4,9 @@ mod protected_route;
 mod session_store;
 mod user;
 
-use std::{env, sync::Arc};
+use std::env;
 
-use axum::{routing::get, Extension};
+use axum::routing::get;
 use axum_login::{
     login_required,
     tower_sessions::{
@@ -17,7 +17,6 @@ use axum_login::{
     AuthManagerLayerBuilder,
 };
 use oauth2::{basic::BasicClient, AuthUrl, ClientId, ClientSecret, TokenUrl};
-use reqwest::Client;
 use sqlx::PgPool;
 use tower_sessions_sqlx_store::PostgresStore;
 
@@ -113,8 +112,6 @@ impl Auth {
         // Auth Service
         let backend = Backend::new(self.db, self.client, self.g_client);
         let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
-
-        let client = Arc::new(Client::new());
 
         let app = protected_route::router()
             .route("/api", get(handler))
