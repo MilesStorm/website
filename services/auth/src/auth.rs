@@ -19,7 +19,6 @@ use axum_login::{
 use oauth2::{basic::BasicClient, AuthUrl, ClientId, ClientSecret, TokenUrl};
 use reqwest::Client;
 use sqlx::PgPool;
-use tower::ServiceBuilder;
 use tower_sessions_sqlx_store::PostgresStore;
 
 use self::{
@@ -123,8 +122,7 @@ impl Auth {
             .route_layer(login_required!(Backend, login_url = "/api/login"))
             .merge(core::router())
             .merge(oauth::router())
-            .layer(auth_layer)
-            .layer(ServiceBuilder::new().layer(Extension(client)));
+            .layer(auth_layer);
 
         let listener = tokio::net::TcpListener::bind(format!(
             "{}:{}",
