@@ -6,10 +6,11 @@ mod pages;
 
 use dioxus::prelude::*;
 use dioxus::signals::GlobalSignal;
+use dioxus_sdk::storage::{use_synced_storage, LocalStorage};
 use hooks::LogInStatus;
 use log::LevelFilter;
 
-use crate::{cv::CvPage, pages::*};
+use crate::{components::cookie::CookieAlert, cv::CvPage, pages::*};
 
 // Urls are relative to your Cargo.toml file
 const _TAILWIND_URL: &str = manganis::mg!(file("assets/main.css"));
@@ -52,9 +53,18 @@ fn App() -> Element {
         *LOGIN_STATUS.write() = LogInStatus::is_logged_in().await;
     });
 
+    let mut is_eating_cookies =
+        use_synced_storage::<LocalStorage, bool>("accepted_cookies".to_owned(), || false);
+    let mut is_showing_cookies =
+        use_synced_storage::<LocalStorage, bool>("showing_cookies".to_owned(), || true);
+
     rsx! {
         div {
+            class: "flex flex-col justify-between h-screen",
             Router::<Route> {}
+            if is_showing_cookies() {
+                CookieAlert {is_showing: is_showing_cookies,is_eating: is_eating_cookies}
+            }
         }
     }
 }

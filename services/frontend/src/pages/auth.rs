@@ -58,7 +58,7 @@ pub fn Login(error: String) -> Element {
     rsx! {
         div {
             div {
-                class:"min-h-screen flex items-center justify-center flex-col",
+                class:"h-[calc(100vh-5rem)] flex items-center justify-center flex-col",
                 div {
                     class:"bg-base-200 p-8 rounded-lg shadow-lg max-w-md w-full",
                     h2 {
@@ -187,7 +187,7 @@ pub fn Register() -> Element {
     };
 
     rsx! {
-        div { class: "min-h-screen flex items-center justify-center",
+        div { class: "h-[calc(100vh-5rem)] flex items-center justify-center",
             div { class: "p-8 bg-base-200 shadow-lg rounded-lg max-w-md w-full",
                 h2 { class: "text-center text-2xl font-bold mb-6", "Sign Up" }
                 div { class: "flex flex-col space-y-4 mb-6",
