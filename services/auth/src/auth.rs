@@ -4,9 +4,9 @@ mod protected_route;
 mod session_store;
 mod user;
 
-use std::env;
+use std::{env, sync::Arc};
 
-use axum::routing::get;
+use axum::{routing::get, Extension};
 use axum_login::{
     login_required,
     tower_sessions::{
@@ -17,7 +17,9 @@ use axum_login::{
     AuthManagerLayerBuilder,
 };
 use oauth2::{basic::BasicClient, AuthUrl, ClientId, ClientSecret, TokenUrl};
+use reqwest::Client;
 use sqlx::PgPool;
+use tower::ServiceBuilder;
 use tower_sessions_sqlx_store::PostgresStore;
 
 use self::{
@@ -113,13 +115,16 @@ impl Auth {
         let backend = Backend::new(self.db, self.client, self.g_client);
         let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
 
+        let client = Arc::new(Client::new());
+
         let app = protected_route::router()
             .route("/api", get(handler))
             // .route("/", get(handler))
             .route_layer(login_required!(Backend, login_url = "/api/login"))
             .merge(core::router())
             .merge(oauth::router())
-            .layer(auth_layer);
+            .layer(auth_layer)
+            .layer(ServiceBuilder::new().layer(Extension(client)));
 
         let listener = tokio::net::TcpListener::bind(format!(
             "{}:{}",

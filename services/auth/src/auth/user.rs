@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use axum::{async_trait, Json};
 use axum_login::{AuthUser, AuthnBackend, UserId};
 use oauth2::{
@@ -181,7 +179,12 @@ impl Backend {
     pub fn new(db: sqlx::PgPool, client: BasicClient, g_client: BasicClient) -> Self {
         let g_client = g_client.set_redirect_uri(
             RedirectUrl::new(String::from(
-                "https://yousofmersal.com/api/login/github/callback",
+                if cfg!(debug_assertions) {
+                    "http://localhost:8080/api/login/google/callback"
+                } else {
+                    "https://yousofmersal.com/api/login/github/callback"
+                },
+                // "https://yousofmersal.com/api/login/github/callback",
             ))
             .expect("invalid redirect uri"),
         );
@@ -202,6 +205,8 @@ impl Backend {
             .add_scope(Scope::new(String::from(
                 "https://www.googleapis.com/auth/userinfo.profile",
             )))
+            .add_scope(Scope::new(String::from("email")))
+            .add_scope(Scope::new(String::from("openid")))
             .url()
     }
 
@@ -353,7 +358,7 @@ impl AuthnBackend for Backend {
 
                 let user = sqlx::query_as(
                     r#"
-                    insert into users (email, access_token)
+                    insert into users (username, access_token)
                     values ($1, $2)
                     on conflict(email) do update
                     set access_token = excluded.access_token
