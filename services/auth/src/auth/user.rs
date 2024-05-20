@@ -202,9 +202,7 @@ impl Backend {
     pub fn authorize_g_url(&self) -> (Url, CsrfToken) {
         self.g_client
             .authorize_url(CsrfToken::new_random)
-            .add_scope(Scope::new(String::from(
-                "https://www.googleapis.com/auth/userinfo.profile",
-            )))
+            .add_scope(Scope::new(String::from("profile")))
             .add_scope(Scope::new(String::from("email")))
             .add_scope(Scope::new(String::from("openid")))
             .url()
