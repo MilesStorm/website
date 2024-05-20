@@ -356,13 +356,15 @@ impl AuthnBackend for Backend {
 
                 let user = sqlx::query_as(
                     r#"
-                    insert into users (username, access_token)
-                    values ($1, $2)
-                    on conflict(email) do update
-                    set access_token = excluded.access_token
+                    insert into users (username, email, access_token)
+                    values ($1, $2, $3)
+                    on conflict(username) do update
+                    set email = excluded.email,
+                        access_token = excluded.access_token
                     returning *
                     "#,
                 )
+                .bind(&user_info.name)
                 .bind(&user_info.email)
                 .bind(token_res.access_token().secret())
                 .fetch_one(&self.db)
