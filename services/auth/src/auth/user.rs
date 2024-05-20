@@ -196,7 +196,11 @@ impl Backend {
     }
 
     pub fn authorize_url(&self) -> (Url, CsrfToken) {
-        self.client.authorize_url(CsrfToken::new_random).url()
+        self.client
+            .authorize_url(CsrfToken::new_random)
+            .add_scope(Scope::new(String::from("read:user")))
+            .add_scope(Scope::new(String::from("user:email")))
+            .url()
     }
 
     pub fn authorize_g_url(&self) -> (Url, CsrfToken) {
