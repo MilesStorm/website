@@ -182,7 +182,7 @@ impl Backend {
                 if cfg!(debug_assertions) {
                     "http://localhost:8080/api/login/google/callback"
                 } else {
-                    "https://yousofmersal.com/api/login/github/callback"
+                    "https://yousofmersal.com/api/login/google/callback"
                 },
                 // "https://yousofmersal.com/api/login/github/callback",
             ))
