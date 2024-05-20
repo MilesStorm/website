@@ -26,8 +26,8 @@ enum Route {
     CvPage {},
     #[route("/profile")]
     Profile {},
-    #[route("/login")]
-    Login {},
+    #[route("/login?:error")]
+    Login { error: String },
     #[route("/register")]
     Register {},
     #[route("/:..segments")]
