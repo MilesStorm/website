@@ -57,10 +57,11 @@ pub fn Profile_form() -> Element {
                             },
                             value: {
                                 get_mode().to_string()
+                                // selected()
                             },
                             for theme in Theme::iterator() {
                                  option { "{theme}" }
-                            }
+                            },
                         }
                     }
                     div { class: "mb-4",
