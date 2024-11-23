@@ -22,7 +22,7 @@ enum Route {
     #[route("/")]
     Home {},
     #[route("/arcaneeye")]
-    ArcaneEye {},
+    ArcaneEyePage {},
     #[route("/blog/:id")]
     Blog { id: i32 },
     #[route("/resume")]

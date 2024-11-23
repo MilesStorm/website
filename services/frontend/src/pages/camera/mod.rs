@@ -1,3 +1,4 @@
+use dioxus::html::geometry::euclid::num::Floor;
 use gloo::utils::window;
 use web_sys::{
     wasm_bindgen::{Clamped, JsCast, JsValue},
@@ -7,6 +8,8 @@ use web_sys::{
 #[derive(Debug, Clone)]
 pub struct Canvas {
     pub context: CanvasRenderingContext2d,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug)]
@@ -50,7 +53,22 @@ impl WebCam {
 
 impl Canvas {
     pub fn new() -> Self {
-        let Some(document) = window().document() else {
+        let window = window();
+        let width = window
+            .inner_width()
+            .unwrap()
+            .as_f64()
+            .expect("Could not convert to f64")
+            * 0.66666;
+
+        let height = window
+            .inner_height()
+            .unwrap()
+            .as_f64()
+            .expect("Could not convert to f64")
+            * 0.66666;
+
+        let Some(document) = window.document() else {
             tracing::error!("Failed to get document");
             panic!("Failed to get document");
         };
@@ -64,8 +82,8 @@ impl Canvas {
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .unwrap();
 
-        canvas.set_width(640);
-        canvas.set_height(480);
+        canvas.set_width(width.floor() as u32);
+        canvas.set_height(height.floor() as u32);
 
         let context = canvas
             .get_context_with_context_options("2d", &context_attributes)
@@ -74,18 +92,28 @@ impl Canvas {
             .dyn_into::<CanvasRenderingContext2d>()
             .unwrap();
 
-        Self { context }
+        Self {
+            context,
+            width,
+            height,
+        }
     }
 
     pub fn draw_image(self: &Self, video: &HtmlVideoElement) {
         self.context
-            .draw_image_with_html_video_element_and_dw_and_dh(video, 0., 0., 640., 480.)
+            .draw_image_with_html_video_element_and_dw_and_dh(
+                video,
+                0.,
+                0.,
+                self.width,
+                self.height,
+            )
             .unwrap();
     }
 
     pub fn get_image_data(self: &Self) -> Clamped<Vec<u8>> {
         self.context
-            .get_image_data(0., 0., 640., 480.)
+            .get_image_data(0., 0., self.width, self.height)
             .unwrap()
             .data()
     }
