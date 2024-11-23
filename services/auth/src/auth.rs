@@ -1,3 +1,4 @@
+pub mod arcane;
 mod core;
 mod oauth;
 mod protected_route;
