@@ -1,3 +1,4 @@
+pub(crate) mod functionality;
 pub(crate) mod theme;
 pub(crate) mod user_login;
 

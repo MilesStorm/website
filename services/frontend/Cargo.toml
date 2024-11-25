@@ -8,21 +8,36 @@ edition = "2021"
 
 [dependencies]
 
+# dioxus = { git = "https://github.com/DioxusLabs/dioxus/", features = ["web", "router"] }
 dioxus = { version = "0.5.1", features = ["web", "router"] }
 
 # Debug
-log = "0.4.19"
+log = "0.4.22"
 dioxus-logger = "0.4.1"
 console_error_panic_hook = "0.1.7"
 gloo= "0.11.0"
 manganis = "0.2.2"
-dioxus-sdk = { git = "https://github.com/DioxusLabs/sdk", features = ["storage", "color_scheme"] }
+dioxus-sdk = { version = "0.5.0", features = ["storage", "color_scheme"] }
 # js-sys = "0.3.69"
-web-sys = "0.3.69"
-serde = { version = "1.0.199", features = ["derive"] }
-serde_json = "1.0.116"
+web-sys = {version = "0.3.69", features = ['Navigator',
+  'MediaDevices',
+  'GetUserMediaRequest',
+  'MediaStream',
+  'MediaStreamConstraints',
+  'CanvasRenderingContext2d',
+  'HtmlCanvasElement',
+  'HtmlMediaElement',
+  'HtmlVideoElement',
+  'ImageData',
+  'HtmlElement',
+  'ContextAttributes2d',
+  'Element']}
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.120"
 tracing = { version = "0.1.40", features = ["log"] }
-reqwest = { version = "0.12.4", features = ["json", "cookies"] }
-wasm-cookies = "0.2.1"
+reqwest = { version = "0.12.5", features = ["json", "cookies"] }
+wasm-bindgen-futures = "0.4.42"
+# wasm-cookies = "0.2.1"
+# nokhwa = { version = "0.10.4", features = ["input-jscam"] }
 # async-recursion = "1.1.1"
 # futures = "0.3.30"

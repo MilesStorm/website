@@ -21,6 +21,8 @@ pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStat
 enum Route {
     #[route("/")]
     Home {},
+    #[route("/arcaneeye")]
+    ArcaneEyePage {},
     #[route("/blog/:id")]
     Blog { id: i32 },
     #[route("/resume")]
@@ -53,9 +55,9 @@ fn App() -> Element {
         *LOGIN_STATUS.write() = LogInStatus::is_logged_in().await;
     });
 
-    let mut is_eating_cookies =
+    let is_eating_cookies =
         use_synced_storage::<LocalStorage, bool>("accepted_cookies".to_owned(), || false);
-    let mut is_showing_cookies =
+    let is_showing_cookies =
         use_synced_storage::<LocalStorage, bool>("showing_cookies".to_owned(), || true);
 
     rsx! {
