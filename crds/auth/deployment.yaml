@@ -34,10 +34,10 @@ spec:
         - containerPort: 7070
         env:
           - name: DATABASE_URL
-            valueFrom:
-              secretKeyRef:
-                name: db-secret
-                key: DATABASE_URL
+            valueFrom: 
+              secretKeyRef: 
+                name: auth-cluster-app
+                key: uri
           - name: CLIENT_ID
             valueFrom:
               secretKeyRef:
