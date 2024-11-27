@@ -16,8 +16,8 @@ use super::user::User;
 
 #[derive(Serialize)]
 pub struct ApiResponse {
-    message: String,
-    user: Option<User>, // Optionally include user info if registration succeeds
+    pub message: String,
+    pub user: Option<User>, // Optionally include user info if registration succeeds
 }
 
 impl ApiResponse {
@@ -224,7 +224,11 @@ mod get {
 
     pub async fn logout(mut auth_session: AuthSession) -> impl IntoResponse {
         match auth_session.logout().await {
-            Ok(_) => Redirect::to("/login").into_response(),
+            Ok(user) => {
+                tracing::info!("User logged out: {:?}", user);
+
+                Redirect::to("/login").into_response()
+            }
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }

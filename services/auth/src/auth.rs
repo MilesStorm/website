@@ -1,6 +1,7 @@
 pub mod arcane;
 mod core;
 mod oauth;
+pub mod permissions;
 mod protected_route;
 mod session_store;
 mod user;
@@ -9,7 +10,7 @@ use std::env;
 
 use axum::routing::get;
 use axum_login::{
-    login_required,
+    login_required, permission_required,
     tower_sessions::{
         cookie::{time::Duration, SameSite},
         session_store::ExpiredDeletion,
@@ -116,8 +117,8 @@ impl Auth {
 
         let app = protected_route::router()
             .route("/api", get(handler))
-            // .route("/", get(handler))
             .route_layer(login_required!(Backend, login_url = "/api/login"))
+            .merge(permissions::router())
             .merge(core::router())
             .merge(oauth::router())
             .layer(auth_layer);
@@ -130,6 +131,7 @@ impl Auth {
         .await
         .unwrap();
 
+        tracing::info!("Listening on: {}", listener.local_addr().unwrap());
         axum::serve(listener, app.into_make_service())
             .with_graceful_shutdown(shutdown_signal(deletion_task.abort_handle()))
             .await?;

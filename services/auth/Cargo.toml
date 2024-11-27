@@ -7,17 +7,17 @@ edition = "2021"
 
 [dependencies]
 axum = { version = "0.7.5", features = ["ws", "macros"] }
-sqlx = {version = "0.7.4", features = ["runtime-tokio-native-tls", "postgres"]}
+sqlx = {version = "0.8.2", features = ["runtime-tokio-native-tls", "postgres"]}
 tokio = { version = "1.37.0", features = ["full"]}
-axum-login = {version = "0.15.1"}
+axum-login = {version = "0.16.0"}
 tracing = { version = "0.1.40" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 dotenvy = {version = "0.15.7"}
 oauth2 = "4.4.2"
 serde = { version = "1.0.201", features = ["derive", "serde_derive"] }
-thiserror = "1.0.60"
+thiserror = "2.0.3"
 password-auth = "1.0.0"
 reqwest = {version = "0.12.4", features = ["json"]}
 serde_json = "1.0.117"
-tower-sessions-sqlx-store = { version = "0.12.0", features = ["postgres"] }
+tower-sessions-sqlx-store = { version = "0.14.2", features = ["postgres"] }
 tower-session = "0.0.0"
