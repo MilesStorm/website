@@ -1,10 +1,10 @@
-use crate::auth::user::{Credentials, PasswordCreds};
+use crate::auth::user::{Backend, Credentials, PasswordCreds};
 use axum::{
-    response::{IntoResponse, Redirect},
+    response::IntoResponse,
     routing::{get, post},
     Form, Router,
 };
-use axum_login::tower_sessions::Session;
+use axum_login::{login_required, tower_sessions::Session};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -12,16 +12,16 @@ pub const NEXT_URL_KEY: &str = "auth.next-url";
 
 use crate::auth::{oauth::CSRF_STATE_KEY, user::AuthSession};
 
-use super::user::User;
+use super::user::ClientUser;
 
 #[derive(Serialize)]
 pub struct ApiResponse {
     pub message: String,
-    pub user: Option<User>, // Optionally include user info if registration succeeds
+    pub user: Option<ClientUser>, // Optionally include user info if registration succeeds
 }
 
 impl ApiResponse {
-    pub fn new(message: &str, user: Option<User>) -> Self {
+    pub fn new(message: &str, user: Option<ClientUser>) -> Self {
         Self {
             message: message.to_string(),
             user,
@@ -40,11 +40,12 @@ pub fn router() -> Router<()> {
             "/api/register/password",
             post(self::post::register::password),
         )
+        .route("/api/logout", get(self::get::logout))
+        .route_layer(login_required!(Backend, login_url = "/api/login"))
         .route("/api/login/password", post(self::post::login::password))
         .route("/api/login/github", post(self::post::login::github))
         .route("/api/login/google", post(self::post::login::google))
         .route("/api/login", get(self::get::login))
-        .route("/api/logout", get(self::get::logout))
 }
 
 mod post {
@@ -67,16 +68,13 @@ mod post {
                 .await;
 
             match result {
-                Ok(mut user) => {
-                    user.password = None;
-                    (
-                        axum::http::StatusCode::OK,
-                        Json(ApiResponse {
-                            message: "Registration successful".to_string(),
-                            user: Some(user),
-                        }),
-                    )
-                }
+                Ok(user) => (
+                    axum::http::StatusCode::OK,
+                    Json(ApiResponse {
+                        message: "Registration successful".to_string(),
+                        user: Some(user.into()),
+                    }),
+                ),
                 Err(UserError::UserAlreadyExists) => (
                     axum::http::StatusCode::CONFLICT,
                     Json(ApiResponse {
@@ -107,13 +105,15 @@ mod post {
 
         use axum::Json;
 
+        use crate::auth::user::ClientUser;
+
         use super::*;
 
         pub async fn password(
             mut auth_session: AuthSession,
             Form(creds): Form<PasswordCreds>,
         ) -> impl IntoResponse {
-            let mut user = match auth_session
+            let user = match auth_session
                 .authenticate(Credentials::Password(creds.clone()))
                 .await
             {
@@ -130,7 +130,6 @@ mod post {
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
-            user.password = None;
             dbg!(&user);
 
             if let Some(ref next) = creds.next {
@@ -143,7 +142,7 @@ mod post {
                 // Redirect::to("/").into_response()
                 Json(ApiResponse {
                     message: "Login successful".to_string(),
-                    user: Some(user),
+                    user: Some(ClientUser::from(user)),
                 })
                 .into_response()
             }
@@ -206,11 +205,10 @@ mod get {
     use axum::Json;
 
     pub async fn login(auth_session: AuthSession) -> impl IntoResponse {
-        if let Some(mut user) = auth_session.user {
-            user.password = None;
+        if let Some(user) = auth_session.user {
             Json(ApiResponse {
                 message: "Already logged in".to_string(),
-                user: Some(user),
+                user: Some(user.into()),
             })
             .into_response()
         } else {
@@ -227,7 +225,7 @@ mod get {
             Ok(user) => {
                 tracing::info!("User logged out: {:?}", user);
 
-                Redirect::to("/login").into_response()
+                StatusCode::RESET_CONTENT.into_response()
             }
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }

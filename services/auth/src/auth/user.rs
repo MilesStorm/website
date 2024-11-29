@@ -14,11 +14,11 @@ use tokio::task;
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
-    pub id: i64,
-    pub username: String,
-    pub email: Option<String>,
-    pub password: Option<String>,
-    pub access_token: Option<String>,
+    id: i64,
+    username: String,
+    email: Option<String>,
+    password: Option<String>,
+    access_token: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -60,8 +60,6 @@ impl std::fmt::Debug for User {
         f.debug_struct("User")
             .field("id", &self.id)
             .field("username", &self.username)
-            .field("password", &self.password)
-            .field("access_token", &self.access_token)
             .finish()
     }
 }
@@ -246,7 +244,7 @@ impl Backend {
         .fetch_one(&self.db)
         .await;
 
-        return match user {
+        match user {
             Ok(user) => Ok(user),
             Err(e) => match e {
                 sqlx::Error::Database(db_err) if db_err.message().contains("UserAlreadyExists") => {
@@ -257,7 +255,7 @@ impl Backend {
                 }
                 _ => Err(UserError::DatabaseError(e)),
             },
-        };
+        }
     }
 }
 
