@@ -20,6 +20,12 @@ pub enum LogInStatus {
     LoggedIn(String),
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RestartRequestResponse {
+    restart_result: String,
+    exit_code: Option<i32>,
+}
+
 impl LogInStatus {
     pub async fn set_logged_in() {
         let resp = reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
@@ -126,6 +132,16 @@ pub async fn logout() -> Result<(), reqwest::Error> {
     *LOGIN_STATUS.write() = LogInStatus::LoggedOut;
 
     Ok(())
+}
+
+pub async fn restart_valheim() -> Result<RestartRequestResponse, reqwest::Error> {
+    let resp =
+        reqwest::get(format!("{}/api/permission/valheim_player/restart", ROOT_DOMAIN()).as_str())
+            .await?;
+    tracing::info!("restart_valheim response: {:?}", resp);
+    let result = resp.json::<RestartRequestResponse>().await?;
+
+    Ok(result)
 }
 
 pub async fn has_permission(permission: &str) -> bool {

@@ -9,7 +9,7 @@ use crate::{
 
 #[component]
 fn valheim_button() -> Element {
-    let is_permitted = use_resource(move || async move { has_permission("restart_valheim").await });
+    let is_permitted = use_resource(move || async move { has_permission("valheim_player").await });
 
     match is_permitted() {
         Some(permission) => {

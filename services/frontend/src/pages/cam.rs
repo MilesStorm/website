@@ -20,16 +20,16 @@ fn request_animation_frame(f: &Closure<dyn FnMut()>) {
 
 #[component()]
 pub fn ArcaneEye() -> Element {
-    let mut context = use_resource(move || async move { camera::Canvas::new() });
+    let context = use_resource(move || async move { camera::Canvas::new() });
 
     rsx! {
         div { class: "bg flex items-center justify-center",
             div { class: "container mx-auto text-center  flex flex-col items-center justify-center",
                 h1 { class:"text-3xl font-bold mb-8", "ArcaneEye" }
-                canvas { class: "rounded", id: "pre", onmounted: move |cx| {
+                canvas { class: "rounded", id: "pre", onmounted: move |_| {
                 let web_cam = camera::WebCam::new();
 
-                let pre = window()
+                let _pre = window()
                     .unwrap()
                     .document()
                     .unwrap()
