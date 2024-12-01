@@ -32,29 +32,29 @@ impl From<&str> for Permission {
 pub fn router() -> Router<()> {
     Router::new()
         .route(
-            "/api/permission/:valheim_player",
-            get(self::get::permission),
+            "/api/permission/valheim_player/restart",
+            get(self::get::restart_valheim),
         )
         .route_layer(permission_required!(
             Backend,
             login_url = "/api/login",
             "restart_valheim"
         ))
+        .route("/api/permission/valheim_player", get(self::get::permission))
 }
 
 mod get {
-    use axum::{extract::Path, http::request};
-
     use crate::auth::user::AuthSession;
 
     use super::*;
 
-    pub async fn permission(
-        auth_session: AuthSession,
-        Path(permission): Path<String>,
-    ) -> impl IntoResponse {
-        println!("Permissions: {:?}", permission);
+    #[derive(Serialize, Deserialize)]
+    struct RestartRequestResponse {
+        restart_result: String,
+        exit_code: Option<i32>,
+    }
 
+    pub async fn permission(auth_session: AuthSession) -> impl IntoResponse {
         match auth_session.user {
             Some(user) => {
                 tracing::info!("User: {:?}", user);
@@ -79,10 +79,31 @@ mod get {
             Some(user) => {
                 tracing::info!("{:?} restarted valheim server", user);
 
-                // request::Request // Here send a request to 192.168.1.21 to restart the valheim server
-                Json(PermissionResponse {
-                    has_permission: true,
-                })
+                match reqwest::get("http://192.168.1.21:9090").await {
+                    Ok(resp) => {
+                        let json: Result<RestartRequestResponse, reqwest::Error> =
+                            resp.json::<RestartRequestResponse>().await;
+
+                        match json {
+                            Ok(suc) => (
+                                StatusCode::OK,
+                                Json(RestartRequestResponse {
+                                    restart_result: suc.restart_result,
+                                    exit_code: suc.exit_code,
+                                }),
+                            )
+                                .into_response(),
+                            Err(ere) => {
+                                (StatusCode::INTERNAL_SERVER_ERROR, ere.to_string()).into_response()
+                            }
+                        }
+                    }
+                    Err(_) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to restart Valheim server",
+                    )
+                        .into_response(),
+                }
             }
             .into_response(),
             None => (
