@@ -33,6 +33,8 @@ enum Route {
     Login { error: String },
     #[route("/register")]
     Register {},
+    #[route("/valheim")]
+    Valheim {},
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
 }

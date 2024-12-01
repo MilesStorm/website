@@ -1,10 +1,33 @@
 use dioxus::prelude::*;
+use dioxus_elements::{div, span};
 
 use crate::{
     components::icon::{default_profile_picture, Logo_c},
-    hooks::{logout, LogInStatus},
+    hooks::{has_permission, logout, LogInStatus},
     LOGIN_STATUS,
 };
+
+#[component]
+fn valheim_button() -> Element {
+    let is_permitted = use_resource(move || async move { has_permission("restart_valheim").await });
+
+    match is_permitted() {
+        Some(permission) => {
+            if permission {
+                rsx! {
+                    li{ Link {to: "/valheim", "Valheim" } }
+                }
+            } else {
+                rsx! {}
+            }
+        }
+        None => rsx! {
+            span {
+                class: "loading loading-spinner loading-xs"
+            }
+        },
+    }
+}
 
 #[component]
 pub fn Navbar() -> Element {
@@ -40,6 +63,7 @@ pub fn Navbar() -> Element {
                         class: "menu menu-compact dropdown-content mt-3 p-2 shadow bg-base-200 rounded-box w-52",
                         li { Link {to: "/", "Home" } }
                         li { Link {to: "/arcaneeye", "ArcaneEye" } }
+                        li{ Link {to: "/valheim", "Valheim" } }
                     }
                 }
                 Link { class: "btn btn-ghost btn-circle avatar",
@@ -51,6 +75,7 @@ pub fn Navbar() -> Element {
                 ul { class: "menu menu-horizontal px-1",
                     li{ Link {to: "/", "Home" } }
                     li{ Link {to: "/arcaneeye", "ArcaneEye" } }
+                    valheim_button {}
                 }
             }
             div{ class: "navbar-end",
@@ -95,15 +120,6 @@ pub fn Navbar() -> Element {
                                     li { p {onclick: logout_action, "Logout" } }
                                 }
                             }
-                            // li {
-                            //     Link { class: "justify-between",
-                            //      to:"/profile",
-                            //     "Profile"
-                            //     span { class: "badge", "New" }
-                            //     }
-                            // }
-                            // li { a { class: "justify-between","Settings" } }
-                            // li { a {"test"} }
                         }
                     }
                 }
