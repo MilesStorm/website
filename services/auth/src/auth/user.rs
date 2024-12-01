@@ -14,11 +14,11 @@ use tokio::task;
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
-    pub id: i64,
-    pub username: String,
-    pub email: Option<String>,
-    pub password: Option<String>,
-    pub access_token: Option<String>,
+    id: i64,
+    username: String,
+    email: Option<String>,
+    password: Option<String>,
+    access_token: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -60,8 +60,6 @@ impl std::fmt::Debug for User {
         f.debug_struct("User")
             .field("id", &self.id)
             .field("username", &self.username)
-            .field("password", &self.password)
-            .field("access_token", &self.access_token)
             .finish()
     }
 }
@@ -73,6 +71,8 @@ impl AuthUser for User {
         self.id
     }
 
+    /// The session auth hash is used to authenticate the session. This is used to verify that the
+    /// session is still valid.
     fn session_auth_hash(&self) -> &[u8] {
         if let Some(access_token) = &self.access_token {
             return access_token.as_bytes();
@@ -171,9 +171,15 @@ pub enum BackendError {
     TaskJoin(#[from] tokio::task::JoinError),
 }
 
+impl From<sqlx::Error> for BackendError {
+    fn from(val: sqlx::Error) -> Self {
+        BackendError::Sqlx(val)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Backend {
-    db: sqlx::PgPool,
+    pub db: sqlx::PgPool,
     client: BasicClient,
     g_client: BasicClient,
 }
@@ -238,7 +244,7 @@ impl Backend {
         .fetch_one(&self.db)
         .await;
 
-        return match user {
+        match user {
             Ok(user) => Ok(user),
             Err(e) => match e {
                 sqlx::Error::Database(db_err) if db_err.message().contains("UserAlreadyExists") => {
@@ -249,7 +255,7 @@ impl Backend {
                 }
                 _ => Err(UserError::DatabaseError(e)),
             },
-        };
+        }
     }
 }
 
@@ -270,8 +276,7 @@ impl AuthnBackend for Backend {
                 )
                 .bind(password_cred.username)
                 .fetch_optional(&self.db)
-                .await
-                .map_err(BackendError::Sqlx)?;
+                .await?;
 
                 // Verifying the password is blocking and potentially slow, so we'll do so via
                 // `spawn_blocking`.
@@ -326,8 +331,7 @@ impl AuthnBackend for Backend {
                 .bind(user_info.login)
                 .bind(token_res.access_token().secret())
                 .fetch_one(&self.db)
-                .await
-                .map_err(Self::Error::Sqlx)?;
+                .await?;
 
                 Ok(Some(user))
             }
@@ -367,8 +371,7 @@ impl AuthnBackend for Backend {
                 )
                 .bind(&user_info.email)
                 .fetch_optional(&self.db)
-                .await
-                .map_err(Self::Error::Sqlx)?;
+                .await?;
                 tracing::info!("existing_user_test: {:?}", existing_user_test);
 
                 if let Some(user) = existing_user_test {
@@ -392,8 +395,7 @@ impl AuthnBackend for Backend {
                 .bind(&user_info.email)
                 .bind(token_res.access_token().secret())
                 .fetch_one(&self.db)
-                .await
-                .map_err(Self::Error::Sqlx)?;
+                .await?;
 
                 Ok(Some(user))
             }
@@ -404,9 +406,9 @@ impl AuthnBackend for Backend {
         Ok(sqlx::query_as("select * from users where id = $1")
             .bind(user_id)
             .fetch_optional(&self.db)
-            .await
-            .map_err(Self::Error::Sqlx)?)
+            .await?)
     }
 }
 
+// type alias for convenience
 pub type AuthSession = axum_login::AuthSession<Backend>;

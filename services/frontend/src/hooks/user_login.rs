@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use dioxus::signals::{GlobalSignal, Signal};
+use gloo::console::trace;
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value as Json;
 
@@ -125,6 +126,32 @@ pub async fn logout() -> Result<(), reqwest::Error> {
     *LOGIN_STATUS.write() = LogInStatus::LoggedOut;
 
     Ok(())
+}
+
+pub async fn has_permission(permission: &str) -> bool {
+    let resp =
+        reqwest::get(format!("{}/api/permission/{}", ROOT_DOMAIN(), permission).as_str()).await;
+
+    match resp {
+        Ok(res) => {
+            let json_value: Json = res.json().await.expect("Could not get result") else {
+                return false;
+            };
+            tracing::warn!("has_permission: {:?}", json_value);
+
+            match json_value["has_permission"].as_bool() {
+                Some(b) => b,
+                None => {
+                    tracing::warn!("has_permission: {:?}", json_value);
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Could not log in, error: {:?}", e);
+            false
+        }
+    }
 }
 
 pub async fn login(

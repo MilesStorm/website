@@ -12,11 +12,7 @@ mod get {
 
     pub async fn protected(auth_session: AuthSession) -> impl IntoResponse {
         match auth_session.user {
-            Some(mut user) => {
-                user.password = None;
-                user.access_token = None;
-                Json(ApiResponse::new("Logged in", Some(user)))
-            }
+            Some(user) => Json(ApiResponse::new("Logged in", Some(user.into()))),
             // None => json!({"username": None, "error": Some("Not logged in")}),
             None => Json(ApiResponse::new("Not logged in", None)),
         }

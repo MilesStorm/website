@@ -20,7 +20,7 @@ pub async fn handler(session: Session) -> impl IntoResponse {
         .await
         .expect("Failed to insert counter");
 
-    format!("Current count: {}", counter.0);
+    tracing::trace!("Current count: {}", counter.0);
 }
 
 pub async fn shutdown_signal(deletion_task_abot_handle: AbortHandle) {

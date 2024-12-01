@@ -1,15 +1,15 @@
 pub mod arcane;
 mod core;
 mod oauth;
+pub mod permissions;
 mod protected_route;
 mod session_store;
 mod user;
 
 use std::env;
 
-use axum::routing::get;
+use axum::{routing::get, Router};
 use axum_login::{
-    login_required,
     tower_sessions::{
         cookie::{time::Duration, SameSite},
         session_store::ExpiredDeletion,
@@ -108,16 +108,16 @@ impl Auth {
         let session_layer = SessionManagerLayer::new(session_store)
             .with_secure(false)
             .with_same_site(SameSite::Lax)
-            .with_expiry(Expiry::OnInactivity(Duration::days(2)));
+            .with_expiry(Expiry::OnInactivity(Duration::days(1)));
 
         // Auth Service
         let backend = Backend::new(self.db, self.client, self.g_client);
         let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
 
-        let app = protected_route::router()
+        let app = Router::new()
             .route("/api", get(handler))
-            // .route("/", get(handler))
-            .route_layer(login_required!(Backend, login_url = "/api/login"))
+            .merge(protected_route::router())
+            .merge(permissions::router())
             .merge(core::router())
             .merge(oauth::router())
             .layer(auth_layer);
@@ -130,6 +130,7 @@ impl Auth {
         .await
         .unwrap();
 
+        tracing::info!("Listening on: {}", listener.local_addr().unwrap());
         axum::serve(listener, app.into_make_service())
             .with_graceful_shutdown(shutdown_signal(deletion_task.abort_handle()))
             .await?;
