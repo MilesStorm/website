@@ -13,7 +13,7 @@ The website's architecture leverages a comprehensive microservices setup, incorp
 - **Longhorn**: Cloud-native distributed block storage for managing persistent volumes.
 - **Cert-manager**: Automates the management and issuance of TLS certificates.
 - **ArgoCD**: Declarative GitOps continuous delivery tool for Kubernetes.
-- **k3d**: Lightweight Kubernetes (k3s) in Docker for local development.
+- **k3s**: Lightweight Kubernetes (k3s) for multi-cluster with agent based architecture.
 - **Metallb**: Load-balancer implementation for Kubernetes clusters.
 - **Grafana**: Analytics and monitoring platform for visualizing metrics.
 - **Prometheus**: Monitoring system and time series database.
