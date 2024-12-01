@@ -5,6 +5,7 @@ use axum::{async_trait, response::IntoResponse, routing::get, Router};
 use axum_login::AuthUser;
 use axum_login::{permission_required, AuthzBackend};
 use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tracing::info;
 
@@ -13,6 +14,11 @@ use super::user::Backend;
 #[derive(Debug, Clone, Eq, PartialEq, Hash, FromRow)]
 pub struct Permission {
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PermissionResponse {
+    has_permission: bool,
 }
 
 impl From<&str> for Permission {
@@ -25,31 +31,67 @@ impl From<&str> for Permission {
 
 pub fn router() -> Router<()> {
     Router::new()
-        .route("/api/test_perm", get(self::get::test_perm))
+        .route(
+            "/api/permission/:valheim_player",
+            get(self::get::permission),
+        )
         .route_layer(permission_required!(
             Backend,
-            login_url = "/api/login/logout",
-            Permission::from("test")
+            login_url = "/api/login",
+            "restart_valheim"
         ))
 }
 
 mod get {
-    use crate::auth::{core::ApiResponse, user::AuthSession};
+    use axum::{extract::Path, http::request};
+
+    use crate::auth::user::AuthSession;
 
     use super::*;
 
-    pub async fn test_perm(auth_session: AuthSession) -> impl IntoResponse {
+    pub async fn permission(
+        auth_session: AuthSession,
+        Path(permission): Path<String>,
+    ) -> impl IntoResponse {
+        println!("Permissions: {:?}", permission);
+
         match auth_session.user {
             Some(user) => {
                 tracing::info!("User: {:?}", user);
 
-                Json(ApiResponse {
-                    message: "You have permission".to_string(),
-                    user: Some(user.into()),
+                Json(PermissionResponse {
+                    has_permission: true,
                 })
             }
             .into_response(),
-            None => StatusCode::UNAUTHORIZED.into_response(),
+            None => (
+                StatusCode::UNAUTHORIZED,
+                Json(PermissionResponse {
+                    has_permission: false,
+                }),
+            )
+                .into_response(),
+        }
+    }
+
+    pub async fn restart_valheim(auth_session: AuthSession) -> impl IntoResponse {
+        match auth_session.user {
+            Some(user) => {
+                tracing::info!("{:?} restarted valheim server", user);
+
+                // request::Request // Here send a request to 192.168.1.21 to restart the valheim server
+                Json(PermissionResponse {
+                    has_permission: true,
+                })
+            }
+            .into_response(),
+            None => (
+                StatusCode::UNAUTHORIZED,
+                Json(PermissionResponse {
+                    has_permission: false,
+                }),
+            )
+                .into_response(),
         }
     }
 }
@@ -77,9 +119,8 @@ impl AuthzBackend for Backend {
         .fetch_all(&self.db)
         .await?;
 
-        println!("Permissions: {:?} for user {:?}", permissions, user);
         info!("Permissions: {:?} for user {:?}", permissions, user);
 
-        Ok(dbg!(permissions.into_iter().collect()))
+        Ok(permissions.into_iter().collect())
     }
 }
