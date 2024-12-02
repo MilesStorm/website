@@ -31,6 +31,7 @@ pub fn Restart() -> Element {
                         button {
                             class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
                             style: "margin: auto",
+                            style: "margin: auto",
                             onclick: move |_| {
                                 has_clicked.set(true);
                             },
@@ -49,9 +50,10 @@ pub fn Restart() -> Element {
         }
         None => {
             rsx! {
-                div {
-                    class: "flex justify-center items-center h-full",
-                    "Loading..."
+                button {
+                    class: "btn",
+                    style: "margin: auto",
+                    span { class: "loading loading-spinner", "loading" }
                 }
             }
         }
@@ -64,23 +66,31 @@ fn restart_button() -> Element {
 
     match &*restart_action.read_unchecked() {
         Some(_) => rsx! {
-            button {
-                class: "btn btn-success btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+            div {
+                class: "tooltip tooltip-open tooltip-success",
+                "data-tip": "success",
                 style: "margin: auto",
-                onclick: move |_| {
-                    restart_action.restart();
-                },
-                "Success!"
+                    button {
+                    class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                    onclick: move |_| {
+                        restart_action.restart();
+                    },
+                    "Restart"
             }
+        }
         },
         Some(Err(e)) => rsx! {
-            button {
-                class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+            div {
+                class: "tooltip tooltip-open tooltip-error",
+                "data-tip": "error",
                 style: "margin: auto",
-                onclick: move |_| {
-                    restart_action.restart();
-                },
-                "Error!"
+                button {
+                    class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                    onclick: move |_| {
+                        restart_action.restart();
+                    },
+                    "Error!"
+                }
             }
         },
         None => {

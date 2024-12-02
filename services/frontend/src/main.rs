@@ -4,6 +4,8 @@ mod components;
 mod hooks;
 mod pages;
 
+use std::time::Duration;
+
 use dioxus::prelude::*;
 use dioxus::signals::GlobalSignal;
 use dioxus_sdk::storage::{use_synced_storage, LocalStorage};
@@ -47,7 +49,6 @@ fn main() {
         dioxus_logger::init(LevelFilter::Error).expect("failed to init logger");
     }
     console_error_panic_hook::set_once();
-
     launch(App);
 }
 
