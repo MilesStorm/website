@@ -5,7 +5,7 @@ use crate::{
     hooks::theme::{get_mode, set_mode, Theme},
 };
 
-const PROFILE_PIC: manganis::ImageAsset = manganis::mg!(image("assets/default_profile.png"));
+const PROFILE_PIC: Asset = manganis::asset!("assets/default_profile.png");
 
 #[component]
 pub fn Profile() -> Element {

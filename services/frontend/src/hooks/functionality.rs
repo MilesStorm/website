@@ -1,6 +1,3 @@
-use serde::{Deserialize, Serialize};
-use serde_json::value::Value as Json;
-
 use super::ROOT_DOMAIN;
 
 pub async fn dice_prediction() -> Result<(), reqwest::Error> {

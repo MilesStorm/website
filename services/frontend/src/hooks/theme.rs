@@ -1,8 +1,8 @@
 use core::slice::Iter;
 use dioxus::signals::Writable;
-use dioxus_sdk::storage::*;
+use dioxus_sdk::{storage::*, theme::use_system_theme};
 use serde::{Deserialize, Serialize};
-use web_sys;
+use std::fmt::Display;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Theme {
@@ -14,6 +14,22 @@ pub enum Theme {
     Dim,
     Corporate,
     Preffered,
+}
+
+impl Display for Theme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let theme = match self {
+            Theme::Dark => "Dark",
+            Theme::Light => "Light",
+            Theme::Dracula => "Dracula",
+            Theme::Synthwave => "Synthwave",
+            Theme::Retro => "Retro",
+            Theme::Dim => "Dim",
+            Theme::Corporate => "Corporate",
+            Theme::Preffered => "System",
+        };
+        write!(f, "{}", theme)
+    }
 }
 
 impl Theme {
@@ -47,7 +63,8 @@ impl Theme {
     }
 
     pub fn to_css_class(&self) -> String {
-        let pref = dioxus_sdk::color_scheme::use_preferred_color_scheme();
+        let pref = use_system_theme();
+
         match self {
             Theme::Dark => "dark".to_string(),
             Theme::Light => "light".to_string(),
@@ -56,12 +73,12 @@ impl Theme {
             Theme::Retro => "retro".to_string(),
             Theme::Dim => "dim".to_string(),
             Theme::Corporate => "corporate".to_string(),
-            Theme::Preffered => if let Ok(prefference) = pref {
+            Theme::Preffered => if let Ok(prefference) = pref() {
                 tracing::info!("Preffered theme found: {:?}", prefference);
 
                 match prefference {
-                    dioxus_sdk::color_scheme::PreferredColorScheme::Light => "light",
-                    dioxus_sdk::color_scheme::PreferredColorScheme::Dark => "dark",
+                    dioxus_sdk::theme::SystemTheme::Light => "light",
+                    dioxus_sdk::theme::SystemTheme::Dark => "Dark",
                 }
             } else {
                 gloo::console::log!("No preffered theme found, using default");
@@ -72,20 +89,20 @@ impl Theme {
     }
 }
 
-impl ToString for Theme {
-    fn to_string(&self) -> String {
-        match self {
-            Theme::Dark => "Dark".to_string(),
-            Theme::Light => "Light".to_string(),
-            Theme::Dracula => "Dracula".to_string(),
-            Theme::Synthwave => "Synthwave".to_string(),
-            Theme::Retro => "Retro".to_string(),
-            Theme::Dim => "Dim".to_string(),
-            Theme::Corporate => "Corporate".to_string(),
-            Theme::Preffered => "System".to_string(),
-        }
-    }
-}
+// impl ToString for Theme {
+//     fn to_string(&self) -> String {
+//         match self {
+//             Theme::Dark => "Dark".to_string(),
+//             Theme::Light => "Light".to_string(),
+//             Theme::Dracula => "Dracula".to_string(),
+//             Theme::Synthwave => "Synthwave".to_string(),
+//             Theme::Retro => "Retro".to_string(),
+//             Theme::Dim => "Dim".to_string(),
+//             Theme::Corporate => "Corporate".to_string(),
+//             Theme::Preffered => "System".to_string(),
+//         }
+//     }
+// }
 
 impl Default for Theme {
     fn default() -> Self {
@@ -119,7 +136,8 @@ pub fn set_mode(theme_mode: Theme) {
         use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered);
 
     storage.set(theme_mode);
-    let pref = dioxus_sdk::color_scheme::use_preferred_color_scheme();
+    let pref = dioxus_sdk::theme::use_system_theme();
+
     match theme_mode {
         Theme::Dark => {
             web_sys::js_sys::eval("document.documentElement.setAttribute('data-theme', 'dark');")
@@ -157,17 +175,17 @@ pub fn set_mode(theme_mode: Theme) {
             .expect("Failed to set theme");
         }
         Theme::Preffered => {
-            if let Ok(prefference) = pref {
+            if let Ok(prefference) = pref() {
                 tracing::info!("Preffered theme found: {:?}", prefference);
 
                 match prefference {
-                    dioxus_sdk::color_scheme::PreferredColorScheme::Light => {
+                    dioxus_sdk::theme::SystemTheme::Light => {
                         web_sys::js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'light');",
                         )
                         .expect("Failed to set theme");
                     }
-                    dioxus_sdk::color_scheme::PreferredColorScheme::Dark => {
+                    dioxus_sdk::theme::SystemTheme::Dark => {
                         web_sys::js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'dark');",
                         )

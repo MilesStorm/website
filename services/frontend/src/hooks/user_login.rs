@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
 use dioxus::signals::{GlobalSignal, Signal};
-use gloo::console::trace;
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value as Json;
 
@@ -153,6 +152,7 @@ pub async fn has_permission(permission: &str) -> bool {
             let json_value: Json = res.json().await.expect("Could not get result") else {
                 return false;
             };
+
             tracing::warn!("has_permission: {:?}", json_value);
 
             match json_value["has_permission"].as_bool() {

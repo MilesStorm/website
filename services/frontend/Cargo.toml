@@ -9,17 +9,16 @@ edition = "2021"
 [dependencies]
 
 # dioxus = { git = "https://github.com/DioxusLabs/dioxus/", features = ["web", "router"] }
-dioxus = { version = "0.5.1", features = ["web", "router"] }
+dioxus = { version = "0.6.0", features = ["web", "router"] }
 
 # Debug
 log = "0.4.22"
-dioxus-logger = "0.4.1"
+dioxus-logger = "0.5.1"
 console_error_panic_hook = "0.1.7"
 gloo= "0.11.0"
-manganis = "0.2.2"
-dioxus-sdk = { version = "0.5.0", features = ["storage", "color_scheme"] }
-# js-sys = "0.3.69"
-web-sys = {version = "0.3.69", features = ['Navigator',
+manganis = { version = "0.6.0", features = ["dioxus"] }
+dioxus-sdk = { version = "0.6.0-alpha.5", features = ["storage", "system_theme"] }
+web-sys = {version = "0.3.76", features = ['Navigator',
   'MediaDevices',
   'GetUserMediaRequest',
   'MediaStream',
@@ -32,12 +31,21 @@ web-sys = {version = "0.3.69", features = ['Navigator',
   'HtmlElement',
   'ContextAttributes2d',
   'Element']}
-serde = { version = "1.0.203", features = ["derive"] }
-serde_json = "1.0.120"
-tracing = { version = "0.1.40", features = ["log"] }
-reqwest = { version = "0.12.5", features = ["json", "cookies"] }
-wasm-bindgen-futures = "0.4.42"
-# wasm-cookies = "0.2.1"
+serde = { version = "1.0.215", features = ["derive"] }
+serde_json = "1.0.133"
+tracing = { version = "0.1.41", features = ["log"] }
+reqwest = { version = "0.12.9", features = ["json", "cookies"] }
+wasm-bindgen-futures = "0.4.49"
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"
 # nokhwa = { version = "0.10.4", features = ["input-jscam"] }
-# async-recursion = "1.1.1"
-# futures = "0.3.30"

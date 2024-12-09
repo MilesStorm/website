@@ -1,4 +1,3 @@
-use dioxus::html::geometry::euclid::num::Floor;
 use gloo::utils::window;
 use web_sys::{
     wasm_bindgen::{Clamped, JsCast, JsValue},
@@ -73,8 +72,8 @@ impl Canvas {
             panic!("Failed to get document");
         };
 
-        let mut context_attributes = web_sys::ContextAttributes2d::new();
-        context_attributes.will_read_frequently(true);
+        let context_attributes = web_sys::ContextAttributes2d::new();
+        context_attributes.set_will_read_frequently(true);
 
         let canvas = document
             .get_element_by_id("pre")

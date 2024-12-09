@@ -4,18 +4,15 @@ mod components;
 mod hooks;
 mod pages;
 
-use std::time::Duration;
-
 use dioxus::prelude::*;
 use dioxus::signals::GlobalSignal;
 use dioxus_sdk::storage::{use_synced_storage, LocalStorage};
 use hooks::LogInStatus;
-use log::LevelFilter;
 
 use crate::{components::cookie::CookieAlert, cv::CvPage, pages::*};
 
 // Urls are relative to your Cargo.toml file
-const _TAILWIND_URL: &str = manganis::mg!(file("assets/main.css"));
+const _TAILWIND_URL: Asset = manganis::asset!("assets/main.css");
 // pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 
@@ -44,9 +41,9 @@ enum Route {
 fn main() {
     // Init debug
     if cfg!(debug_assertions) {
-        dioxus_logger::init(LevelFilter::Info).expect("failed to init logger");
+        dioxus_logger::init(tracing::Level::INFO).expect("failed to init logger");
     } else {
-        dioxus_logger::init(LevelFilter::Error).expect("failed to init logger");
+        dioxus_logger::init(tracing::Level::ERROR).expect("failed to init logger");
     }
     console_error_panic_hook::set_once();
     launch(App);

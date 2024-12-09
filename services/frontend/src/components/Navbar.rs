@@ -1,5 +1,4 @@
 use dioxus::prelude::*;
-use dioxus_elements::{div, span};
 
 use crate::{
     components::icon::{default_profile_picture, Logo_c},
@@ -35,7 +34,7 @@ pub fn Navbar() -> Element {
 
     let logout_action = move |_| {
         spawn(async move {
-            logout().await;
+            let _ = logout().await;
         });
     };
 

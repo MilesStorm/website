@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-const PROFILE_PIC: manganis::ImageAsset = manganis::mg!(image("assets/profile.jpg"));
+const PROFILE_PIC: Asset = manganis::asset!("assets/profile.jpg");
 
 #[component]
 pub fn CvPage() -> Element {

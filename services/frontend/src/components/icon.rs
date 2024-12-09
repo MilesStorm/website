@@ -7,7 +7,7 @@ pub struct IconProps {
     class: Option<String>,
 }
 
-const DEFAULT_PROFILE: manganis::ImageAsset = manganis::mg!(image("assets/default_profile.png"));
+const DEFAULT_PROFILE: Asset = manganis::asset!("assets/default_profile.png");
 
 pub fn Logo(props: IconProps) -> Element {
     rsx! {

@@ -1,14 +1,13 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    camera::{self, *},
+    camera::{self},
     components::Navbar::Navbar,
 };
 use dioxus::prelude::*;
-use wasm_bindgen_futures::*;
 use web_sys::{
-    wasm_bindgen::{closure::Closure, JsCast, JsValue},
-    window, CanvasRenderingContext2d, HtmlElement, MediaStreamConstraints,
+    wasm_bindgen::{closure::Closure, JsCast},
+    window, HtmlElement,
 };
 
 fn request_animation_frame(f: &Closure<dyn FnMut()>) {

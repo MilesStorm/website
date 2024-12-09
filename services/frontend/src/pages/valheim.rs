@@ -2,10 +2,7 @@ use dioxus::prelude::*;
 
 use crate::{
     components::Navbar::Navbar,
-    hooks::{
-        has_permission, restart_valheim,
-        theme::{get_mode, set_mode, Theme},
-    },
+    hooks::{has_permission, restart_valheim},
 };
 
 #[component]
@@ -30,7 +27,6 @@ pub fn Restart() -> Element {
                     rsx! {
                         button {
                             class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
-                            style: "margin: auto",
                             style: "margin: auto",
                             onclick: move |_| {
                                 has_clicked.set(true);
@@ -65,6 +61,20 @@ fn restart_button() -> Element {
     let mut restart_action = use_resource(|| async move { restart_valheim().await });
 
     match &*restart_action.read_unchecked() {
+        Some(Err(_)) => rsx! {
+            div {
+                class: "tooltip tooltip-open tooltip-error",
+                "data-tip": "error",
+                style: "margin: auto",
+                button {
+                    class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                    onclick: move |_| {
+                        restart_action.restart();
+                    },
+                    "Error!"
+                }
+            }
+        },
         Some(_) => rsx! {
             div {
                 class: "tooltip tooltip-open tooltip-success",
@@ -78,20 +88,6 @@ fn restart_button() -> Element {
                     "Restart"
             }
         }
-        },
-        Some(Err(e)) => rsx! {
-            div {
-                class: "tooltip tooltip-open tooltip-error",
-                "data-tip": "error",
-                style: "margin: auto",
-                button {
-                    class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
-                    onclick: move |_| {
-                        restart_action.restart();
-                    },
-                    "Error!"
-                }
-            }
         },
         None => {
             rsx! {
