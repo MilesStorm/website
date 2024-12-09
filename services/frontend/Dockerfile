@@ -4,7 +4,7 @@ FROM lukemathwalker/cargo-chef:latest AS chef
 RUN cargo install dioxus-cli
 RUN rustup target add wasm32-unknown-unknown
 
-FROM chef as planner
+FROM chef AS planner
 WORKDIR /app
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
@@ -17,7 +17,7 @@ RUN cargo chef cook --release --recipe-path recipe.json --target wasm32-unknown-
 
 # Copy over the source code and build the project
 COPY . .
-RUN dx build --release
+RUN dx bundle --platform web --release
 
 # Final stage: Copy the built files to an nginx image to serve the website
 FROM nginx:alpine AS runtime
@@ -25,8 +25,8 @@ COPY nginx.conf /etc/nginx/nginx.conf
 
 # Copy the built static files from the frontend-builder stage
 WORKDIR /usr/share/nginx/html
-COPY --from=builder /app/dist ./
-COPY --from=builder /app/assets ./
+COPY --from=builder /app/target/dx/frontend/release/web/public ./
+COPY --from=builder /app/target/dx/frontend/release/web/public/assets ./
 
 # Expose port and run nginx
 EXPOSE 80
