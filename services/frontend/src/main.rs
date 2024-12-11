@@ -52,7 +52,13 @@ fn main() {
 fn App() -> Element {
     hooks::setup_mode();
     let _ = use_resource(|| async move {
-        *LOGIN_STATUS.write() = LogInStatus::is_logged_in().await;
+        *LOGIN_STATUS.write() = match LogInStatus::is_logged_in().await {
+            Ok(status) => status,
+            Err(_) => {
+                tracing::error!("Could not log in, server response error");
+                LogInStatus::LoggedOut
+            }
+        };
     });
 
     let is_eating_cookies =

@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use anyhow::Result;
 use dioxus::signals::{GlobalSignal, Signal};
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value as Json;
@@ -43,20 +44,21 @@ impl LogInStatus {
         }
     }
 
-    pub async fn is_logged_in() -> LogInStatus {
+    pub async fn is_logged_in() -> Result<LogInStatus> {
         let resp = reqwest::get(format!("{}/api/login/status", ROOT_DOMAIN()).as_str()).await;
+
         match resp {
             Ok(res) => {
-                let json_value: Json = res.json().await.expect("cannot convert to json");
+                let json_value: Json = res.json().await?;
                 if let Some(username) = json_value["user"]["username"].as_str() {
-                    LogInStatus::LoggedIn(username.to_string())
+                    Ok(LogInStatus::LoggedIn(username.to_string()))
                 } else {
-                    LogInStatus::LoggedOut
+                    Ok(LogInStatus::LoggedOut)
                 }
             }
             Err(_) => {
                 tracing::warn!("Could not log in, server resonse warn");
-                LogInStatus::LoggedOut
+                Ok(LogInStatus::LoggedOut)
             }
         }
     }
@@ -133,7 +135,7 @@ pub async fn logout() -> Result<(), reqwest::Error> {
     Ok(())
 }
 
-pub async fn restart_valheim() -> Result<RestartRequestResponse, reqwest::Error> {
+pub async fn restart_valheim() -> Result<RestartRequestResponse> {
     let resp =
         reqwest::get(format!("{}/api/permission/valheim_player/restart", ROOT_DOMAIN()).as_str())
             .await?;

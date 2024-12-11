@@ -1,15 +1,25 @@
 use dioxus::prelude::*;
 
+use crate::LOGIN_STATUS;
+
 use crate::{
     components::Navbar::Navbar,
     hooks::{has_permission, restart_valheim},
+    LogInStatus,
 };
 
 #[component]
 pub fn Valheim() -> Element {
     rsx! {
         Navbar {}
-        Restart {}
+        match LOGIN_STATUS() {
+            LogInStatus::LoggedIn(_) => {
+                Restart()
+            }
+            LogInStatus::LoggedOut => {
+                rsx! {}
+            }
+        }
     }
 }
 
