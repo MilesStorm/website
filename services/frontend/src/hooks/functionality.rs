@@ -1,20 +1,22 @@
-use super::ROOT_DOMAIN;
+// use anyhow::Result;
+// use serde_json::*;
+// use serde_json::value::Value as Json;
 
-pub async fn dice_prediction() -> Result<(), reqwest::Error> {
-    let response = reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
+// use super::ROOT_DOMAIN;
 
-    match response {
-        Ok(_) => Ok(()),
-        // Ok(res) => {
-        //     let json_value: Json = res.json().await?;
+// pub async fn dice_prediction() -> Result<()> {
+//     let response = reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
 
-        //     Ok((
-        //         "tes".into(),
-        //         json_value["user"]["username"]
-        //             .as_str()
-        //             .map(|s| s.to_string()),
-        //     ))
-        // }
-        Err(e) => Err(e),
-    }
-}
+//     match response {
+//         Ok(_) => Ok(()),
+//         Ok(res) => {
+//             let json_value = res.json().await?;
+
+//             Ok((
+//                 "tes".into(),
+//                 json_value["user"]["username"].as_str().map(to_string),
+//             ))
+//         }
+//         Err(e) => Err(e.into()),
+//     }
+// }

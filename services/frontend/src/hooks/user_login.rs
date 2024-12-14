@@ -151,7 +151,7 @@ pub async fn has_permission(permission: &str) -> bool {
 
     match resp {
         Ok(res) => {
-            let json_value: Json = res.json().await.expect("Could not get result") else {
+            let Ok(json_value) = res.json::<Json>().await else {
                 return false;
             };
 
@@ -188,7 +188,7 @@ pub async fn login(
     let response = reqwest::get(format!("{}/api/login", ROOT_DOMAIN())).await;
     match response {
         Ok(res) => {
-            let json_value: Json = res.json().await?;
+            let json_value = res.json::<Json>().await?;
             Ok((
                 "tes".into(),
                 json_value["user"]["username"]

@@ -32,8 +32,8 @@ impl WebCam {
     }
 
     pub async fn setup(&self) -> Result<(), JsValue> {
-        let mut constraints = MediaStreamConstraints::new();
-        constraints.video(&JsValue::from(true));
+        let constraints = MediaStreamConstraints::new();
+        constraints.set_video(&JsValue::from(true));
 
         let promise = window()
             .navigator()
