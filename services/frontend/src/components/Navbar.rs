@@ -7,24 +7,30 @@ use crate::{
 };
 
 #[component]
-fn valheim_button() -> Element {
-    let is_permitted = use_resource(move || async move { has_permission("valheim_player").await });
+fn valheim_button(user: LogInStatus) -> Element {
+    match user {
+        LogInStatus::LoggedIn(_) => {
+            let is_permitted =
+                use_resource(move || async move { has_permission("valheim_player").await });
 
-    match is_permitted() {
-        Some(permission) => {
-            if permission {
-                rsx! {
-                    li{ Link {to: "/valheim", "Valheim" } }
+            match is_permitted() {
+                Some(permission) => {
+                    if permission {
+                        rsx! {
+                            li{ Link {to: "/valheim", "Valheim" } }
+                        }
+                    } else {
+                        rsx! {}
+                    }
                 }
-            } else {
-                rsx! {}
+                None => rsx! {
+                    span {
+                        class: "loading loading-spinner loading-xs"
+                    }
+                },
             }
         }
-        None => rsx! {
-            span {
-                class: "loading loading-spinner loading-xs"
-            }
-        },
+        LogInStatus::LoggedOut => rsx! {},
     }
 }
 
@@ -74,7 +80,7 @@ pub fn Navbar() -> Element {
                 ul { class: "menu menu-horizontal px-1",
                     li{ Link {to: "/", "Home" } }
                     li{ Link {to: "/arcaneeye", "ArcaneEye" } }
-                    valheim_button {}
+                    valheim_button { user: user.clone()}
                 }
             }
             div{ class: "navbar-end",
