@@ -42,6 +42,7 @@ pub fn router() -> Router<()> {
         ))
         .route("/api/permission/valheim_player", get(self::get::permission))
         .route("/api/permission/llama", get(self::get::permission))
+        .route("/api/permission/photoview", get(self::get::permission))
 }
 
 mod get {
