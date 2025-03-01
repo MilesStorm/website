@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
+use async_trait::async_trait;
 use axum::Json;
-use axum::{async_trait, response::IntoResponse, routing::get, Router};
+use axum::{response::IntoResponse, routing::get, Router};
 use axum_login::AuthUser;
 use axum_login::{permission_required, AuthzBackend};
 use reqwest::StatusCode;

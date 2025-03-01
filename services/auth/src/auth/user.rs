@@ -1,4 +1,6 @@
-use axum::{async_trait, Json};
+use async_trait;
+
+use axum::Json;
 use axum_login::{AuthUser, AuthnBackend, UserId};
 use oauth2::{
     basic::{BasicClient, BasicRequestTokenError},
@@ -259,7 +261,7 @@ impl Backend {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl AuthnBackend for Backend {
     type User = User;
     type Credentials = Credentials;
