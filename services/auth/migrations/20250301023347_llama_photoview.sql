@@ -8,5 +8,5 @@ INSERT INTO permissions (name, description) VALUES
   ('photoview', 'Can do everything photoview related');
 
 INSERT INTO role_permissions (role_id, permission_id) VALUES 
-  ((SELECT id FROM roles WHERE name = 'llama'), SELECT id FROM permissions WHERE name = 'llama')),
-  ((SELECT id FROM roles WHERE name = 'photoview'), SELECT id FROM permissions WHERE name = 'photoview'));
+  ((SELECT id FROM roles WHERE name = 'llama'), (SELECT id FROM permissions WHERE name = 'llama')),
+  ((SELECT id FROM roles WHERE name = 'photoview'), (SELECT id FROM permissions WHERE name = 'photoview'));
