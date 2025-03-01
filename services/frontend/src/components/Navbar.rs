@@ -1,7 +1,9 @@
 use dioxus::prelude::*;
+use dioxus_elements::area::href;
 
 use crate::{
     components::icon::{default_profile_picture, Logo_c},
+    has_valheim_permission,
     hooks::{has_permission, logout, LogInStatus},
     LOGIN_STATUS,
 };
@@ -10,14 +12,41 @@ use crate::{
 fn valheim_button(user: LogInStatus) -> Element {
     match user {
         LogInStatus::LoggedIn(_) => {
-            let is_permitted =
-                use_resource(move || async move { has_permission("valheim_player").await });
+            let is_permitted = use_resource(move || async move { has_valheim_permission().await });
 
             match is_permitted() {
                 Some(permission) => {
                     if permission {
                         rsx! {
                             li{ Link {to: "/valheim", "Valheim" } }
+                        }
+                    } else {
+                        rsx! {}
+                    }
+                }
+                None => rsx! {
+                    span {
+                        class: "loading loading-spinner loading-xs"
+                    }
+                },
+            }
+        }
+        LogInStatus::LoggedOut => rsx! {},
+    }
+}
+
+#[component]
+fn photoview_button(user: LogInStatus) -> Element {
+    match user {
+        LogInStatus::LoggedIn(_) => {
+            let is_permitted =
+                use_resource(move || async move { has_photoview_permission().await });
+
+            match is_permitted() {
+                Some(permission) => {
+                    if permission {
+                        rsx! {
+                            li{ a { href: "https://photoview.yousofmersal.com", "Photoview Gallery" } }
                         }
                     } else {
                         rsx! {}
@@ -68,7 +97,8 @@ pub fn Navbar() -> Element {
                         class: "menu menu-compact dropdown-content mt-3 p-2 shadow bg-base-200 rounded-box w-52",
                         li { Link {to: "/", "Home" } }
                         li { Link {to: "/arcaneeye", "ArcaneEye" } }
-                        li{ Link {to: "/valheim", "Valheim" } }
+                        valheim_button { user: user.clone()}
+                        photoview_button { user: user.clone()}
                     }
                 }
                 Link { class: "btn btn-ghost btn-circle avatar",
@@ -81,6 +111,7 @@ pub fn Navbar() -> Element {
                     li{ Link {to: "/", "Home" } }
                     li{ Link {to: "/arcaneeye", "ArcaneEye" } }
                     valheim_button { user: user.clone()}
+                    photoview_button { user: user.clone()}
                 }
             }
             div{ class: "navbar-end",
@@ -131,4 +162,11 @@ pub fn Navbar() -> Element {
             }
         }
     }
+}
+
+pub async fn has_photoview_permission() -> bool {
+    let valheim_permission = has_permission("photoview").await;
+    let llama_permission = has_permission("llama").await;
+
+    return valheim_permission || llama_permission;
 }

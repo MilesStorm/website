@@ -23,10 +23,31 @@ pub fn Valheim() -> Element {
     }
 }
 
+pub fn Photoview() -> Element {
+    rsx! {
+        Navbar {}
+        match LOGIN_STATUS() {
+            LogInStatus::LoggedIn(_) => {
+                Restart()
+            }
+            LogInStatus::LoggedOut => {
+                rsx! {}
+            }
+        }
+    }
+}
+
+pub async fn has_valheim_permission() -> bool {
+    let valheim_permission = has_permission("valheim_player").await;
+    let llama_permission = has_permission("llama").await;
+
+    return valheim_permission || llama_permission;
+}
+
 #[component]
 pub fn Restart() -> Element {
     let mut has_clicked = use_signal(|| false);
-    let is_permitted = use_resource(|| async move { has_permission("valheim_player").await });
+    let is_permitted = use_resource(|| async move { has_valheim_permission().await });
 
     match (is_permitted.value())() {
         Some(is_permitted) => {
