@@ -1,6 +1,6 @@
 # README
 
-Welcome to [Yousof Mersal's Personal Website](https://milesstorm.com)
+Welcome to [Miles Storm's Personal Website](https://milesstorm.com)
 
 This repository contains the code and configuration for my personal website, which serves as a showcase of various technologies and my expertise in microservices architecture, DevOps, and web development. The website is designed with a robust and scalable architecture, utilizing a diverse set of tools and frameworks to ensure high availability and performance.
 
@@ -60,7 +60,7 @@ Contributions are welcome! Please fork the repository and submit a pull request 
 
 ## Contact
 
-For any questions or inquiries, please contact me at yousof777@gmail.com.
+For any questions or inquiries, please contact me at milesstorm@gmail.com.
 
 ---
 
@@ -68,4 +68,4 @@ Thank you for visiting my personal website repository. Enjoy exploring the techn
 
 ---
 
-[![Website](https://img.shields.io/website-up-down-green-red/https/yousofmersal.com.svg)](https://yousofmersal.com)
+[![Website](https://img.shields.io/website-up-down-green-red/https/milesstorm.com.svg)](https://milesstorm.com)
