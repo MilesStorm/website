@@ -75,7 +75,7 @@ spec:
               app: frontend
       containers:
       - name: frontend
-        image: ghcr.io/yousofmersal/frontend:latest 
+        image: ghcr.io/milesstorm/frontend:latest 
         ports:
         - containerPort: 80  # Exposing internal port 80
       imagePullSecrets:
