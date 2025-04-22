@@ -29,7 +29,7 @@ spec:
               app: auth
       containers:
       - name: auth
-        image: ghcr.io/yousofmersal/auth:latest 
+        image: ghcr.io/milesstorm/auth:latest 
         ports:
         - containerPort: 7070
         env:
