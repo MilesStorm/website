@@ -192,7 +192,7 @@ impl Backend {
             RedirectUrl::new(String::from(if cfg!(debug_assertions) {
                 "http://localhost:8080/api/login/google/callback"
             } else {
-                "https://yousofmersal.com/api/login/google/callback"
+                "https://MILESSTORM.COM/API/LOGin/google/callback"
             }))
             .expect("invalid redirect uri"),
         );
