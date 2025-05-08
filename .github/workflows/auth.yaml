@@ -34,7 +34,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/yousofmersal/auth
+          images: ${{ env.REGISTRY }}/milesstorm/auth
           tags: | 
             type=raw,value=latest
             type=sha
