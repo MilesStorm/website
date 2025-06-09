@@ -1,4 +1,4 @@
-# yousofmersal.com auth server
+# milesstorm.com auth server
 
 ### envrionment variables
 
