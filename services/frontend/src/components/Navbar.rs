@@ -46,7 +46,7 @@ fn photoview_button(user: LogInStatus) -> Element {
                 Some(permission) => {
                     if permission {
                         rsx! {
-                            li{ a { href: "https://photoview.yousofmersal.com", "Photoview Gallery" } }
+                            li{ a { href: "https://photoview.milesstorm.com", "Photoview Gallery" } }
                         }
                     } else {
                         rsx! {}
