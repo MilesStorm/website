@@ -5,7 +5,6 @@ metadata:
   namespace: istio-system
 spec:
   hosts:
-  - yousofmersal.com
   - milesstorm.com
   gateways:
   - public-gateway  # Name of your gateway
