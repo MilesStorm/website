@@ -1,0 +1,32 @@
+[package]
+name = "dice_detector"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn = { version = "~0.20.1", features = [
+  "train",
+  "dataset",
+  "cuda",
+  "autotune",
+  "autodiff",
+  "store",
+  "std",
+  "tui",
+  "metrics",
+] }
+burn-train = "0.20.1"
+burn-store = { version = "~0.20.1", features = [
+  "burnpack",
+], default-features = false }
+image = "^0.25.9"
+anyhow = "^1.0"
+rand = "0.10.0"
+log = "0.4.29"
+indicatif = "0.18.3"
+
+[build-dependencies]
+burn-import = { version = "~0.20.1", features = [
+  "onnx",
+  "onnx-mmap",
+], default-features = false }
