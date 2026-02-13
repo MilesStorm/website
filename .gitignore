@@ -14,3 +14,8 @@ Cargo.lock
 
 # Ignore node modues for css
 node_modules/
+art/
+art_bk/
+data/
+data_pre/
+target
