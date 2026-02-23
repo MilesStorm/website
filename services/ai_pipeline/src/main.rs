@@ -1,12 +1,9 @@
 mod datasets;
 mod helper;
-mod inferance;
 pub mod model;
 
 use std::{env, path::Path};
 
-#[cfg(target_os = "macos")]
-use burn::backend::Metal;
 use burn::{
     backend::{
         Autodiff, Cuda, autodiff::checkpoint::strategy::BalancedCheckpointing, cuda::CudaDevice,
@@ -29,11 +26,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("creating device..");
 
-    #[cfg(target_os = "linux")]
     let device = CudaDevice::new(0);
-
-    #[cfg(target_os = "macos")]
-    let device = Metal::default();
 
     println!("Done.");
 
@@ -62,6 +55,7 @@ fn main() -> anyhow::Result<()> {
         let data_path = std::path::Path::new("./data/dice_face");
         train::<MyBackend>(&exp_dir_str, config, device, data_path, DatasetType::Folder);
     } else {
+        // evaluation pipeline should go here
     }
 
     Ok(())

@@ -227,8 +227,6 @@ pub fn eval<B: AutodiffBackend>(
     }
 }
 
-pub fn inferance<B: Backend>(device: B::Device) {}
-
 pub fn print_confusion_matrix(matrix: &[Vec<usize>], class_names: &[String], experiment_dir: &str) {
     let num_classes = matrix.len();
 
