@@ -14,7 +14,7 @@ use crate::datasets::DiceBatch;
 
 pub mod my_model {
     #![allow(warnings)]
-    include!(concat!(env!("OUT_DIR"), "/model/yolo26n.rs"));
+    include!(concat!(env!("OUT_DIR"), "/model/yolo26x.rs"));
 }
 
 pub struct DiceHeadTrainer<B: AutodiffBackend> {

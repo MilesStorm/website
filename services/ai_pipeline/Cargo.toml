@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { version = "~0.20.1", features = [
+burn = { version = "^0.21.0-pre", features = [
   "train",
   "dataset",
   "cuda",
@@ -15,18 +15,17 @@ burn = { version = "~0.20.1", features = [
   "tui",
   "metrics",
 ] }
-burn-train = "0.20.1"
-burn-store = { version = "~0.20.1", features = [
+burn-train = "^0.21.0-pre"
+burn-store = { version = "^0.21.0-pre", features = [
   "burnpack",
 ], default-features = false }
-image = "^0.25.9"
-anyhow = "^1.0"
+image = "^0.25.10"
+anyhow = "1.0.102"
 rand = "0.10.0"
 log = "0.4.29"
-indicatif = "0.18.3"
+indicatif = "0.18.4"
 
 [build-dependencies]
-burn-import = { version = "~0.20.1", features = [
-  "onnx",
-  "onnx-mmap",
-], default-features = false }
+burn-onnx = { git = "https://github.com/tracel-ai/burn-onnx", rev = "06e498a0eb1341d3d318bc636cf0ebebf19f2f6b", features = [
+  "mmap",
+] }
