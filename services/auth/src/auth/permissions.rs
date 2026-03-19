@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 
-use async_trait::async_trait;
 use axum::Json;
-use axum::{response::IntoResponse, routing::get, Router};
+use axum::{Router, response::IntoResponse, routing::get};
 use axum_login::AuthUser;
-use axum_login::{permission_required, AuthzBackend};
+use axum_login::{AuthzBackend, permission_required};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -120,7 +119,6 @@ mod get {
     }
 }
 
-#[async_trait]
 impl AuthzBackend for Backend {
     type Permission = Permission;
 
@@ -143,7 +141,7 @@ impl AuthzBackend for Backend {
         .fetch_all(&self.db)
         .await?;
 
-        info!("Permissions: {:?} for user {:?}", permissions, user);
+        info!("Permissions: {:?} for user {:?}", &permissions, &user);
 
         Ok(permissions.into_iter().collect())
     }

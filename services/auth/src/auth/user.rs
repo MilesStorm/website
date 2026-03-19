@@ -1,15 +1,12 @@
-use async_trait;
-
 use axum::Json;
 use axum_login::{AuthUser, AuthnBackend, UserId};
 use oauth2::{
+    AuthorizationCode, CsrfToken, EndpointNotSet, EndpointSet, RedirectUrl, Scope, TokenResponse,
     basic::{BasicClient, BasicRequestTokenError},
     http::header::{AUTHORIZATION, USER_AGENT},
-    reqwest::{async_http_client, AsyncHttpClientError},
-    AuthorizationCode, CsrfToken, RedirectUrl, Scope, TokenResponse,
+    reqwest::{self, Client},
 };
 use password_auth::verify_password;
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 use tokio::task;
@@ -167,14 +164,14 @@ pub enum BackendError {
     Reqwest(reqwest::Error),
 
     #[error(transparent)]
-    OAuth2(BasicRequestTokenError<AsyncHttpClientError>),
+    OAuth2(BasicRequestTokenError<<Client as oauth2::AsyncHttpClient<'static>>::Error>),
 
     #[error(transparent)]
     TaskJoin(#[from] tokio::task::JoinError),
 }
 
 impl From<sqlx::Error> for BackendError {
-    fn from(val: sqlx::Error) -> Self {
+    fn from(val: sqlx::Error) -> BackendError {
         BackendError::Sqlx(val)
     }
 }
@@ -182,12 +179,20 @@ impl From<sqlx::Error> for BackendError {
 #[derive(Debug, Clone)]
 pub struct Backend {
     pub db: sqlx::PgPool,
-    client: BasicClient,
-    g_client: BasicClient,
+    client: BasicClientSet,
+    g_client: BasicClientSet,
+    http_client: Client,
 }
 
+pub type BasicClientSet =
+    BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
+
 impl Backend {
-    pub fn new(db: sqlx::PgPool, client: BasicClient, g_client: BasicClient) -> Self {
+    pub fn new(db: sqlx::PgPool, client: BasicClientSet, g_client: BasicClientSet) -> Self {
+        let http_client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("Could not build http_Client");
         let g_client = g_client.set_redirect_uri(
             RedirectUrl::new(String::from(if cfg!(debug_assertions) {
                 "http://localhost:8080/api/login/google/callback"
@@ -196,14 +201,16 @@ impl Backend {
             }))
             .expect("invalid redirect uri"),
         );
+
         Self {
             db,
             client,
             g_client,
+            http_client,
         }
     }
 
-    pub fn authorize_url(&self) -> (Url, CsrfToken) {
+    pub fn authorize_url(&self) -> (reqwest::Url, CsrfToken) {
         self.client
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new(String::from("read:user")))
@@ -211,7 +218,7 @@ impl Backend {
             .url()
     }
 
-    pub fn authorize_g_url(&self) -> (Url, CsrfToken) {
+    pub fn authorize_g_url(&self) -> (reqwest::Url, CsrfToken) {
         self.g_client
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new(String::from("profile")))
@@ -261,7 +268,6 @@ impl Backend {
     }
 }
 
-#[async_trait::async_trait]
 impl AuthnBackend for Backend {
     type User = User;
     type Credentials = Credentials;
@@ -303,7 +309,7 @@ impl AuthnBackend for Backend {
                 let token_res = self
                     .client
                     .exchange_code(AuthorizationCode::new(oauth_cred.code))
-                    .request_async(async_http_client)
+                    .request_async(&self.http_client)
                     .await
                     .map_err(BackendError::OAuth2)?;
 
@@ -346,7 +352,7 @@ impl AuthnBackend for Backend {
                 let token_res = self
                     .g_client
                     .exchange_code(AuthorizationCode::new(oauth_cred.code))
-                    .request_async(async_http_client)
+                    .request_async(&self.http_client)
                     .await
                     .map_err(BackendError::OAuth2)?;
 

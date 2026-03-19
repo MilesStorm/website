@@ -1,8 +1,8 @@
 use crate::auth::user::{Backend, Credentials, PasswordCreds};
 use axum::{
+    Form, Router,
     response::IntoResponse,
     routing::{get, post},
-    Form, Router,
 };
 use axum_login::{login_required, tower_sessions::Session};
 use reqwest::StatusCode;
@@ -148,6 +148,7 @@ mod post {
             }
         }
 
+        #[axum::debug_handler]
         pub async fn github(
             auth_session: AuthSession,
             session: Session,
@@ -172,6 +173,7 @@ mod post {
             .into_response()
         }
 
+        #[axum::debug_handler]
         pub async fn google(
             auth_session: AuthSession,
             session: Session,
@@ -191,7 +193,7 @@ mod post {
                 .expect("Serialization should not fail.");
 
             tracing::info!("auth_url: {:?}", auth_url);
-            // Redirect::to(auth_url.as_str()).into_response();
+
             Json(NextUrl {
                 next: Some(auth_url.to_string()),
             })

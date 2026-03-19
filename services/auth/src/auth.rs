@@ -8,18 +8,20 @@ mod user;
 
 use std::env;
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use axum_login::{
-    tower_sessions::{
-        cookie::{time::Duration, SameSite},
-        session_store::ExpiredDeletion,
-        Expiry, SessionManagerLayer,
-    },
     AuthManagerLayerBuilder,
+    tower_sessions::{
+        Expiry, SessionManagerLayer,
+        cookie::{SameSite, time::Duration},
+        session_store::ExpiredDeletion,
+    },
 };
-use oauth2::{basic::BasicClient, AuthUrl, ClientId, ClientSecret, TokenUrl};
+use oauth2::{AuthUrl, ClientId, ClientSecret, TokenUrl, basic::BasicClient};
 use sqlx::PgPool;
 use tower_sessions_sqlx_store::PostgresStore;
+
+use crate::auth::user::BasicClientSet;
 
 use self::{
     session_store::{handler, shutdown_signal},
@@ -28,8 +30,8 @@ use self::{
 
 pub struct Auth {
     db: PgPool,
-    client: BasicClient,
-    g_client: BasicClient,
+    client: BasicClientSet,
+    g_client: BasicClientSet,
 }
 
 impl Auth {
@@ -72,15 +74,16 @@ impl Auth {
         let g_token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?;
         tracing::trace!("token_url: {:?}", token_url);
 
-        let client = BasicClient::new(client_id, Some(client_secret), auth_url, Some(token_url));
+        let client = BasicClient::new(client_id)
+            .set_client_secret(client_secret)
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url);
         tracing::trace!("client: {:?}", client);
 
-        let g_client = BasicClient::new(
-            g_client_id,
-            Some(g_client_secret),
-            g_auth_url,
-            Some(g_token_url),
-        );
+        let g_client = BasicClient::new(g_client_id)
+            .set_client_secret(g_client_secret)
+            .set_auth_uri(g_auth_url)
+            .set_token_uri(g_token_url);
         tracing::trace!("client: {:?}", client);
 
         let db_connection = env::var("DATABASE_URL").expect("DATABASE_URL should be provided");
@@ -108,7 +111,7 @@ impl Auth {
         let session_layer = SessionManagerLayer::new(session_store)
             .with_secure(false)
             .with_same_site(SameSite::Lax)
-            .with_expiry(Expiry::OnInactivity(Duration::days(1)));
+            .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
         // Auth Service
         let backend = Backend::new(self.db, self.client, self.g_client);

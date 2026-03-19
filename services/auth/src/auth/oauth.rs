@@ -3,11 +3,11 @@ use crate::auth::{
     user::{OAuthCreds, User},
 };
 use axum::{
+    Router,
     extract::Query,
     http::StatusCode,
     response::{IntoResponse, Redirect},
     routing::get,
-    Router,
 };
 use axum_login::tower_sessions::Session;
 use oauth2::CsrfToken;
@@ -40,6 +40,7 @@ mod get {
 
     use super::*;
 
+    #[axum::debug_handler]
     pub async fn github_callback(
         mut auth_session: AuthSession,
         session: Session,

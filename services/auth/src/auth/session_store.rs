@@ -8,6 +8,7 @@ const COUNTER_KEY: &str = "counter";
 #[derive(Debug, Deserialize, Default)]
 struct Counter(usize);
 
+#[axum::debug_handler]
 pub async fn handler(session: Session) -> impl IntoResponse {
     let counter: Counter = session
         .get(COUNTER_KEY)
