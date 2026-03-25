@@ -1,6 +1,6 @@
 use core::slice::Iter;
-use dioxus::signals::Writable;
-use dioxus_sdk::{storage::*, theme::use_system_theme};
+use dioxus::signals::WritableExt;
+use dioxus_sdk::{storage::*, window::theme::use_system_theme};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -77,8 +77,8 @@ impl Theme {
                 tracing::info!("Preffered theme found: {:?}", prefference);
 
                 match prefference {
-                    dioxus_sdk::theme::SystemTheme::Light => "light",
-                    dioxus_sdk::theme::SystemTheme::Dark => "Dark",
+                    dioxus_sdk::window::theme::Theme::Light => "light",
+                    dioxus_sdk::window::theme::Theme::Dark => "Dark",
                 }
             } else {
                 gloo::console::log!("No preffered theme found, using default");
@@ -135,8 +135,8 @@ pub fn set_mode(theme_mode: Theme) {
     let mut storage =
         use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered);
 
-    storage.set(theme_mode);
-    let pref = dioxus_sdk::theme::use_system_theme();
+    *storage.write() = theme_mode;
+    let pref = dioxus_sdk::window::theme::use_system_theme();
 
     match theme_mode {
         Theme::Dark => {
@@ -179,13 +179,13 @@ pub fn set_mode(theme_mode: Theme) {
                 tracing::info!("Preffered theme found: {:?}", prefference);
 
                 match prefference {
-                    dioxus_sdk::theme::SystemTheme::Light => {
+                    dioxus_sdk::window::theme::Theme::Light => {
                         web_sys::js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'light');",
                         )
                         .expect("Failed to set theme");
                     }
-                    dioxus_sdk::theme::SystemTheme::Dark => {
+                    dioxus_sdk::window::theme::Theme::Dark => {
                         web_sys::js_sys::eval(
                             "document.documentElement.setAttribute('data-theme', 'dark');",
                         )
