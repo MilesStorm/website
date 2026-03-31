@@ -1,6 +1,20 @@
-use dioxus::prelude::*;
+use dioxus::{html::FormEvent, prelude::*};
+use serde::{Deserialize, Serialize};
 
 use crate::hooks::{github_oauth, google_oauth, login, register, LogInStatus};
+
+#[derive(Serialize, Deserialize)]
+struct SimpleLoginForm {
+    username: String,
+    password: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EmailLoginForm {
+    username: String,
+    email: String,
+    password: String,
+}
 
 #[component]
 pub fn Login(error: String) -> Element {
@@ -36,12 +50,10 @@ pub fn Login(error: String) -> Element {
         });
     };
 
-    let component_login = move |evt: Event<FormData>| {
+    let component_login = move |evt: FormEvent| {
         spawn(async move {
-            let form_data = evt.values();
-            let username = form_data.get("username").unwrap().as_value();
-            let password = form_data.get("password").unwrap().as_value();
-            let reg_attempt = login(&username, &password).await;
+            let form_data = evt.parsed_values::<SimpleLoginForm>().unwrap();
+            let reg_attempt = login(&form_data.username, &form_data.password).await;
 
             match reg_attempt {
                 Ok(att) => {
@@ -164,13 +176,11 @@ pub fn Register() -> Element {
         });
     };
 
-    let component_register = move |evt: Event<FormData>| {
+    let component_register = move |evt: FormEvent| {
         spawn(async move {
-            let form_data = evt.values();
-            let username = form_data.get("username").unwrap().as_value();
-            let email = form_data.get("email").unwrap().as_value();
-            let password = form_data.get("password").unwrap().as_value();
-            let reg_attempt = register(&username, &email, &password).await;
+            let form_data = evt.parsed_values::<EmailLoginForm>().unwrap();
+            let reg_attempt =
+                register(&form_data.username, &form_data.email, &form_data.password).await;
 
             match reg_attempt {
                 Ok(att) => {

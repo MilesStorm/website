@@ -1,5 +1,4 @@
 use dioxus::prelude::*;
-use dioxus_elements::area::href;
 
 use crate::{
     components::icon::{default_profile_picture, Logo_c},

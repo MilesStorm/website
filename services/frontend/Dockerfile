@@ -17,7 +17,7 @@ RUN cargo chef cook --release --recipe-path recipe.json --target wasm32-unknown-
 
 # Copy over the source code and build the project
 COPY . .
-RUN dx bundle --platform web --release
+RUN dx bundle --platform web --debug-symbols=false --release
 
 # Final stage: Copy the built files to an nginx image to serve the website
 FROM nginx:alpine AS runtime

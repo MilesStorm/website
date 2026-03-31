@@ -239,7 +239,7 @@ pub async fn post_reqwest(
     params: &[(&str, &str)],
 ) -> Result<reqwest::Response, reqwest::Error> {
     tracing::info!("ROOT_DOMAIN: {:?}", ROOT_DOMAIN());
-    let res = REQWEST_CLIENT().post(url).form(params).send().await?;
+    let res = REQWEST_CLIENT().post(url).form(&params).send().await?;
 
     Ok(res)
 }
