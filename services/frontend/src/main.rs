@@ -12,7 +12,7 @@ use hooks::LogInStatus;
 use crate::{components::cookie::CookieAlert, cv::CvPage, pages::*};
 
 // Urls are relative to your Cargo.toml file
-const _TAILWIND_URL: Asset = manganis::asset!("assets/main.css");
+static MAIN_CSS: Asset = asset!("assets/tailwind.css");
 // pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 
@@ -67,6 +67,7 @@ fn App() -> Element {
         use_synced_storage::<LocalStorage, bool>("showing_cookies".to_owned(), || true);
 
     rsx! {
+        document::Stylesheet { href: MAIN_CSS }
         div {
             class: "flex flex-col justify-between h-screen",
             Router::<Route> {}
