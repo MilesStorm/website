@@ -8,10 +8,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => {
             tracing::debug!("Loaded .env file");
         }
-        Err(_) => {
+        Err(e) => {
             tracing::debug!("Loaded .env file");
             tracing::debug!("assuming environment variables are set");
-            panic!("could not load env");
+            panic!("could not load env: {e}");
         }
     }
 
