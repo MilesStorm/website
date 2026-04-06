@@ -23,5 +23,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .try_init()?;
 
     println!("started server");
+
     auth::Auth::new().await?.server().await
 }

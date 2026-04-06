@@ -76,7 +76,7 @@ impl Auth {
             .set_token_uri(g_token_url);
         tracing::trace!("client: {:?}", client);
 
-        let db_connection = env::var("DATABASE_URL").expect("DATABASE_URL should be provided");
+        let db_connection = env::var("DATABASE_URL").expect("DATABASE_URL should be provided.");
         tracing::trace!("db_connection: {:?}", db_connection);
         let db = PgPool::connect(&db_connection).await?;
         tracing::trace!("db: {:?}", db);
