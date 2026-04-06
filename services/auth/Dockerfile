@@ -40,4 +40,4 @@ ENV G_CLIENT_SECRET=
 
 # Expose port and run nginx
 EXPOSE 7070
-CMD ["auth"]
+CMD ["RUST_LOG=info","auth"]
