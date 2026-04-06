@@ -6,7 +6,7 @@ mod protected_route;
 mod session_store;
 mod user;
 
-use std::env;
+use std::{env, panic};
 
 use axum::{Router, routing::get};
 use axum_login::{
@@ -43,6 +43,7 @@ impl Auth {
             Err(_) => {
                 tracing::debug!("Loaded .env file");
                 tracing::debug!("assuming environment variables are set");
+                panic!("could not load env");
             }
         }
 
@@ -56,12 +57,12 @@ impl Auth {
 
         let g_client_id = env::var("G_CLIENT_ID")
             .map(ClientId::new)
-            .expect("CLIENT_ID should be provided");
+            .expect("G_CLIENT_ID should be provided");
         tracing::trace!("google client_id: {:?}", client_id);
 
         let g_client_secret = env::var("G_CLIENT_SECRET")
             .map(ClientSecret::new)
-            .expect("CLIENT_SECRET should be provided");
+            .expect("G_CLIENT_SECRET should be provided");
         tracing::trace!("google client_id: {:?}", client_id);
 
         let auth_url = AuthUrl::new("https://github.com/login/oauth/authorize".to_string())?;
@@ -125,13 +126,18 @@ impl Auth {
             .merge(oauth::router())
             .layer(auth_layer);
 
-        let listener = tokio::net::TcpListener::bind(format!(
+        let listener = match tokio::net::TcpListener::bind(format!(
             "{}:{}",
             std::env::var("SERVER_IP").unwrap_or("localhost".to_string()),
             std::env::var("SERVER_PORT").unwrap_or("7070".to_string())
         ))
         .await
-        .unwrap();
+        {
+            Ok(l) => l,
+            Err(e) => {
+                panic!("Could not start listening with error: {e}");
+            }
+        };
 
         tracing::info!("Listening on: {}", listener.local_addr().unwrap());
         axum::serve(listener, app.into_make_service())
