@@ -91,7 +91,14 @@ impl Auth {
         tracing::trace!("db_connection: {:?}", db_connection);
         let db = PgPool::connect(&db_connection).await?;
         tracing::trace!("db: {:?}", db);
-        sqlx::migrate!().run(&db).await?;
+
+        let mig_res = sqlx::migrate!().run(&db).await;
+        match mig_res {
+            Ok(_) => {}
+            Err(e) => {
+                panic!("Could not apply migrations: {e}")
+            }
+        }
 
         Ok(Auth {
             db,
