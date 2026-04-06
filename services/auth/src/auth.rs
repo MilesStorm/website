@@ -36,17 +36,6 @@ pub struct Auth {
 
 impl Auth {
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        match dotenvy::dotenv() {
-            Ok(_) => {
-                tracing::debug!("Loaded .env file");
-            }
-            Err(_) => {
-                tracing::debug!("Loaded .env file");
-                tracing::debug!("assuming environment variables are set");
-                panic!("could not load env");
-            }
-        }
-
         let client_id = env::var("CLIENT_ID")
             .map(ClientId::new)
             .expect("CLIENT_ID should be provided");
