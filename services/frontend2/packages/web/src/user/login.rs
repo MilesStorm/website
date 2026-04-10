@@ -1,5 +1,5 @@
 use dioxus::{fullstack::reqwest, logger::tracing};
-use ui::data::LoginStatus;
+use ui::data_dir::LoginStatus;
 
 use crate::LOGIN_STATUS;
 

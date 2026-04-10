@@ -1,9 +1,11 @@
 use dioxus::prelude::*;
 
-use ui::Navbar;
+use ui::{data_dir::LoginStatus, Navbar};
 use views::{Blog, Home};
 
 mod views;
+
+pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]

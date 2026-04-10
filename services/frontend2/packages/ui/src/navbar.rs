@@ -1,4 +1,4 @@
-use crate::data::LoginStatus;
+use crate::data_dir::LoginStatus;
 use dioxus::prelude::*;
 
 const NAVBAR_CSS: Asset = asset!("/assets/styling/navbar.css");

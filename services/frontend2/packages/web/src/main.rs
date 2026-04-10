@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use ui::{data::LoginStatus, Navbar, Navbarr, TAILWIND};
+use ui::{data_dir::LoginStatus, Navbar, Navbarr, TAILWIND};
 use views::{Blog, Home};
 
 pub mod user;

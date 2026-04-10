@@ -1,5 +1,5 @@
 //! This crate contains all shared UI for the workspace.
-pub mod data;
+pub mod data_dir;
 mod hero;
 use dioxus::prelude::*;
 pub use hero::*;
