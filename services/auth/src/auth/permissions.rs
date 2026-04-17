@@ -61,6 +61,7 @@ pub fn router() -> Router<()> {
             "llama"
         ))
         .route("/api/permission/valheim_player", get(self::get::permission))
+        .route("/api/permission/ark", get(self::get::permission))
         .route("/api/permission/llama", get(self::get::permission))
         .route("/api/permission/photoview", get(self::get::permission))
 }

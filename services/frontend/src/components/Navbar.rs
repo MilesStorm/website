@@ -2,68 +2,37 @@ use dioxus::prelude::*;
 
 use crate::{
     components::icon::{default_profile_picture, Logo_c},
-    has_valheim_permission,
+    has_ark_permission,
     hooks::{has_permission, logout, LogInStatus},
     LOGIN_STATUS,
 };
 
 #[component]
-fn valheim_button(user: LogInStatus) -> Element {
+fn ark_button(user: LogInStatus, is_permitted: Resource<bool>) -> Element {
     match user {
-        LogInStatus::LoggedIn(_) => {
-            let is_permitted = use_resource(move || async move { has_valheim_permission().await });
-
-            match is_permitted() {
-                Some(permission) => {
-                    if permission {
-                        rsx! {
-                            li{ Link {to: "/valheim", "Valheim" } }
-                        }
-                    } else {
-                        rsx! {}
+        LogInStatus::LoggedIn(_) => match is_permitted() {
+            Some(permission) => {
+                if permission {
+                    rsx! {
+                        li{ Link {to: "/ark", "Ark" } }
                     }
+                } else {
+                    rsx! {}
                 }
-                None => rsx! {
-                    span {
-                        class: "loading loading-spinner loading-xs"
-                    }
-                },
             }
-        }
-        LogInStatus::LoggedOut => rsx! {},
-    }
-}
-
-#[component]
-fn photoview_button(user: LogInStatus) -> Element {
-    match user {
-        LogInStatus::LoggedIn(_) => {
-            let is_permitted =
-                use_resource(move || async move { has_photoview_permission().await });
-
-            match is_permitted() {
-                Some(permission) => {
-                    if permission {
-                        rsx! {
-                            li{ a { href: "https://photoview.milesstorm.com", "Photoview Gallery" } }
-                        }
-                    } else {
-                        rsx! {}
-                    }
+            None => rsx! {
+                span {
+                    class: "loading loading-spinner loading-xs"
                 }
-                None => rsx! {
-                    span {
-                        class: "loading loading-spinner loading-xs"
-                    }
-                },
-            }
-        }
+            },
+        },
         LogInStatus::LoggedOut => rsx! {},
     }
 }
 
 #[component]
 pub fn Navbar() -> Element {
+    let has_ark_permission = use_resource(move || async move { has_ark_permission().await });
     let user = LOGIN_STATUS.read().clone();
 
     let logout_action = move |_| {
@@ -96,8 +65,7 @@ pub fn Navbar() -> Element {
                         class: "menu menu-compact dropdown-content mt-3 p-2 shadow bg-base-200 rounded-box w-52",
                         li { Link {to: "/", "Home" } }
                         li { Link {to: "/arcaneeye", "ArcaneEye" } }
-                        valheim_button { user: user.clone()}
-                        photoview_button { user: user.clone()}
+                         ark_button { user: user.clone(), is_permitted: has_ark_permission }
                     }
                 }
                 Link { class: "btn btn-ghost btn-circle avatar",
@@ -109,8 +77,7 @@ pub fn Navbar() -> Element {
                 ul { class: "menu menu-horizontal px-1",
                     li{ Link {to: "/", "Home" } }
                     li{ Link {to: "/arcaneeye", "ArcaneEye" } }
-                    valheim_button { user: user.clone()}
-                    photoview_button { user: user.clone()}
+                    ark_button { user: user.clone(), is_permitted: has_ark_permission }
                 }
             }
             div{ class: "navbar-end",
@@ -161,11 +128,4 @@ pub fn Navbar() -> Element {
             }
         }
     }
-}
-
-pub async fn has_photoview_permission() -> bool {
-    let valheim_permission = has_permission("photoview").await;
-    let llama_permission = has_permission("llama").await;
-
-    return valheim_permission || llama_permission;
 }

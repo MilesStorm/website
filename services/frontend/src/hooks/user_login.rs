@@ -135,11 +135,24 @@ pub async fn logout() -> Result<(), reqwest::Error> {
     Ok(())
 }
 
-pub async fn restart_valheim() -> Result<RestartRequestResponse> {
+pub async fn restart_ark() -> Result<RestartRequestResponse> {
     let resp =
-        reqwest::get(format!("{}/api/permission/valheim_player/restart", ROOT_DOMAIN()).as_str())
-            .await?;
-    tracing::info!("restart_valheim response: {:?}", resp);
+        reqwest::get(format!("{}/api/permission/ark/restart", ROOT_DOMAIN()).as_str()).await?;
+    tracing::info!("restart_ark response: {:?}", resp);
+    let result = resp.json::<RestartRequestResponse>().await?;
+
+    Ok(result)
+}
+pub async fn stop_ark() -> Result<RestartRequestResponse> {
+    let resp = reqwest::get(format!("{}/api/permission/ark/stop", ROOT_DOMAIN()).as_str()).await?;
+    tracing::info!("restart_ark response: {:?}", resp);
+    let result = resp.json::<RestartRequestResponse>().await?;
+
+    Ok(result)
+}
+pub async fn start_ark() -> Result<RestartRequestResponse> {
+    let resp = reqwest::get(format!("{}/api/permission/ark/start", ROOT_DOMAIN()).as_str()).await?;
+    tracing::info!("restart_ark response: {:?}", resp);
     let result = resp.json::<RestartRequestResponse>().await?;
 
     Ok(result)
