@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt::Display;
 
 use axum::Json;
 use axum::{Router, response::IntoResponse, routing::get};
@@ -29,16 +30,35 @@ impl From<&str> for Permission {
     }
 }
 
+enum Operation {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operation::Start => write!(f, "start"),
+            Operation::Stop => write!(f, "stop"),
+            Operation::Restart => write!(f, "restart"),
+        }
+    }
+}
+
 pub fn router() -> Router<()> {
     Router::new()
         .route(
             "/api/permission/valheim_player/restart",
             get(self::get::restart_valheim),
         )
+        .route("/api/permission/ark/restart", get(self::get::restart_ark))
+        .route("/api/permission/ark/start", get(self::get::start_ark))
+        .route("/api/permission/ark/stop", get(self::get::stop_ark))
         .route_layer(permission_required!(
             Backend,
             login_url = "/api/login",
-            "restart_valheim"
+            "llama"
         ))
         .route("/api/permission/valheim_player", get(self::get::permission))
         .route("/api/permission/llama", get(self::get::permission))
@@ -81,7 +101,7 @@ mod get {
             Some(user) => {
                 tracing::info!("{:?} restarted valheim server", user);
 
-                match reqwest::get("http://192.168.1.21:9090").await {
+                match reqwest::get("http://192.168.1.21:9090/valheim").await {
                     Ok(resp) => {
                         let json: Result<RestartRequestResponse, reqwest::Error> =
                             resp.json::<RestartRequestResponse>().await;
@@ -103,6 +123,63 @@ mod get {
                     Err(_) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Failed to restart Valheim server",
+                    )
+                        .into_response(),
+                }
+            }
+            .into_response(),
+            None => (
+                StatusCode::UNAUTHORIZED,
+                Json(PermissionResponse {
+                    has_permission: false,
+                }),
+            )
+                .into_response(),
+        }
+    }
+
+    pub async fn restart_ark(auth_session: AuthSession) -> impl IntoResponse {
+        ark_handle(auth_session, Operation::Restart).await
+    }
+
+    pub async fn stop_ark(auth_session: AuthSession) -> impl IntoResponse {
+        ark_handle(auth_session, Operation::Stop).await
+    }
+
+    pub async fn start_ark(auth_session: AuthSession) -> impl IntoResponse {
+        ark_handle(auth_session, Operation::Start).await
+    }
+
+    async fn ark_handle(
+        auth_session: axum_login::AuthSession<Backend>,
+        op: Operation,
+    ) -> axum::http::Response<axum::body::Body> {
+        match auth_session.user {
+            Some(user) => {
+                tracing::info!("{:?} {}ed ark server", user, op);
+
+                match reqwest::get(format!("http://192.168.1.21:9090/ark/{op}")).await {
+                    Ok(resp) => {
+                        let json: Result<RestartRequestResponse, reqwest::Error> =
+                            resp.json::<RestartRequestResponse>().await;
+
+                        match json {
+                            Ok(suc) => (
+                                StatusCode::OK,
+                                Json(RestartRequestResponse {
+                                    restart_result: suc.restart_result,
+                                    exit_code: suc.exit_code,
+                                }),
+                            )
+                                .into_response(),
+                            Err(ere) => {
+                                (StatusCode::INTERNAL_SERVER_ERROR, ere.to_string()).into_response()
+                            }
+                        }
+                    }
+                    Err(_) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to {op} ark server",
                     )
                         .into_response(),
                 }
