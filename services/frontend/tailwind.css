@@ -1,4 +1,4 @@
-@import "tailwindcss"
+@import "tailwindcss";
 @source "./src/**/*.{rs,html,css}";
-@import "tailwind/preflight";
-@import utilities;
+@plugin "daisyui";
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));

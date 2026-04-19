@@ -20,10 +20,22 @@ pub enum LogInStatus {
     LoggedIn(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RestartRequestResponse {
+#[derive(Serialize, Deserialize, Debug)]
+pub enum CommandResult {
+    Stopped,
+    AlreadyStopped,
+    FailedToStop,
+    Started,
+    AlreadyRunning,
+    FailedToStart,
+    Timeout,
+    Restarting,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DockerRequestResponse {
     restart_result: String,
-    exit_code: Option<i32>,
+    pub command_result: Option<CommandResult>,
 }
 
 impl LogInStatus {
@@ -135,25 +147,25 @@ pub async fn logout() -> Result<(), reqwest::Error> {
     Ok(())
 }
 
-pub async fn restart_ark() -> Result<RestartRequestResponse> {
+pub async fn restart_ark() -> Result<DockerRequestResponse> {
     let resp =
         reqwest::get(format!("{}/api/permission/ark/restart", ROOT_DOMAIN()).as_str()).await?;
     tracing::info!("restart_ark response: {:?}", resp);
-    let result = resp.json::<RestartRequestResponse>().await?;
+    let result = resp.json::<DockerRequestResponse>().await?;
 
     Ok(result)
 }
-pub async fn stop_ark() -> Result<RestartRequestResponse> {
+pub async fn stop_ark() -> Result<DockerRequestResponse> {
     let resp = reqwest::get(format!("{}/api/permission/ark/stop", ROOT_DOMAIN()).as_str()).await?;
-    tracing::info!("restart_ark response: {:?}", resp);
-    let result = resp.json::<RestartRequestResponse>().await?;
+    tracing::info!("stop_ark response: {:?}", resp);
+    let result = resp.json::<DockerRequestResponse>().await?;
 
     Ok(result)
 }
-pub async fn start_ark() -> Result<RestartRequestResponse> {
+pub async fn start_ark() -> Result<DockerRequestResponse> {
     let resp = reqwest::get(format!("{}/api/permission/ark/start", ROOT_DOMAIN()).as_str()).await?;
-    tracing::info!("restart_ark response: {:?}", resp);
-    let result = resp.json::<RestartRequestResponse>().await?;
+    tracing::info!("start_ark response: {:?}", resp);
+    let result = resp.json::<DockerRequestResponse>().await?;
 
     Ok(result)
 }

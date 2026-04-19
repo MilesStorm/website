@@ -6,9 +6,9 @@ fn main() {
             .args([
                 "tailwindcss",
                 "-i",
-                "input.css",
+                "tailwind.css",
                 "-o",
-                "assets/main.css",
+                "assets/tailwind.css",
                 "--minify",
             ])
             .status()

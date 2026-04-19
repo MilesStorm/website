@@ -13,6 +13,8 @@ out_dir = "dist"
 # resource (assets) file folder
 asset_dir = "assets"
 
+tailwind_output = "assets/tailwind.css"
+
 [web.app]
 
 # HTML title tag content
@@ -30,8 +32,6 @@ watch_path = ["src", "assets"]
 [web.resource]
 
 # CSS style file
-
-style = ["assets/main.css"]
 
 # Javascript code file
 script = []

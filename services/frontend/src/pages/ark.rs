@@ -1,6 +1,9 @@
-use dioxus::prelude::*;
+use std::ops::Deref;
 
-use crate::hooks::{has_permission, restart_ark, start_ark, stop_ark};
+use dioxus::prelude::*;
+use serde::ser::Impossible;
+
+use crate::hooks::{has_permission, restart_ark, start_ark, stop_ark, CommandResult};
 use crate::LOGIN_STATUS;
 
 use crate::{components::Navbar::Navbar, LogInStatus};
@@ -21,10 +24,10 @@ pub fn Ark() -> Element {
 }
 
 pub async fn has_ark_permission() -> bool {
-    let valheim_permission = has_permission("ark").await;
+    let ark_permission = has_permission("ark").await;
     let llama_permission = has_permission("llama").await;
 
-    return valheim_permission || llama_permission;
+    return ark_permission || llama_permission;
 }
 
 #[component]
@@ -35,10 +38,10 @@ pub fn Restart_Ark_Page() -> Element {
         Some(is_permitted) => {
             rsx! {
                 div{
-                class: "",
-                // restart_button {is_permitted}
-                stop_button { is_permitted }
-                // start_button {is_permitted}
+                    class: "flex items-center justify-evenly h-screen",
+                    restart_button { is_permitted }
+                    stop_button { is_permitted }
+                    start_button { is_permitted }
                 }
             }
         }
@@ -46,6 +49,7 @@ pub fn Restart_Ark_Page() -> Element {
             rsx! {
                 button {
                     class: "btn",
+                    class: "content-center",
                     style: "margin: auto",
                     span { class: "loading loading-spinner", "loading" }
                 }
@@ -62,46 +66,96 @@ fn restart_button(is_permitted: bool) -> Element {
     if is_permitted {
         if has_clicked() {
             rsx! {
-            match &restart_action.value() {
-                Some(Err(_)) => rsx! {
-                    div {
-                        class: "tooltip tooltip-open tooltip-error",
-                        "data-tip": "error",
-                        style: "margin: auto",
-                        button {
-                            class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
-                            onclick: move |_| {
-                                restart_action.call();
-                            },
-                            "Error!"
-                        }
-                    }
-                },
-                Some(_) => rsx! {
-                    div {
-                        class: "tooltip tooltip-open tooltip-success",
-                        "data-tip": "success",
-                        style: "margin: auto",
-                            button {
-                            class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
-                            onclick: move |_| {
-                                restart_action.call();
-                            },
-                            "Restart"
-                    }
-                }
-                },
-                None => {
-                    rsx! {
-                        button {
-                            class: "btn",
+                match &restart_action.value() {
+                    Some(Err(_)) => rsx! {
+                        div {
+                            class: "tooltip tooltip-open tooltip-error",
+                            "data-tip": "error",
                             style: "margin: auto",
-                            span { class: "loading loading-spinner", "loading" }
+                            button {
+                                class: "btn btn-error btn-xs sm:btn-sm md:btn-md lflex items-center justify-center h-screeng:btn-lg",
+                                onclick: move |_| {
+                                    restart_action.call();
+                                },
+                                "Error!"
+                            }
                         }
-                    }
+                    },
+                    Some(Ok(v)) => rsx! {
+                        match &(v.read().command_result) {
+                            Some(ice) => rsx! {
+                                match &ice {
+                                    CommandResult::Restarting => {
+                                        dbg!(&ice);
+                                        rsx! {
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-success",
+                                                "data-tip": "Success",
+                                                style: "margin: auto",
+                                                button {
+                                                class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                onclick: move |_| {
+                                                    restart_action.call();
+                                                },
+                                                "Restart"
+                                            }
+                                        }
+                                    }
+                                    },
+                                    CommandResult::AlreadyStopped => {
+                                        rsx! {
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-success",
+                                                "data-tip": "Already Stopped",
+                                                style: "margin: auto",
+                                                button {
+                                                class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                onclick: move |_| {
+                                                    restart_action.call();
+                                                },
+                                                "Restart"
+                                            }
+                                        }
+                                    }
+                                    },
+                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Stopped | CommandResult::Timeout | CommandResult::Started | CommandResult::AlreadyRunning | CommandResult::FailedToStart => {
+                                        rsx!{
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-error",
+                                                "data-tip": "FailedToStop",
+                                                style: "margin: auto",
+                                                button {
+                                                    class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                    onclick: move |_| {
+                                                        restart_action.call();
+                                                    },
+                                                    "Error!"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            None =>
+                                rsx! {
+                                    div {
+                                        class: "tooltip tooltip-open tooltip-success",
+                                        "data-tip": "Already Stopped",
+                                        style: "margin: auto",
+                                        button {
+                                        class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                        onclick: move |_| {
+                                            restart_action.call();
+                                        },
+                                        "Restart"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    None => load_btn()
                 }
             }
-                            }
         } else {
             rsx! {
                 button {
@@ -119,7 +173,7 @@ fn restart_button(is_permitted: bool) -> Element {
         rsx! {
             div {
                 class: "flex justify-center items-center h-full",
-                "You do not have permission to restart the Valheim server."
+                "You do not have permission to restart the Ark server."
             }
         }
     }
@@ -148,29 +202,66 @@ fn stop_button(is_permitted: bool) -> Element {
                             }
                         }
                     },
-                    Some(_) => rsx! {
-                        div {
-                            class: "tooltip tooltip-open tooltip-success",
-                            "data-tip": "success",
-                            style: "margin: auto",
-                                button {
-                                class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
-                                onclick: move |_| {
-                                    stop_action.call();
-                                },
-                                "Stop"
+                    Some(Ok(v)) => rsx! {
+                        match &(v.read().command_result) {
+                            Some(ice) => rsx! {
+                                match &ice {
+                                    CommandResult::Stopped => {
+                                        dbg!(&ice);
+                                        rsx! {
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-success",
+                                                "data-tip": "Success",
+                                                style: "margin: auto",
+                                                button {
+                                                class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                onclick: move |_| {
+                                                    stop_action.call();
+                                                },
+                                                "Stop"
+                                            }
+                                        }
+                                    }
+                                    },
+                                    CommandResult::AlreadyStopped => {
+                                        rsx! {
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-success",
+                                                "data-tip": "Already Stopped",
+                                                style: "margin: auto",
+                                                button {
+                                                class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                onclick: move |_| {
+                                                    stop_action.call();
+                                                },
+                                                "Stop"
+                                            }
+                                        }
+                                    }
+                                    },
+                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Restarting | CommandResult::Timeout | CommandResult::Started | CommandResult::AlreadyRunning | CommandResult::FailedToStart => {
+                                        rsx!{
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-error",
+                                                "data-tip": "FailedToStop",
+                                                style: "margin: auto",
+                                                button {
+                                                    class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                    onclick: move |_| {
+                                                        stop_action.call();
+                                                    },
+                                                    "Error!"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            None => load_btn()
+
                         }
-                    }
                     },
-                    None => {
-                        rsx! {
-                            button {
-                                class: "btn",
-                                style: "margin: auto",
-                                span { class: "loading loading-spinner", "loading" }
-                            }
-                        }
-                    }
+                    None => load_btn()
                 }
             }
         } else {
@@ -190,7 +281,7 @@ fn stop_button(is_permitted: bool) -> Element {
         rsx! {
             div {
                 class: "flex justify-center items-center h-full",
-                "You do not have permission to stop the Valheim server."
+                "You do not have permission to stop the Ark server."
             }
         }
     }
@@ -204,10 +295,10 @@ fn start_button(is_permitted: bool) -> Element {
     if is_permitted {
         if has_clicked() {
             rsx! {
-            match &start_action.value() {
-                Some(Err(_)) => rsx! {
-                    div {
-                        class: "tooltip tooltip-open tooltip-error",
+                match &start_action.value() {
+                    Some(Err(_)) => rsx! {
+                        div {
+                            class: "tooltip tooltip-open tooltip-error",
                         "data-tip": "error",
                         style: "margin: auto",
                         button {
@@ -219,31 +310,68 @@ fn start_button(is_permitted: bool) -> Element {
                         }
                     }
                 },
-                Some(_) => rsx! {
-                    div {
-                        class: "tooltip tooltip-open tooltip-success",
-                        "data-tip": "success",
-                        style: "margin: auto",
-                            button {
-                            class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
-                            onclick: move |_| {
-                                start_action.call();
+                    Some(Ok(v)) => rsx! {
+                        match &(v.read().command_result) {
+                            Some(ice) => rsx! {
+                                match &ice {
+                                    CommandResult::Started => {
+                                        dbg!(&ice);
+                                        rsx! {
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-success",
+                                                "data-tip": "Success",
+                                                style: "margin: auto",
+                                                button {
+                                                class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                onclick: move |_| {
+                                                    start_action.call();
+                                                },
+                                                "Start"
+                                            }
+                                        }
+                                    }
+                                    },
+                                    CommandResult::AlreadyRunning => {
+                                        rsx! {
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-success",
+                                                "data-tip": "Already Running",
+                                                style: "margin: auto",
+                                                button {
+                                                class: "btn btn-primary btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                onclick: move |_| {
+                                                    start_action.call();
+                                                },
+                                                "Start"
+                                            }
+                                        }
+                                    }
+                                    },
+                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Restarting | CommandResult::Timeout | CommandResult::Stopped | CommandResult::FailedToStart | CommandResult::AlreadyStopped => {
+                                        rsx!{
+                                            div {
+                                                class: "tooltip tooltip-open tooltip-error",
+                                                "data-tip": "FailedToStop",
+                                                style: "margin: auto",
+                                                button {
+                                                class: "btn btn-error btn-xs sm:btn-sm md:btn-md lg:btn-lg",
+                                                onclick: move |_| {
+                                                    start_action.call();
+                                                },
+                                                "Error!"
+                                            }
+                                        }
+                                    }
+                                    }
+                                }
                             },
-                            "Start"
-                    }
-                }
-                },
-                None => {
-                    rsx! {
-                        button {
-                            class: "btn",
-                            style: "margin: auto",
-                            span { class: "loading loading-spinner", "loading" }
+                            None => load_btn()
+
                         }
-                    }
+                    },
+                    None => load_btn()
                 }
             }
-                            }
         } else {
             rsx! {
                 button {
@@ -259,10 +387,21 @@ fn start_button(is_permitted: bool) -> Element {
         }
     } else {
         rsx! {
-            div {
+                div {
                 class: "flex justify-center items-center h-full",
-                "You do not have permission to start the Valheim server."
+                "You do not have permission to start the Ark server."
             }
+        }
+    }
+}
+
+#[component]
+fn load_btn() -> Element {
+    rsx! {
+        button {
+            class: "btn",
+            style: "margin: auto",
+            span { class: "loading loading-spinner", "loading" }
         }
     }
 }

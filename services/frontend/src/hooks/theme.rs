@@ -1,6 +1,7 @@
 use core::slice::Iter;
 use dioxus::signals::WritableExt;
 use dioxus_sdk::{storage::*, window::theme::use_system_theme};
+use gloo::console;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -19,14 +20,14 @@ pub enum Theme {
 impl Display for Theme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let theme = match self {
-            Theme::Dark => "Dark",
-            Theme::Light => "Light",
-            Theme::Dracula => "Dracula",
-            Theme::Synthwave => "Synthwave",
-            Theme::Retro => "Retro",
-            Theme::Dim => "Dim",
-            Theme::Corporate => "Corporate",
-            Theme::Preffered => "System",
+            Theme::Dark => "dark",
+            Theme::Light => "light",
+            Theme::Dracula => "dracula",
+            Theme::Synthwave => "synthwave",
+            Theme::Retro => "retro",
+            Theme::Dim => "dim",
+            Theme::Corporate => "corporate",
+            Theme::Preffered => "system",
         };
         write!(f, "{}", theme)
     }
@@ -78,7 +79,7 @@ impl Theme {
 
                 match prefference {
                     dioxus_sdk::window::theme::Theme::Light => "light",
-                    dioxus_sdk::window::theme::Theme::Dark => "Dark",
+                    dioxus_sdk::window::theme::Theme::Dark => "dark",
                 }
             } else {
                 gloo::console::log!("No preffered theme found, using default");
@@ -112,13 +113,12 @@ impl Default for Theme {
 
 pub fn get_mode() -> Theme {
     // use_persistent("theme-mode", || Theme::Preffered)()
-    use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered)()
+    use_synced_storage::<LocalStorage, Theme>("theme".to_owned(), || Theme::Preffered)()
 }
 
 pub fn setup_mode() {
     // let mode = use_persistent("theme-mode", || Theme::default());
-    let mode =
-        use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered);
+    let mode = use_synced_storage::<LocalStorage, Theme>("theme".to_owned(), || Theme::Preffered);
 
     web_sys::js_sys::eval(
         format!(
@@ -133,7 +133,7 @@ pub fn setup_mode() {
 pub fn set_mode(theme_mode: Theme) {
     // let mut storage = use_persistent("theme-mode", || Theme::default());
     let mut storage =
-        use_synced_storage::<LocalStorage, Theme>("theme-mode".to_owned(), || Theme::Preffered);
+        use_synced_storage::<LocalStorage, Theme>("theme".to_owned(), || Theme::Preffered);
 
     *storage.write() = theme_mode;
     let pref = dioxus_sdk::window::theme::use_system_theme();

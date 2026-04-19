@@ -30,6 +30,24 @@ impl From<&str> for Permission {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum CommandResult {
+    Stopped,
+    AlreadyStopped,
+    FailedToStop,
+    Started,
+    AlreadyRunning,
+    FailedToStart,
+    Timeout,
+    Restarting,
+}
+
+impl Display for CommandResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 enum Operation {
     Start,
     Stop,
@@ -72,9 +90,9 @@ mod get {
     use super::*;
 
     #[derive(Serialize, Deserialize)]
-    struct RestartRequestResponse {
+    struct DockerRequestResponse {
         restart_result: String,
-        exit_code: Option<i32>,
+        command_result: Option<CommandResult>,
     }
 
     pub async fn permission(auth_session: AuthSession) -> impl IntoResponse {
@@ -104,15 +122,15 @@ mod get {
 
                 match reqwest::get("http://192.168.1.21:9090/valheim").await {
                     Ok(resp) => {
-                        let json: Result<RestartRequestResponse, reqwest::Error> =
-                            resp.json::<RestartRequestResponse>().await;
+                        let json: Result<DockerRequestResponse, reqwest::Error> =
+                            resp.json::<DockerRequestResponse>().await;
 
                         match json {
                             Ok(suc) => (
                                 StatusCode::OK,
-                                Json(RestartRequestResponse {
+                                Json(DockerRequestResponse {
                                     restart_result: suc.restart_result,
-                                    exit_code: suc.exit_code,
+                                    command_result: suc.command_result,
                                 }),
                             )
                                 .into_response(),
@@ -161,15 +179,15 @@ mod get {
 
                 match reqwest::get(format!("http://192.168.1.21:9090/ark/{op}")).await {
                     Ok(resp) => {
-                        let json: Result<RestartRequestResponse, reqwest::Error> =
-                            resp.json::<RestartRequestResponse>().await;
+                        let json: Result<DockerRequestResponse, reqwest::Error> =
+                            resp.json::<DockerRequestResponse>().await;
 
                         match json {
                             Ok(suc) => (
                                 StatusCode::OK,
-                                Json(RestartRequestResponse {
+                                Json(DockerRequestResponse {
                                     restart_result: suc.restart_result,
-                                    exit_code: suc.exit_code,
+                                    command_result: suc.command_result,
                                 }),
                             )
                                 .into_response(),

@@ -69,7 +69,7 @@ fn App() -> Element {
         use_synced_storage::<LocalStorage, bool>("showing_cookies".to_owned(), || true);
 
     rsx! {
-        document::Stylesheet { href: MAIN_CSS }
+        Stylesheet { href: MAIN_CSS }
         div {
             class: "flex flex-col justify-between h-screen",
             Router::<Route> {}
