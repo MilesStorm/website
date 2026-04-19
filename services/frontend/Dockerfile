@@ -1,7 +1,6 @@
 FROM lukemathwalker/cargo-chef:latest AS chef
 
 # Install build tools
-RUN cargo install dioxus-cli
 RUN rustup target add wasm32-unknown-unknown
 
 FROM chef AS planner
@@ -14,6 +13,11 @@ FROM chef AS builder
 WORKDIR /app
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json --target wasm32-unknown-unknown
+
+# install dx
+RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+RUN cargo binstall dioxus-cli --root /.cargo -y --force
+ENV PATH="/.cargo/bin:$PATH"
 
 # Copy over the source code and build the project
 COPY . .
