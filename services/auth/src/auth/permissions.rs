@@ -40,6 +40,7 @@ pub enum CommandResult {
     FailedToStart,
     Timeout,
     Restarting,
+    NumPlayers(i32),
 }
 
 impl Display for CommandResult {
@@ -51,6 +52,7 @@ impl Display for CommandResult {
 enum Operation {
     Start,
     Stop,
+    Num,
     Restart,
 }
 
@@ -59,6 +61,7 @@ impl Display for Operation {
         match self {
             Operation::Start => write!(f, "start"),
             Operation::Stop => write!(f, "stop"),
+            Operation::Num => write!(f, "num_players"),
             Operation::Restart => write!(f, "restart"),
         }
     }
@@ -71,6 +74,7 @@ pub fn router() -> Router<()> {
             get(self::get::restart_valheim),
         )
         .route("/api/permission/ark/restart", get(self::get::restart_ark))
+        .route("/api/permission/ark/count_ark", get(self::get::count_ark))
         .route("/api/permission/ark/start", get(self::get::start_ark))
         .route("/api/permission/ark/stop", get(self::get::stop_ark))
         .route_layer(permission_required!(
@@ -159,6 +163,10 @@ mod get {
 
     pub async fn restart_ark(auth_session: AuthSession) -> impl IntoResponse {
         ark_handle(auth_session, Operation::Restart).await
+    }
+
+    pub async fn count_ark(auth_session: AuthSession) -> impl IntoResponse {
+        ark_handle(auth_session, Operation::Num).await
     }
 
     pub async fn stop_ark(auth_session: AuthSession) -> impl IntoResponse {
