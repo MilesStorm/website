@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use anyhow::Result;
-use dioxus::signals::{GlobalSignal, Signal};
+use dioxus::signals::{GlobalSignal, ReadableExt, Signal};
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value as Json;
 
@@ -12,7 +12,7 @@ pub static ROOT_DOMAIN: GlobalSignal<String> = Signal::global(|| {
         .expect("cannot convert to string")
 });
 
-use crate::LOGIN_STATUS;
+use crate::{LOGIN_STATUS, PERMISSIONS};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum LogInStatus {
@@ -30,6 +30,7 @@ pub enum CommandResult {
     FailedToStart,
     Timeout,
     Restarting,
+    NumPlayers(i32),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -143,8 +144,18 @@ pub async fn logout() -> Result<(), reqwest::Error> {
     let resp = reqwest::get(format!("{}/api/logout", ROOT_DOMAIN()).as_str()).await?;
     tracing::info!("logout response: {:?}", resp);
     *LOGIN_STATUS.write() = LogInStatus::LoggedOut;
+    PERMISSIONS.write().clear();
 
     Ok(())
+}
+
+pub async fn num_players_ark() -> Result<DockerRequestResponse> {
+    let resp =
+        reqwest::get(format!("{}/api/permission/ark/num_players", ROOT_DOMAIN()).as_str()).await?;
+    tracing::info!("restart_ark response: {:?}", resp);
+    let result = resp.json::<DockerRequestResponse>().await?;
+
+    Ok(result)
 }
 
 pub async fn restart_ark() -> Result<DockerRequestResponse> {
@@ -171,6 +182,16 @@ pub async fn start_ark() -> Result<DockerRequestResponse> {
 }
 
 pub async fn has_permission(permission: &str) -> bool {
+    if let Some(&cached) = PERMISSIONS.read().get(permission) {
+        return cached;
+    }
+
+    let result = fetch_permission(permission).await;
+    &PERMISSIONS.write().insert(permission.to_string(), result);
+    result
+}
+
+async fn fetch_permission(permission: &str) -> bool {
     let resp =
         reqwest::get(format!("{}/api/permission/{}", ROOT_DOMAIN(), permission).as_str()).await;
 
@@ -191,7 +212,7 @@ pub async fn has_permission(permission: &str) -> bool {
             }
         }
         Err(e) => {
-            tracing::warn!("Could not log in, error: {:?}", e);
+            tracing::warn!("Could not check permission, error: {:?}", e);
             false
         }
     }

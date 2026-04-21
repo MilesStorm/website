@@ -4,6 +4,8 @@ mod components;
 mod hooks;
 mod pages;
 
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use dioxus::signals::GlobalSignal;
 use dioxus_sdk::storage::{use_synced_storage, LocalStorage};
@@ -13,8 +15,8 @@ use crate::{components::cookie::CookieAlert, cv::CvPage, pages::*};
 
 // Urls are relative to your Cargo.toml file
 static MAIN_CSS: Asset = asset!("assets/tailwind.css");
-// pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
 pub static LOGIN_STATUS: GlobalSignal<LogInStatus> = Signal::global(|| LogInStatus::LoggedOut);
+pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(|| HashMap::new());
 
 #[derive(Clone, Routable, Debug, PartialEq)]
 enum Route {

@@ -1,9 +1,13 @@
 use std::ops::Deref;
 
+use dioxus::core::use_before_render;
 use dioxus::prelude::*;
+use dioxus_html::u::rest;
 use serde::ser::Impossible;
 
-use crate::hooks::{has_permission, restart_ark, start_ark, stop_ark, CommandResult};
+use crate::hooks::{
+    has_permission, num_players_ark, restart_ark, start_ark, stop_ark, CommandResult,
+};
 use crate::LOGIN_STATUS;
 
 use crate::{components::Navbar::Navbar, LogInStatus};
@@ -38,10 +42,15 @@ pub fn Restart_Ark_Page() -> Element {
         Some(is_permitted) => {
             rsx! {
                 div{
-                    class: "flex items-center justify-evenly h-screen",
-                    restart_button { is_permitted }
-                    stop_button { is_permitted }
-                    start_button { is_permitted }
+                    class: "flex flex-col items-center justify-center h-screen",
+                    num_players { is_permitted }
+                    div {
+                        class: "flex items-center justify-center gap-40",
+                        restart_button { is_permitted }
+                        stop_button { is_permitted }
+                        start_button { is_permitted }
+
+                    }
                 }
             }
         }
@@ -52,6 +61,52 @@ pub fn Restart_Ark_Page() -> Element {
                     class: "content-center",
                     style: "margin: auto",
                     span { class: "loading loading-spinner", "loading" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn num_players(is_permitted: bool) -> Element {
+    let mut count = use_signal(|| None::<i32>);
+
+    use_future(move || async move {
+        loop {
+            let n = match num_players_ark().await {
+                Ok(v) => match v.command_result {
+                    Some(CommandResult::NumPlayers(n)) => n,
+                    _ => -1,
+                },
+                Err(_) => -1,
+            };
+            count.set(Some(n));
+            gloo::timers::future::TimeoutFuture::new(30_000).await;
+        }
+    });
+
+    rsx! {
+        div {
+            class: "stats shadow-xl bg-base-200 mb-16",
+            div {
+                class: "stat",
+                div { class: "stat-title", "Players Online" }
+                div {
+                    class: "stat-value",
+                    match count() {
+                        None => rsx! { span { class: "loading loading-spinner loading-sm" } },
+                        Some(n) if n < 0 => rsx! { span { class: "text-error text-2xl", "Offline" } },
+                        Some(0) => rsx! { span { class: "text-warning", "0" } },
+                        Some(n) => rsx! { span { class: "text-success", "{n}" } },
+                    }
+                }
+                div {
+                    class: "stat-desc",
+                    match count() {
+                        Some(n) if n > 0 => rsx! { "Server is active" },
+                        Some(0) => rsx! { "Server running, no players" },
+                        _ => rsx! { "" },
+                    }
                 }
             }
         }
@@ -118,7 +173,7 @@ fn restart_button(is_permitted: bool) -> Element {
                                         }
                                     }
                                     },
-                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Stopped | CommandResult::Timeout | CommandResult::Started | CommandResult::AlreadyRunning | CommandResult::FailedToStart => {
+                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Stopped | CommandResult::Timeout | CommandResult::Started | CommandResult::AlreadyRunning | CommandResult::FailedToStart | CommandResult::NumPlayers(_) => {
                                         rsx!{
                                             div {
                                                 class: "tooltip tooltip-open tooltip-error",
@@ -239,7 +294,7 @@ fn stop_button(is_permitted: bool) -> Element {
                                         }
                                     }
                                     },
-                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Restarting | CommandResult::Timeout | CommandResult::Started | CommandResult::AlreadyRunning | CommandResult::FailedToStart => {
+                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Restarting | CommandResult::Timeout | CommandResult::Started | CommandResult::AlreadyRunning | CommandResult::FailedToStart | CommandResult::NumPlayers(_)=> {
                                         rsx!{
                                             div {
                                                 class: "tooltip tooltip-open tooltip-error",
@@ -347,7 +402,7 @@ fn start_button(is_permitted: bool) -> Element {
                                         }
                                     }
                                     },
-                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Restarting | CommandResult::Timeout | CommandResult::Stopped | CommandResult::FailedToStart | CommandResult::AlreadyStopped => {
+                                    CommandResult::Restarting | CommandResult::FailedToStop | CommandResult::Restarting | CommandResult::Timeout | CommandResult::Stopped | CommandResult::FailedToStart | CommandResult::AlreadyStopped | CommandResult::NumPlayers(_)=> {
                                         rsx!{
                                             div {
                                                 class: "tooltip tooltip-open tooltip-error",
