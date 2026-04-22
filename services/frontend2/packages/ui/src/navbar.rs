@@ -118,3 +118,17 @@ pub fn Navbar(user: LoginStatus) -> Element {
         }
     }
 }
+
+#[component]
+fn dino_button(user: LoginStatus) -> Element {
+    match user {
+        LoginStatus::LoggedIn(user) => {
+            let is_permitted = use_resource(move || async move {
+                has_dino_permission().await;
+            });
+
+            rsx! {}
+        }
+        LoginStatus::LoggedOut => rsx! {},
+    }
+}

@@ -7,6 +7,7 @@ edition = "2021"
 dioxus = { workspace = true }
 api = { workspace = true }
 dioxus-sdk = { version = "^0.7.0", features = ["storage"] }
+manganis = { version = "0.7.5", features = ["dioxus"] }
 
 [features]
 server = ["api/server"]

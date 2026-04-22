@@ -18,3 +18,8 @@ pub async fn logout() -> Result<(), reqwest::Error> {
 
     Ok(())
 }
+
+#[get]
+pub async fn has_dino_permission() -> bool {
+    let resp = reqwest::get(format!("{}/api/permission/dino_player")).await;
+}
