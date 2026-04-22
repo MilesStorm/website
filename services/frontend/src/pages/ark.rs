@@ -81,13 +81,14 @@ fn num_players(is_permitted: bool) -> Element {
                 Err(_) => -1,
             };
             count.set(Some(n));
+
             gloo::timers::future::TimeoutFuture::new(30_000).await;
         }
     });
 
     rsx! {
         div {
-            class: "stats shadow mb-8",
+            class: "stats shadow-xl bg-base-300 mb-16",
             div {
                 class: "stat",
                 div { class: "stat-title", "Players Online" }
