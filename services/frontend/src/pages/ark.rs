@@ -87,7 +87,7 @@ fn num_players(is_permitted: bool) -> Element {
 
     rsx! {
         div {
-            class: "stats shadow-xl bg-base-200 mb-16",
+            class: "stats shadow mb-8",
             div {
                 class: "stat",
                 div { class: "stat-title", "Players Online" }
