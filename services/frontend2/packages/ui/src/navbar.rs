@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::{
-    components::icon::{Logo_c, default_profile_picture},
+    components::icon::{default_profile_picture, logo_c},
     data_dir::LoginStatus,
 };
 
@@ -54,7 +54,7 @@ pub fn Navbar(user: LoginStatus, on_logout: EventHandler<()>) -> Element {
                     }
                 }
                 Link { class: "btn btn-ghost btn-circle avatar", to: "/",
-                    Logo_c { width: 40, height: 40, class: "" }
+                    logo_c { width: 40, height: 40, class: "" }
                 }
             }
 

@@ -2,4 +2,4 @@ pub mod cookie;
 pub mod icon;
 
 pub use cookie::CookieConsent;
-pub use icon::{Logo_c, default_profile_picture};
+pub use icon::{default_profile_picture, logo_c};

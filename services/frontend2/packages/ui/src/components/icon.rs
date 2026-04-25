@@ -9,7 +9,7 @@ pub struct IconProps {
 
 const DEFAULT_PROFILE: Asset = manganis::asset!("assets/default_profile.png");
 
-pub fn Logo_c(props: IconProps) -> Element {
+pub fn logo_c(props: IconProps) -> Element {
     rsx! {
         svg {
             xmlns: "http://www.w3.org/2000/svg",
