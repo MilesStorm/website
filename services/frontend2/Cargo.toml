@@ -9,7 +9,18 @@ members = [
 ]
 
 [workspace.dependencies]
-dioxus = { version = "0.7.5" }
+dioxus = { version = "0.7.6" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+jsonwebtoken = "9"
+ulid = "1"
+dotenvy = "0.15"
+tower-sessions = { version = "0.14", features = ["memory-store"] }
+axum = { version = "0.8" }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # workspace
 ui = { path = "packages/ui" }

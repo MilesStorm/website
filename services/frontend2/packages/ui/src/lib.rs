@@ -1,14 +1,17 @@
-//! This crate contains all shared UI for the workspace.
+//! Shared UI components, types, and hooks for all platforms.
+
 pub mod components;
 pub mod data_dir;
+pub mod hooks;
+
 mod hero;
-use dioxus::prelude::*;
-pub use hero::*;
-
 mod navbar;
-pub use navbar::*;
 
-mod echo;
-pub use echo::*;
+pub use hero::Hero;
+pub use navbar::{Navbar, Navbarr};
+pub use components::{CookieConsent, Logo_c, default_profile_picture};
+pub use hooks::theme::{get_mode, set_mode, setup_mode};
+
+pub use dioxus::prelude::*;
 
 pub const TAILWIND: Asset = asset!("/assets/styling/tailwind.css");

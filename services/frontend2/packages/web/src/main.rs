@@ -1,64 +1,194 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 
-use ui::{data_dir::LoginStatus, Navbar, Navbarr, TAILWIND};
-use views::{Blog, Home};
+use api::{check_login_status, get_my_permissions, logout};
+use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
+use views::{Ark, Landing, Login, NotFound, Profile, Register};
 
-pub mod user;
 mod views;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
-
-#[derive(Debug, Clone, Routable, PartialEq)]
-#[rustfmt::skip]
-enum Route {
-    #[layout(WebNavbar)]
-    #[route("/")]
-    Home {},
-    #[route("/blog/:id")]
-    Blog { id: i32 },
-}
+pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match dotenvy::dotenv() {
+            Ok(_) => {}
+            Err(_) if !cfg!(debug_assertions) => {}
+            Err(e) => panic!("could not load .env: {e}"),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    server_launch();
+
+    #[cfg(target_arch = "wasm32")]
     dioxus::launch(App);
+}
+
+// ---- Server launch ----
+
+#[cfg(not(target_arch = "wasm32"))]
+fn server_launch() -> ! {
+    use axum::{routing::get, Router};
+    use tower_sessions::cookie::time::Duration;
+    use tower_sessions::cookie::SameSite;
+    use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+    // try_init() is a no-op if something already registered a subscriber, so this is safe.
+    tracing_subscriber::registry()
+        .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
+            |_| "info,dioxus=warn,tower_sessions=warn".into(),
+        )))
+        .with(tracing_subscriber::fmt::layer().json())
+        .try_init()
+        .ok();
+
+    let session_store = MemoryStore::default();
+
+    dioxus::serve(move || {
+        let layer = SessionManagerLayer::new(session_store.clone())
+            .with_secure(false)
+            .with_same_site(SameSite::Lax)
+            .with_expiry(Expiry::OnInactivity(Duration::days(7)));
+
+        async move {
+            use dioxus::server::IncrementalRendererConfig;
+
+            let router = Router::new()
+                .route("/oauth/callback", get(oauth_callback))
+                .route("/api/login/google/callback", get(google_callback))
+                .serve_dioxus_application(
+                    ServeConfig::default().incremental(IncrementalRendererConfig::default()),
+                    App,
+                )
+                .layer(layer);
+            Ok(router)
+        }
+    })
+}
+
+// ---- OAuth Axum handlers ----
+
+/// Handles the BFF handoff redirect from the auth service after any OAuth provider login.
+/// The auth service creates a short-lived code and redirects here; we exchange it for a
+/// session-bound opaque token and redirect the user home.
+#[cfg(not(target_arch = "wasm32"))]
+async fn oauth_callback(
+    session: tower_sessions::Session,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> axum::response::Response {
+    use axum::response::{IntoResponse, Redirect};
+
+    let Some(code) = params.get("code").cloned() else {
+        return Redirect::to("/login?error=missing_code").into_response();
+    };
+
+    match api::exchange_handoff_code(&code).await {
+        Ok((token, username)) => {
+            let _ = session.insert("opaque_token", token).await;
+            let _ = session.insert("username", username).await;
+            Redirect::to("/").into_response()
+        }
+        Err(_) => Redirect::to("/login?error=exchange_failed").into_response(),
+    }
+}
+
+/// Handles Google OAuth when Google is configured to redirect directly to the BFF
+/// (i.e. the redirect_uri is the BFF rather than the auth service).
+#[cfg(not(target_arch = "wasm32"))]
+async fn google_callback(
+    session: tower_sessions::Session,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> axum::response::Response {
+    use axum::response::{IntoResponse, Redirect};
+
+    let Some(code) = params.get("code").cloned() else {
+        return Redirect::to("/login?error=missing_code").into_response();
+    };
+
+    match api::exchange_google_auth_code(&code).await {
+        Ok((token, username)) => {
+            let _ = session.insert("opaque_token", token).await;
+            let _ = session.insert("username", username).await;
+            Redirect::to("/").into_response()
+        }
+        Err(e) if e.contains("email_exists") || e.contains("Email already in use") => {
+            Redirect::to("/login?error=email_exists").into_response()
+        }
+        Err(_) => Redirect::to("/login?error=exchange_failed").into_response(),
+    }
+}
+
+// ---- Dioxus app ----
+
+#[derive(Debug, Clone, Routable, PartialEq)]
+#[rustfmt::skip]
+enum Route {
+    #[layout(WebNavbar)]
+        #[route("/")]
+        Landing {},
+        #[route("/login?:error")]
+        Login { error: String },
+        #[route("/register")]
+        Register {},
+        #[route("/profile")]
+        Profile {},
+        #[route("/ark")]
+        Ark {},
+        #[route("/:..segments")]
+        NotFound { segments: Vec<String> },
 }
 
 #[component]
 fn App() -> Element {
-    // Build cool things ✌️
+    let status = use_resource(|| async move { check_login_status().await });
+    let perms = use_resource(|| async move { get_my_permissions().await });
+
+    use_effect(move || {
+        if let Some(Ok(s)) = status.value()() {
+            *LOGIN_STATUS.write() = s;
+        }
+        if let Some(Ok(p)) = perms.value()() {
+            let map: HashMap<String, bool> = p.into_iter().map(|n| (n, true)).collect();
+            *PERMISSIONS.write() = map;
+        }
+    });
+
+    setup_mode();
 
     rsx! {
-        // Global app resources
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
         document::Link { rel: "stylesheet", href: TAILWIND }
 
         Router::<Route> {}
+
+        CookieConsent {}
     }
 }
 
-/// A web-specific Router around the shared `Navbar` component
-/// which allows us to use the web-specific `Route` enum.
 #[component]
 fn WebNavbar() -> Element {
+    let logout_handler = move |_: ()| {
+        spawn(async move {
+            let _ = logout().await;
+            *LOGIN_STATUS.write() = LoginStatus::LoggedOut;
+            *PERMISSIONS.write() = HashMap::new();
+        });
+    };
+
     rsx! {
         Navbar {
-            user: LOGIN_STATUS()
+            user: LOGIN_STATUS(),
+            on_logout: logout_handler
         }
-
-        Navbarr {
-            Link {
-                to: Route::Home {},
-                "Home"
-            }
-            Link {
-                to: Route::Blog { id: 1 },
-                "Blog"
-            }
-        }
-
         Outlet::<Route> {}
     }
 }
