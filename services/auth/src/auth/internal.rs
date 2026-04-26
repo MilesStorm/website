@@ -15,7 +15,7 @@ use sqlx::PgPool;
 use tokio::task;
 use ulid::Ulid;
 
-use super::user::BasicClientSet;
+use super::user::{BasicClientSet, BffToken};
 
 #[derive(Clone)]
 pub struct InternalState {
@@ -51,6 +51,14 @@ pub fn router(state: InternalState) -> Router<()> {
             verify_service_token,
         ))
         .with_state(state)
+}
+
+async fn create_bff_token(db: &PgPool, user_id: i64) -> Result<BffToken, sqlx::Error> {
+    sqlx::query_as("INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2) RETURNING *")
+        .bind(Ulid::new().to_string())
+        .bind(user_id)
+        .fetch_one(db)
+        .await
 }
 
 async fn verify_service_token(
@@ -119,19 +127,10 @@ async fn exchange_password(
         return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
     }
 
-    let token = Ulid::new().to_string();
-    let result = sqlx::query(
-        "INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2)",
-    )
-    .bind(&token)
-    .bind(user.id)
-    .execute(&state.db)
-    .await;
-
-    match result {
-        Ok(_) => {
+    match create_bff_token(&state.db, user.id).await {
+        Ok(bff_token) => {
             tracing::info!(user_id = user.id, username = %user.username, "password login succeeded");
-            Json(TokenResp { token, username: user.username }).into_response()
+            Json(TokenResp { token: bff_token.token, username: user.username }).into_response()
         }
         Err(e) => {
             tracing::error!(user_id = user.id, error = %e, "failed to insert bff_token");
@@ -180,19 +179,16 @@ async fn exchange_code(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
 
-    let token = Ulid::new().to_string();
-    if let Err(e) = sqlx::query("INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2)")
-        .bind(&token)
-        .bind(row.user_id)
-        .execute(&state.db)
-        .await
-    {
-        tracing::error!(user_id = row.user_id, error = %e, "failed to insert bff_token after oauth code exchange");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
+    let bff_token = match create_bff_token(&state.db, row.user_id).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(user_id = row.user_id, error = %e, "failed to insert bff_token after oauth code exchange");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     tracing::info!(user_id = row.user_id, username = %username, "oauth code exchange succeeded");
-    Json(TokenResp { token, username }).into_response()
+    Json(TokenResp { token: bff_token.token, username }).into_response()
 }
 
 // ---- Google OAuth code exchange ----
@@ -293,18 +289,15 @@ async fn exchange_google(
         }
     };
 
-    let token = Ulid::new().to_string();
-    if let Err(e) = sqlx::query("INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2)")
-        .bind(&token)
-        .bind(user.id)
-        .execute(&state.db)
-        .await
-    {
-        tracing::error!("Failed to insert bff_token for Google user: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
+    let bff_token = match create_bff_token(&state.db, user.id).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Failed to insert bff_token for Google user: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
-    Json(TokenResp { token, username: user.username }).into_response()
+    Json(TokenResp { token: bff_token.token, username: user.username }).into_response()
 }
 
 // ---- Token introspection → JWT ----
@@ -426,19 +419,16 @@ async fn register(
 
     match user {
         Ok(u) => {
-            let token = Ulid::new().to_string();
-            if let Err(e) =
-                sqlx::query("INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2)")
-                    .bind(&token)
-                    .bind(u.id)
-                    .execute(&state.db)
-                    .await
-            {
-                tracing::error!(user_id = u.id, error = %e, "failed to insert bff_token after register");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            match create_bff_token(&state.db, u.id).await {
+                Ok(bff_token) => {
+                    tracing::info!(user_id = u.id, username = %u.username, "registration succeeded");
+                    Json(TokenResp { token: bff_token.token, username: u.username }).into_response()
+                }
+                Err(e) => {
+                    tracing::error!(user_id = u.id, error = %e, "failed to insert bff_token after register");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
             }
-            tracing::info!(user_id = u.id, username = %u.username, "registration succeeded");
-            Json(TokenResp { token, username: u.username }).into_response()
         }
         Err(sqlx::Error::Database(db_err)) => {
             match db_err.constraint() {

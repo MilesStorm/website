@@ -1,5 +1,6 @@
 use axum::Json;
 use axum_login::{AuthUser, AuthnBackend, UserId};
+use chrono::{DateTime, Utc};
 use oauth2::{
     AuthorizationCode, CsrfToken, EndpointNotSet, EndpointSet, RedirectUrl, Scope, TokenResponse,
     basic::{BasicClient, BasicRequestTokenError},
@@ -25,6 +26,13 @@ pub struct ClientUser {
     pub id: i64,
     pub username: String,
     pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BffToken {
+    pub token: String,
+    pub user_id: i64,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
