@@ -244,9 +244,11 @@ pub async fn register_password(
 }
 
 /// Returns the auth service URL for a given OAuth provider init endpoint.
+/// Uses PUBLIC_AUTH_URL (browser-facing base) rather than AUTH_SERVICE_URL (internal cluster URL)
+/// so the browser can actually reach it. Empty string → relative path, which Istio routes to auth.
 #[server]
 pub async fn get_oauth_init_url(provider: String) -> Result<String, ServerFnError> {
-    let base = std::env::var("AUTH_SERVICE_URL")
+    let base = std::env::var("PUBLIC_AUTH_URL")
         .unwrap_or_else(|_| "http://localhost:7070".to_string());
     Ok(format!("{}/api/login/{}/init", base, provider))
 }

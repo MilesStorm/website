@@ -37,7 +37,8 @@
 
 | Variable | Default | Description |
 |---|---|---|
-| `AUTH_SERVICE_URL` | `http://localhost:7070` | Internal URL of the auth service. In the cluster set to `http://auth-service.auth.svc.cluster.local`. |
+| `AUTH_SERVICE_URL` | `http://localhost:7070` | Internal URL of the auth service used for server-to-server calls. In the cluster set to `http://auth-service.auth.svc.cluster.local`. |
+| `PUBLIC_AUTH_URL` | `http://localhost:7070` | Public base URL of the auth service used for browser-facing OAuth redirects. In production set to `https://milesstorm.com` (Istio routes `/api/*` to auth). |
 | `IP` | `127.0.0.1` | Bind address for the Dioxus fullstack server. Set to `0.0.0.0` in the Dockerfile so the istio sidecar (and any in-cluster traffic) can reach the pod. |
 | `PORT` | `8080` | Port the Dioxus fullstack server binds to. Set to `80` in the Dockerfile so K8s manifests don't need changing. |
 | `RUST_LOG` | `info,dioxus=warn,tower_sessions=warn` | Log filter string. |
