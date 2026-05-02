@@ -42,6 +42,7 @@ COPY --from=builder /app/packages/web/dist/public ./public
 USER appuser
 
 ENV RUST_LOG=info
+ENV IP=0.0.0.0
 ENV PORT=80
 ENV AUTH_SERVICE_URL=
 ENV BFF_SERVICE_SECRET=
