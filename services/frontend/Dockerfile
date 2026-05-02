@@ -32,15 +32,17 @@ RUN apt-get update && \
 RUN useradd -m -d /home/appuser appuser
 
 WORKDIR /app
-# Copy the server binary and the static public assets it serves
-COPY --from=builder /app/target/dx/web/release/web/server ./server
-COPY --from=builder /app/target/dx/web/release/web/public ./public
+# Copy the server binary and the static public assets it serves.
+# out_dir = "dist" in Dioxus.toml puts the bundle under packages/web/dist/
+COPY --from=builder /app/packages/web/dist/server ./server
+COPY --from=builder /app/packages/web/dist/public ./public
 
 USER appuser
 
 ENV RUST_LOG=info
+ENV PORT=80
 ENV AUTH_SERVICE_URL=
 ENV BFF_SERVICE_SECRET=
 
-EXPOSE 8080
+EXPOSE 80
 CMD ["/app/server"]

@@ -8,3 +8,7 @@
 
 # tailwind stuff
 node_modules
+
+# dx build artifacts
+/static
+**/dist
