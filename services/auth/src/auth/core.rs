@@ -36,12 +36,13 @@ pub struct NextUrl {
 
 pub fn router() -> Router<()> {
     Router::new()
+        .route("/api/logout", get(self::get::logout))
+        .route_layer(login_required!(Backend, login_url = "/api/login"))
+        // Registration is intentionally outside login_required
         .route(
             "/api/register/password",
             post(self::post::register::password),
         )
-        .route("/api/logout", get(self::get::logout))
-        .route_layer(login_required!(Backend, login_url = "/api/login"))
         .route("/api/login/password", post(self::post::login::password))
         .route("/api/login/github", post(self::post::login::github))
         .route("/api/login/google", post(self::post::login::google))
@@ -130,7 +131,8 @@ mod post {
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
-            dbg!(&user);
+            let client_user = ClientUser::from(user);
+            tracing::info!(user_id = client_user.id, username = %client_user.username, "legacy password login succeeded");
 
             if let Some(ref next) = creds.next {
                 // Redirect::to(next).into_response();
@@ -142,7 +144,7 @@ mod post {
                 // Redirect::to("/").into_response()
                 Json(ApiResponse {
                     message: "Login successful".to_string(),
-                    user: Some(ClientUser::from(user)),
+                    user: Some(client_user),
                 })
                 .into_response()
             }

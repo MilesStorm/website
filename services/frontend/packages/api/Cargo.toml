@@ -1,0 +1,20 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dioxus = { workspace = true, features = ["fullstack"] }
+ui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ulid = { workspace = true }
+reqwest = { workspace = true }
+jsonwebtoken = { workspace = true }
+
+http = "1"
+tracing = { workspace = true }
+tower-sessions = { workspace = true, optional = true }
+
+[features]
+server = ["dioxus/server", "dep:tower-sessions"]

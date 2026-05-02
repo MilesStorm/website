@@ -12,6 +12,7 @@ use axum::{
 use axum_login::tower_sessions::Session;
 use oauth2::CsrfToken;
 use serde::Deserialize;
+use ulid::Ulid;
 
 pub const CSRF_STATE_KEY: &str = "oauth.csrf-state";
 
@@ -21,10 +22,19 @@ pub struct AuthzResp {
     state: CsrfToken,
 }
 
+#[derive(Deserialize)]
+pub struct NextQuery {
+    next: Option<String>,
+}
+
 use crate::auth::user::{AuthSession, Credentials};
 
 pub fn router() -> Router<()> {
     Router::new()
+        // Browser-navigable init endpoints (set CSRF session cookie, redirect to provider)
+        .route("/api/login/github/init", get(self::get::github_init))
+        .route("/api/login/google/init", get(self::get::google_init))
+        // OAuth provider callbacks
         .route(
             "/api/login/github/callback",
             get(self::get::github_callback),
@@ -37,12 +47,55 @@ pub fn router() -> Router<()> {
 
 mod get {
     use crate::auth::user::BackendError;
+    use axum_login::AuthUser as _;
 
     use super::*;
 
+    // ---- OAuth init: browser navigates here directly to start the OAuth flow ----
+
+    pub async fn github_init(
+        auth_session: AuthSession,
+        session: Session,
+        Query(NextQuery { next }): Query<NextQuery>,
+    ) -> impl IntoResponse {
+        let (auth_url, csrf_state) = auth_session.backend.authorize_url();
+
+        session
+            .insert(CSRF_STATE_KEY, csrf_state.secret())
+            .await
+            .expect("Serialization should not fail.");
+        session
+            .insert(NEXT_URL_KEY, next)
+            .await
+            .expect("Serialization should not fail.");
+
+        Redirect::to(auth_url.as_str()).into_response()
+    }
+
+    pub async fn google_init(
+        auth_session: AuthSession,
+        session: Session,
+        Query(NextQuery { next }): Query<NextQuery>,
+    ) -> impl IntoResponse {
+        let (auth_url, csrf_state) = auth_session.backend.authorize_g_url();
+
+        session
+            .insert(CSRF_STATE_KEY, csrf_state.secret())
+            .await
+            .expect("Serialization should not fail.");
+        session
+            .insert(NEXT_URL_KEY, next)
+            .await
+            .expect("Serialization should not fail.");
+
+        Redirect::to(auth_url.as_str()).into_response()
+    }
+
+    // ---- OAuth callbacks: authenticate user, create handoff code, redirect to BFF ----
+
     #[axum::debug_handler]
     pub async fn github_callback(
-        mut auth_session: AuthSession,
+        auth_session: AuthSession,
         session: Session,
         Query(AuthzResp {
             code,
@@ -52,7 +105,6 @@ mod get {
         let Ok(Some(old_state)) = session.get(CSRF_STATE_KEY).await else {
             return StatusCode::BAD_REQUEST.into_response();
         };
-        tracing::info!("Old state: {:?}", old_state);
 
         let creds = Credentials::AccessToken(OAuthCreds {
             code,
@@ -63,84 +115,85 @@ mod get {
         let user: User = match auth_session.authenticate(creds).await {
             Ok(Some(user)) => user,
             Ok(None) => {
-                tracing::error!("Error authenticating user");
-                return (StatusCode::UNAUTHORIZED, "Invalid CSRF state.".to_string())
-                    .into_response();
+                tracing::warn!("github oauth: invalid CSRF state");
+                return (StatusCode::UNAUTHORIZED, "Invalid CSRF state.").into_response();
             }
             Err(e) => {
-                tracing::error!("Error authenticating user: {:?}", e);
+                tracing::error!(error = ?e, "github oauth: authentication error");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
 
-        if auth_session.login(&user).await.is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-
-        if let Ok(Some(next)) = session.remove::<String>(NEXT_URL_KEY).await {
-            Redirect::to(&next).into_response()
-        } else {
-            Redirect::to("/").into_response()
-        }
+        tracing::info!(user_id = user.id(), "github oauth login succeeded");
+        redirect_to_bff_with_handoff(&auth_session.backend.db, user.id()).await
     }
 
     pub async fn google_callback(
-        mut auth_session: AuthSession,
+        auth_session: AuthSession,
         session: Session,
         Query(AuthzResp {
             code,
             state: new_state,
         }): Query<AuthzResp>,
     ) -> impl IntoResponse {
-        tracing::info!("Google callback");
         let Ok(Some(old_state)) = session.get(CSRF_STATE_KEY).await else {
             return StatusCode::BAD_REQUEST.into_response();
         };
 
-        tracing::info!("code: {}", code);
-        tracing::info!("new state: {:?}", new_state);
-        tracing::info!("Old state: {:?}", old_state);
-
-        let creds = Credentials::GoogleToken(OAuthCreds {
-            code: code.clone(),
-            old_state,
-            new_state,
-        });
-
-        tracing::info!("trying to authenticate: {:?}", creds);
-        match auth_session.authenticate(creds).await {
+        match auth_session
+            .authenticate(Credentials::GoogleToken(OAuthCreds {
+                code,
+                old_state,
+                new_state,
+            }))
+            .await
+        {
             Ok(Some(user)) => {
-                tracing::info!("found User: {:?}", user);
-                if auth_session.login(&user).await.is_err() {
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
-
-                if let Ok(Some(next)) = session.remove::<String>(NEXT_URL_KEY).await {
-                    Redirect::to(&next).into_response()
-                } else {
-                    Redirect::to("/").into_response()
-                }
+                tracing::info!(user_id = user.id(), "google oauth login succeeded");
+                redirect_to_bff_with_handoff(&auth_session.backend.db, user.id()).await
             }
             Ok(None) => {
-                tracing::error!("Error authenticating user");
-                (StatusCode::UNAUTHORIZED, "Invalid CSRF state.".to_string()).into_response()
+                tracing::warn!("google oauth: invalid CSRF state");
+                (StatusCode::UNAUTHORIZED, "Invalid CSRF state.").into_response()
             }
             Err(e) => match e {
                 axum_login::Error::Backend(be) => match be {
                     BackendError::EmailAlreadyInUse => {
-                        tracing::error!("Error authenticating user: {:?}", &be);
-                        Redirect::to("/login?error=email_exists").into_response()
+                        tracing::warn!("google oauth: email already in use by a password account");
+                        let bff_url = bff_base();
+                        Redirect::to(&format!("{}/login?error=email_exists", bff_url))
+                            .into_response()
                     }
                     _ => {
-                        tracing::error!("Error authenticating user backend: {:?}", &be);
+                        tracing::error!(error = ?be, "google oauth: backend error");
                         StatusCode::INTERNAL_SERVER_ERROR.into_response()
                     }
                 },
-                axum_login::Error::Session(_) => {
-                    tracing::error!("Error authenticating user session: {:?}", &e);
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+                _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             },
         }
+    }
+
+    fn bff_base() -> String {
+        std::env::var("BFF_CALLBACK_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+    }
+
+    async fn redirect_to_bff_with_handoff(
+        db: &sqlx::PgPool,
+        user_id: i64,
+    ) -> axum::response::Response {
+        let code = Ulid::new().to_string();
+        if let Err(e) =
+            sqlx::query("INSERT INTO oauth_handoff_codes (code, user_id) VALUES ($1, $2)")
+                .bind(&code)
+                .bind(user_id)
+                .execute(db)
+                .await
+        {
+            tracing::error!("Failed to insert handoff code: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+
+        Redirect::to(&format!("{}/oauth/callback?code={}", bff_base(), code)).into_response()
     }
 }

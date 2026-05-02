@@ -75,8 +75,18 @@ spec:
               app: frontend
       containers:
       - name: frontend
-        image: ghcr.io/milesstorm/frontend:latest 
+        image: ghcr.io/milesstorm/frontend:latest
         ports:
-        - containerPort: 80  # Exposing internal port 80
+        - containerPort: 80
+        env:
+          - name: AUTH_SERVICE_URL
+            value: "http://auth-service.auth.svc.cluster.local"
+          - name: BFF_SERVICE_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: bff-service-secret
+                key: BFF_SERVICE_SECRET
+          - name: RUST_LOG
+            value: "info"
       imagePullSecrets:
         - name: dockerconfigjson-github-com

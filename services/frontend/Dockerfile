@@ -1,6 +1,5 @@
 FROM lukemathwalker/cargo-chef:latest AS chef
 
-# Install build tools
 RUN rustup target add wasm32-unknown-unknown
 
 FROM chef AS planner
@@ -8,30 +7,42 @@ WORKDIR /app
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Cook the dependencies using the recipe prepared earlier
 FROM chef AS builder
 WORKDIR /app
 COPY --from=planner /app/recipe.json recipe.json
+# Cook deps for both the WASM client and the native server targets
 RUN cargo chef cook --release --recipe-path recipe.json --target wasm32-unknown-unknown
+RUN cargo chef cook --release --recipe-path recipe.json
 
-# install dx
+# Install dioxus-cli
 RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 RUN cargo binstall dioxus-cli --root /.cargo -y --force
 ENV PATH="/.cargo/bin:$PATH"
 
-# Copy over the source code and build the project
 COPY . .
-RUN dx bundle --platform web --debug-symbols=false --release
+# Run dx bundle from the package directory so Dioxus.toml is picked up
+WORKDIR /app/packages/web
+RUN dx bundle --platform web --release --debug-symbols=false
 
-# Final stage: Copy the built files to an nginx image to serve the website
-FROM nginx:alpine AS runtime
-COPY nginx.conf /etc/nginx/nginx.conf
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openssl libssl3 ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy the built static files from the frontend-builder stage
-WORKDIR /usr/share/nginx/html
-COPY --from=builder /app/target/dx/frontend/release/web/public ./
-COPY --from=builder /app/target/dx/frontend/release/web/public/assets ./
+RUN useradd -m -d /home/appuser appuser
 
-# Expose port and run nginx
+WORKDIR /app
+# Copy the server binary and the static public assets it serves.
+# out_dir = "dist" in Dioxus.toml puts the bundle under packages/web/dist/
+COPY --from=builder /app/packages/web/dist/server ./server
+COPY --from=builder /app/packages/web/dist/public ./public
+
+USER appuser
+
+ENV RUST_LOG=info
+ENV PORT=80
+ENV AUTH_SERVICE_URL=
+ENV BFF_SERVICE_SECRET=
+
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/app/server"]

@@ -58,6 +58,18 @@ spec:
               secretKeyRef:
                 name: google-client-secret-secret
                 key: G_CLIENT_SECRET
+          - name: JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: jwt-secret
+                key: JWT_SECRET
+          - name: BFF_SERVICE_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: bff-service-secret
+                key: BFF_SERVICE_SECRET
+          - name: BFF_CALLBACK_URL
+            value: "https://milesstorm.com"
           - name: SERVER_IP
             value: "0.0.0.0"
           - name: RUST_LOG

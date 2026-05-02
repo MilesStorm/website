@@ -1,0 +1,12 @@
+[application]
+name = "web"
+default_platform = "web"
+out_dir = "dist"
+tailwind_input = "../ui/tailwind.css"
+tailwind_output = "../ui/assets/styling/tailwind.css"
+
+[web.app]
+title = "MilesStorm"
+
+[web.wasm_opt]
+level = "4"

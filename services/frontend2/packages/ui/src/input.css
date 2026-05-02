@@ -1,4 +1,0 @@
-@import "tailwindcss";
-@source "./src/**/*.{rs,html,css}";
-@import "tailwind/preflight";
-@import utilities;

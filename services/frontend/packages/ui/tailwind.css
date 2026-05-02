@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import utilities;
+@plugin "daisyui" {
+  themes: light, dark, dracula, synthwave, retro, dim, corporate;
+}
+@source "./src/**/*.{rs,html,css}";
+@source "../web/src/**/*.rs";

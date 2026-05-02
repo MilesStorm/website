@@ -18,3 +18,8 @@ art_bk/
 data/
 data_pre/
 target
+
+CLAUDE.md
+AGENTS.md
+
+.env
