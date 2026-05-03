@@ -9,7 +9,7 @@ FROM chef AS builder
 # clang: required by ring (via jsonwebtoken) for wasm32
 # nodejs: required to run tailwindcss + daisyui to generate CSS before dx bundle
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends clang curl ca-certificates && \
+    apt-get install -y --no-install-recommends clang curl ca-certificates build-essential && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
@@ -39,7 +39,7 @@ RUN dx bundle --platform web --release --debug-symbols=false
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends openssl libssl3 ca-certificates && \
+    apt-get install -y --no-install-recommends openssl libssl3 ca-certificates build-essential && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -d /home/appuser appuser
