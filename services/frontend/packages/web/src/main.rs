@@ -53,7 +53,9 @@ fn server_launch() -> ! {
 
     let redis_host = std::env::var("REDIS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let redis_port = std::env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
-    let redis_password = std::env::var("REDIS_PASSWORD").ok().filter(|s| !s.is_empty());
+    let redis_password = std::env::var("REDIS_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty());
     let redis_url = match &redis_password {
         Some(p) => format!("redis://:{p}@{redis_host}:{redis_port}"),
         None => format!("redis://{redis_host}:{redis_port}"),
@@ -62,8 +64,6 @@ fn server_launch() -> ! {
     dioxus::serve(move || {
         let redis_url = redis_url.clone();
         async move {
-            use dioxus::server::IncrementalRendererConfig;
-
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
             let pool = Pool::new(config, None, None, None, 6).expect("failed to build Redis pool");
             pool.connect();
@@ -78,11 +78,8 @@ fn server_launch() -> ! {
                 .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
             let router = Router::new()
+                .serve_dioxus_application(ServeConfig::default(), App)
                 .route("/oauth/callback", get(oauth_callback))
-                .serve_dioxus_application(
-                    ServeConfig::default().incremental(IncrementalRendererConfig::default()),
-                    App,
-                )
                 .layer(layer);
             Ok(router)
         }
