@@ -8,8 +8,8 @@ use crate::LOGIN_STATUS;
 
 #[component]
 pub fn Login(error: String) -> Element {
-    let github_url = use_resource(|| async move { get_oauth_init_url("github".to_string()).await });
-    let google_url = use_resource(|| async move { get_oauth_init_url("google".to_string()).await });
+    let github_url = use_server_future(|| get_oauth_init_url("github".to_string()))?;
+    let google_url = use_server_future(|| get_oauth_init_url("google".to_string()))?;
 
     let mut login_error = use_signal(String::new);
 
@@ -103,8 +103,8 @@ pub fn Login(error: String) -> Element {
 
 #[component]
 pub fn Register() -> Element {
-    let github_url = use_resource(|| async move { get_oauth_init_url("github".to_string()).await });
-    let google_url = use_resource(|| async move { get_oauth_init_url("google".to_string()).await });
+    let github_url = use_server_future(|| get_oauth_init_url("github".to_string()))?;
+    let google_url = use_server_future(|| get_oauth_init_url("google".to_string()))?;
 
     let mut reg_error = use_signal(String::new);
 
