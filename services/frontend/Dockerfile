@@ -6,8 +6,13 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-# clang is required by ring (via jsonwebtoken) when compiling for wasm32
-RUN apt-get update && apt-get install -y --no-install-recommends clang && rm -rf /var/lib/apt/lists/*
+# clang: required by ring (via jsonwebtoken) for wasm32
+# nodejs: required to run tailwindcss + daisyui to generate CSS before dx bundle
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends clang curl ca-certificates && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=planner /app/recipe.json recipe.json
 # Cook native server deps; dx bundle manages the WASM dep compilation internally
@@ -22,6 +27,12 @@ ENV PATH="/.cargo/bin:$PATH"
 RUN rustup target add wasm32-unknown-unknown
 
 COPY . .
+
+# Generate Tailwind CSS before dx bundle — the asset! macro checks file existence at compile time
+WORKDIR /app
+RUN npm install && \
+    node_modules/.bin/tailwindcss -i packages/ui/tailwind.css -o packages/ui/assets/styling/tailwind.css --minify
+
 # Run dx bundle from the package directory so Dioxus.toml is picked up
 WORKDIR /app/packages/web
 RUN dx bundle --platform web --release --debug-symbols=false
