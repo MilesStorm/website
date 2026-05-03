@@ -12,3 +12,6 @@ node_modules
 # dx build artifacts
 /static
 **/dist
+
+# generated tailwind output (produced by dx build/serve/bundle)
+packages/ui/assets/styling/tailwind.css
