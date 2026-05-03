@@ -88,6 +88,15 @@ spec:
               secretKeyRef:
                 name: bff-service-secret
                 key: BFF_SERVICE_SECRET
+          - name: REDIS_HOST
+            value: "redis-master.redis.svc.cluster.local"
+          - name: REDIS_PORT
+            value: "6379"
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: redis
+                key: redis-password
           - name: RUST_LOG
             value: "info"
       imagePullSecrets:

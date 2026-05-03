@@ -37,7 +37,9 @@ fn server_launch() -> ! {
     use axum::{routing::get, Router};
     use tower_sessions::cookie::time::Duration;
     use tower_sessions::cookie::SameSite;
-    use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
+    use tower_sessions::{Expiry, SessionManagerLayer};
+    use tower_sessions_redis_store::fred::prelude::*;
+    use tower_sessions_redis_store::RedisStore;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
     // try_init() is a no-op if something already registered a subscriber, so this is safe.
@@ -49,16 +51,31 @@ fn server_launch() -> ! {
         .try_init()
         .ok();
 
-    let session_store = MemoryStore::default();
+    let redis_host = std::env::var("REDIS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let redis_port = std::env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
+    let redis_password = std::env::var("REDIS_PASSWORD").ok().filter(|s| !s.is_empty());
+    let redis_url = match &redis_password {
+        Some(p) => format!("redis://:{p}@{redis_host}:{redis_port}"),
+        None => format!("redis://{redis_host}:{redis_port}"),
+    };
 
     dioxus::serve(move || {
-        let layer = SessionManagerLayer::new(session_store.clone())
-            .with_secure(false)
-            .with_same_site(SameSite::Lax)
-            .with_expiry(Expiry::OnInactivity(Duration::days(7)));
-
+        let redis_url = redis_url.clone();
         async move {
             use dioxus::server::IncrementalRendererConfig;
+
+            let config = Config::from_url(&redis_url).expect("invalid Redis URL");
+            let pool = Pool::new(config, None, None, None, 6).expect("failed to build Redis pool");
+            pool.connect();
+            pool.wait_for_connect()
+                .await
+                .expect("failed to connect to Redis");
+            let session_store = RedisStore::new(pool);
+
+            let layer = SessionManagerLayer::new(session_store)
+                .with_secure(false)
+                .with_same_site(SameSite::Lax)
+                .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
             let router = Router::new()
                 .route("/oauth/callback", get(oauth_callback))

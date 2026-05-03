@@ -1,6 +1,6 @@
 [package]
 name = "web"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 
 [dependencies]
@@ -12,6 +12,7 @@ manganis = { version = "0.7.7", features = ["dioxus"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dotenvy = { workspace = true }
 tower-sessions = { workspace = true }
+tower-sessions-redis-store = { workspace = true }
 axum = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

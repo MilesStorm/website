@@ -38,9 +38,12 @@
 | Variable | Default | Description |
 |---|---|---|
 | `AUTH_SERVICE_URL` | `http://localhost:7070` | Internal URL of the auth service used for server-to-server calls. In the cluster set to `http://auth-service.auth.svc.cluster.local`. |
-| `PUBLIC_AUTH_URL` | `http://localhost:7070` | Public base URL of the auth service used for browser-facing OAuth redirects. In production set to `https://milesstorm.com` (Istio routes `/api/*` to auth). |
+| `PUBLIC_AUTH_URL` | `http://localhost:7070` | Public base URL of the auth service used for browser-facing OAuth redirects. In production set to `https://milesstorm.com` (Istio routes `/auth/*` to auth). |
 | `IP` | `127.0.0.1` | Bind address for the Dioxus fullstack server. Set to `0.0.0.0` in the Dockerfile so the istio sidecar (and any in-cluster traffic) can reach the pod. |
 | `PORT` | `8080` | Port the Dioxus fullstack server binds to. Set to `80` in the Dockerfile so K8s manifests don't need changing. |
+| `REDIS_HOST` | `127.0.0.1` | Hostname of the Redis instance used as the `tower-sessions` store. In the cluster set to `redis-master.redis.svc.cluster.local`. Required in any multi-replica deploy — `MemoryStore` is per-process and breaks under `replicas > 1`. |
+| `REDIS_PORT` | `6379` | Redis port. |
+| `REDIS_PASSWORD` | _(empty)_ | Redis AUTH password. Empty/unset disables AUTH (fine for local Docker Compose). In the cluster injected from the `redis` secret (key `redis-password`), mirrored into the `frontend` namespace by Reflector. |
 | `RUST_LOG` | `info,dioxus=warn,tower_sessions=warn` | Log filter string. |
 
 ---
