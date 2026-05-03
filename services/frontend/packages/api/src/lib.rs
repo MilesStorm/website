@@ -102,7 +102,7 @@ pub struct DockerRequestResponse {
 // ---- Server functions ----
 
 /// Log in with username + password.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn login_password(
     username: String,
     password: String,
@@ -151,7 +151,7 @@ pub async fn login_password(
 }
 
 /// Clear the current session.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn logout() -> Result<(), ServerFnError> {
     use session::*;
 
@@ -166,7 +166,7 @@ pub async fn logout() -> Result<(), ServerFnError> {
 }
 
 /// Check the current login status from the BFF session.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
     use session::*;
 
@@ -187,7 +187,7 @@ pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
 }
 
 /// Register a new account and auto-login on success.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn register_password(
     username: String,
     email: String,
@@ -246,15 +246,15 @@ pub async fn register_password(
 /// Returns the auth service URL for a given OAuth provider init endpoint.
 /// Uses PUBLIC_AUTH_URL (browser-facing base) rather than AUTH_SERVICE_URL (internal cluster URL)
 /// so the browser can actually reach it. Empty string → relative path, which Istio routes to auth.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn get_oauth_init_url(provider: String) -> Result<String, ServerFnError> {
     let base = std::env::var("PUBLIC_AUTH_URL")
         .unwrap_or_else(|_| "http://localhost:7070".to_string());
-    Ok(format!("{}/api/login/{}/init", base, provider))
+    Ok(format!("{}/auth/login/{}/init", base, provider))
 }
 
 /// Returns the list of permission names held by the current session's user.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
     use session::*;
 
@@ -303,7 +303,7 @@ pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
 }
 
 /// Check whether the current user holds a specific permission.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
     let result = get_my_permissions().await?.contains(&name);
     tracing::debug!(permission = %name, granted = result, "permission check");
@@ -311,7 +311,7 @@ pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
 }
 
 /// Get the number of active players on the Ark server.
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn ark_player_count() -> Result<i32, ServerFnError> {
     use session::*;
 
@@ -351,7 +351,7 @@ pub async fn ark_player_count() -> Result<i32, ServerFnError> {
 }
 
 /// Execute an Ark server command (start | stop | restart).
-#[server]
+#[server(endpoint = "/bff")]
 pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
     use session::*;
 

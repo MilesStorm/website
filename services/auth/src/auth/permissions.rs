@@ -70,22 +70,22 @@ impl Display for Operation {
 pub fn router() -> Router<()> {
     Router::new()
         .route(
-            "/api/permission/valheim_player/restart",
+            "/auth/permission/valheim_player/restart",
             get(self::get::restart_valheim),
         )
-        .route("/api/permission/ark/restart", get(self::get::restart_ark))
-        .route("/api/permission/ark/num_players", get(self::get::count_ark))
-        .route("/api/permission/ark/start", get(self::get::start_ark))
-        .route("/api/permission/ark/stop", get(self::get::stop_ark))
+        .route("/auth/permission/ark/restart", get(self::get::restart_ark))
+        .route("/auth/permission/ark/num_players", get(self::get::count_ark))
+        .route("/auth/permission/ark/start", get(self::get::start_ark))
+        .route("/auth/permission/ark/stop", get(self::get::stop_ark))
         .route_layer(permission_required!(
             Backend,
-            login_url = "/api/login",
+            login_url = "/auth/login",
             "llama"
         ))
-        .route("/api/permission/valheim_player", get(self::get::permission))
-        .route("/api/permission/ark", get(self::get::permission))
-        .route("/api/permission/llama", get(self::get::permission))
-        .route("/api/permission/photoview", get(self::get::permission))
+        .route("/auth/permission/valheim_player", get(self::get::permission))
+        .route("/auth/permission/ark", get(self::get::permission))
+        .route("/auth/permission/llama", get(self::get::permission))
+        .route("/auth/permission/photoview", get(self::get::permission))
 }
 
 mod get {

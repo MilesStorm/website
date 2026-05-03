@@ -203,9 +203,9 @@ impl Backend {
             .expect("Could not build http_Client");
         let g_client = g_client.set_redirect_uri(
             RedirectUrl::new(String::from(if cfg!(debug_assertions) {
-                "http://localhost:8080/api/login/google/callback"
+                "http://localhost:8080/auth/login/google/callback"
             } else {
-                "https://milesstorm.com/api/login/google/callback"
+                "https://milesstorm.com/auth/login/google/callback"
             }))
             .expect("invalid redirect uri"),
         );

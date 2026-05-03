@@ -116,7 +116,7 @@ impl Auth {
         };
 
         let app = Router::new()
-            .route("/api", get(handler))
+            .route("/auth", get(handler))
             .merge(internal::router(internal_state))
             .merge(protected_route::router())
             .merge(permissions::router())

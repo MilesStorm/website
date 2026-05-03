@@ -1,7 +1,7 @@
 use axum::{response::IntoResponse, routing::get, Router};
 
 pub fn router() -> Router<()> {
-    Router::new().route("/api/login/status", get(self::get::protected))
+    Router::new().route("/auth/login/status", get(self::get::protected))
 }
 
 mod get {

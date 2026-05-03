@@ -62,7 +62,6 @@ fn server_launch() -> ! {
 
             let router = Router::new()
                 .route("/oauth/callback", get(oauth_callback))
-                .route("/api/login/google/callback", get(google_callback))
                 .serve_dioxus_application(
                     ServeConfig::default().incremental(IncrementalRendererConfig::default()),
                     App,

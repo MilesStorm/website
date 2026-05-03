@@ -36,17 +36,17 @@ pub struct NextUrl {
 
 pub fn router() -> Router<()> {
     Router::new()
-        .route("/api/logout", get(self::get::logout))
-        .route_layer(login_required!(Backend, login_url = "/api/login"))
+        .route("/auth/logout", get(self::get::logout))
+        .route_layer(login_required!(Backend, login_url = "/auth/login"))
         // Registration is intentionally outside login_required
         .route(
-            "/api/register/password",
+            "/auth/register/password",
             post(self::post::register::password),
         )
-        .route("/api/login/password", post(self::post::login::password))
-        .route("/api/login/github", post(self::post::login::github))
-        .route("/api/login/google", post(self::post::login::google))
-        .route("/api/login", get(self::get::login))
+        .route("/auth/login/password", post(self::post::login::password))
+        .route("/auth/login/github", post(self::post::login::github))
+        .route("/auth/login/google", post(self::post::login::google))
+        .route("/auth/login", get(self::get::login))
 }
 
 mod post {

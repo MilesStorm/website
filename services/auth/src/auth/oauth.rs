@@ -32,15 +32,15 @@ use crate::auth::user::{AuthSession, Credentials};
 pub fn router() -> Router<()> {
     Router::new()
         // Browser-navigable init endpoints (set CSRF session cookie, redirect to provider)
-        .route("/api/login/github/init", get(self::get::github_init))
-        .route("/api/login/google/init", get(self::get::google_init))
+        .route("/auth/login/github/init", get(self::get::github_init))
+        .route("/auth/login/google/init", get(self::get::google_init))
         // OAuth provider callbacks
         .route(
-            "/api/login/github/callback",
+            "/auth/login/github/callback",
             get(self::get::github_callback),
         )
         .route(
-            "/api/login/google/callback",
+            "/auth/login/google/callback",
             get(self::get::google_callback),
         )
 }

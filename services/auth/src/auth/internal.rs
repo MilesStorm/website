@@ -209,7 +209,7 @@ async fn exchange_google(
     Json(req): Json<GoogleExchangeReq>,
 ) -> impl IntoResponse {
     let redirect_uri = RedirectUrl::new(format!(
-        "{}/api/login/google/callback",
+        "{}/auth/login/google/callback",
         state.bff_callback_url
     ))
     .expect("invalid redirect uri");

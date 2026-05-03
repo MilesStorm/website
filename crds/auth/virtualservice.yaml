@@ -7,13 +7,23 @@ spec:
   hosts:
   - milesstorm.com
   gateways:
-  - public-gateway  # Name of your gateway
+  - public-gateway
   http:
+  # Only OAuth init + callback paths are publicly reachable. Every other
+  # /auth/* route exists for legacy/internal reasons and must not be
+  # exposed via the public gateway. /internal/* is intentionally absent —
+  # it is reachable only in-cluster via auth-service.auth.svc.cluster.local.
   - match:
     - uri:
-        prefix: /api
+        prefix: /auth/login/google/init
+    - uri:
+        prefix: /auth/login/google/callback
+    - uri:
+        prefix: /auth/login/github/init
+    - uri:
+        prefix: /auth/login/github/callback
     route:
     - destination:
-        host: auth-service.auth.svc.cluster.local  # Name of your service
+        host: auth-service.auth.svc.cluster.local
         port:
           number: 80
