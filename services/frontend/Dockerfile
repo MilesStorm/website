@@ -39,7 +39,7 @@ RUN dx bundle --platform web --release --debug-symbols=false
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends openssl libssl3 ca-certificates build-essential && \
+    apt-get install -y --no-install-recommends openssl libssl3 ca-certificates libc6 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -d /home/appuser appuser
