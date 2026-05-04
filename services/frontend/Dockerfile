@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-latest-bookworm AS chef
+FROM lukemathwalker/cargo-chef:latest AS chef
 
 FROM chef AS planner
 WORKDIR /app
@@ -37,7 +37,7 @@ RUN npm install && \
 WORKDIR /app/packages/web
 RUN dx bundle --platform web --release --debug-symbols=false
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 RUN apt-get update && \
     apt-get install -y --no-install-recommends openssl libssl3 ca-certificates libc6 && \
     rm -rf /var/lib/apt/lists/*
