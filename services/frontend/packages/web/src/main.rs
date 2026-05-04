@@ -73,7 +73,9 @@ fn server_launch() -> ! {
             let session_store = RedisStore::new(pool);
 
             let layer = SessionManagerLayer::new(session_store)
-                .with_secure(false)
+                // BFF cookie carries the user's login session token. Require Secure (HTTPS-only)
+                // in release builds; allow plain HTTP in debug for local `dx serve`.
+                .with_secure(!cfg!(debug_assertions))
                 .with_same_site(SameSite::Lax)
                 .with_name("milesstorm.bff")
                 .with_expiry(Expiry::OnInactivity(Duration::days(7)));
@@ -108,11 +110,20 @@ async fn oauth_start(
 
     match api::start_oauth(&provider).await {
         Ok((auth_url, state)) => {
-            let _ = session.insert(OAUTH_CSRF_KEY, &state).await;
-            let _ = session.insert(OAUTH_PROVIDER_KEY, &provider).await;
+            if let Err(e) = session.insert(OAUTH_CSRF_KEY, &state).await {
+                tracing::error!(error = %e, %provider, "oauth_start: failed to write CSRF state");
+                return Redirect::to("/login?error=session_failed").into_response();
+            }
+            if let Err(e) = session.insert(OAUTH_PROVIDER_KEY, &provider).await {
+                tracing::error!(error = %e, %provider, "oauth_start: failed to write provider");
+                return Redirect::to("/login?error=session_failed").into_response();
+            }
             Redirect::to(&auth_url).into_response()
         }
-        Err(_) => Redirect::to("/login?error=start_failed").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, %provider, "oauth_start: api::start_oauth failed");
+            Redirect::to("/login?error=start_failed").into_response()
+        }
     }
 }
 
@@ -145,14 +156,23 @@ async fn oauth_callback(
 
     match api::exchange_oauth_code(&provider, &code).await {
         Ok((token, username)) => {
-            let _ = session.insert("opaque_token", token).await;
-            let _ = session.insert("username", username).await;
+            if let Err(e) = session.insert("opaque_token", token).await {
+                tracing::error!(error = %e, %provider, "oauth_callback: failed to write opaque_token");
+                return Redirect::to("/login?error=session_failed").into_response();
+            }
+            if let Err(e) = session.insert("username", username).await {
+                tracing::error!(error = %e, %provider, "oauth_callback: failed to write username");
+                return Redirect::to("/login?error=session_failed").into_response();
+            }
             Redirect::to("/").into_response()
         }
         Err(e) if e.contains("email_exists") || e.contains("Email already in use") => {
             Redirect::to("/login?error=email_exists").into_response()
         }
-        Err(_) => Redirect::to("/login?error=exchange_failed").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, %provider, "oauth_callback: exchange_oauth_code failed");
+            Redirect::to("/login?error=exchange_failed").into_response()
+        }
     }
 }
 

@@ -90,7 +90,9 @@ impl Auth {
         );
 
         let session_layer = SessionManagerLayer::new(session_store)
-            .with_secure(false)
+            // Defense-in-depth: even though auth is now cluster-internal, require Secure
+            // cookies in release builds. Debug builds get plain HTTP for local dev.
+            .with_secure(!cfg!(debug_assertions))
             .with_same_site(SameSite::Lax)
             .with_name("milesstorm.auth")
             .with_expiry(Expiry::OnInactivity(Duration::days(7)));

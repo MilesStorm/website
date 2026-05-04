@@ -246,21 +246,25 @@ impl Backend {
                     .await
                     .map_err(BackendError::Reqwest)?;
 
-                let user = sqlx::query_as(
+                // The `WHERE users.password IS NULL` guards against account takeover:
+                // if a password account already owns this username, the conflict update is
+                // skipped, RETURNING yields no row, and we treat that as an account collision.
+                let user: Option<User> = sqlx::query_as(
                     r#"
                     insert into users (username, access_token)
                     values ($1, $2)
                     on conflict(username) do update
                     set access_token = excluded.access_token
+                    where users.password is null
                     returning *
                     "#,
                 )
                 .bind(user_info.login)
                 .bind(token_res.access_token().secret())
-                .fetch_one(&self.db)
+                .fetch_optional(&self.db)
                 .await?;
 
-                Ok(user)
+                user.ok_or(BackendError::EmailAlreadyInUse)
             }
             OAuthProvider::Google => {
                 let token_res = self
@@ -284,18 +288,32 @@ impl Backend {
                     .await
                     .map_err(BackendError::Reqwest)?;
 
+                // Identify Google users by email (unique on Google's side and in our schema).
+                // Matching on `username` would let two Googlers with the same display name
+                // overwrite each other's row.
                 let existing: Option<User> =
                     sqlx::query_as("select * from users where email = $1")
                         .bind(&user_info.email)
                         .fetch_optional(&self.db)
                         .await?;
 
-                if let Some(user) = existing {
-                    if user.password.is_some() {
+                if let Some(existing) = existing {
+                    if existing.password.is_some() {
                         return Err(BackendError::EmailAlreadyInUse);
                     }
+                    // Returning Google user — refresh the access token by id (stable).
+                    let user = sqlx::query_as(
+                        "update users set access_token = $1 where id = $2 returning *",
+                    )
+                    .bind(token_res.access_token().secret())
+                    .bind(existing.id)
+                    .fetch_one(&self.db)
+                    .await?;
+                    return Ok(user);
                 }
 
+                // First-time Google login. A username collision with another account would
+                // surface as a unique-violation Sqlx error rather than silently overwriting.
                 let username = user_info.name.clone().unwrap_or_else(|| {
                     user_info
                         .email
@@ -309,9 +327,6 @@ impl Backend {
                     r#"
                     insert into users (username, email, access_token)
                     values ($1, $2, $3)
-                    on conflict(username) do update
-                    set email = excluded.email,
-                        access_token = excluded.access_token
                     returning *
                     "#,
                 )
