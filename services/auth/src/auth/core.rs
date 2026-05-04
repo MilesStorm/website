@@ -4,13 +4,11 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use axum_login::{login_required, tower_sessions::Session};
+use axum_login::login_required;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
-pub const NEXT_URL_KEY: &str = "auth.next-url";
-
-use crate::auth::{oauth::CSRF_STATE_KEY, user::AuthSession};
+use crate::auth::user::AuthSession;
 
 use super::user::ClientUser;
 
@@ -44,8 +42,6 @@ pub fn router() -> Router<()> {
             post(self::post::register::password),
         )
         .route("/auth/login/password", post(self::post::login::password))
-        .route("/auth/login/github", post(self::post::login::github))
-        .route("/auth/login/google", post(self::post::login::google))
         .route("/auth/login", get(self::get::login))
 }
 
@@ -148,58 +144,6 @@ mod post {
                 })
                 .into_response()
             }
-        }
-
-        #[axum::debug_handler]
-        pub async fn github(
-            auth_session: AuthSession,
-            session: Session,
-            Form(NextUrl { next }): Form<NextUrl>,
-        ) -> impl IntoResponse {
-            let (auth_url, csrf_state) = auth_session.backend.authorize_url();
-
-            session
-                .insert(CSRF_STATE_KEY, csrf_state.secret())
-                .await
-                .expect("Serialization should not fail.");
-
-            session
-                .insert(NEXT_URL_KEY, next)
-                .await
-                .expect("Serialization should not fail.");
-
-            // Redirect::to(auth_url.as_str()).into_response();
-            Json(NextUrl {
-                next: Some(auth_url.to_string()),
-            })
-            .into_response()
-        }
-
-        #[axum::debug_handler]
-        pub async fn google(
-            auth_session: AuthSession,
-            session: Session,
-            Form(NextUrl { next }): Form<NextUrl>,
-        ) -> impl IntoResponse {
-            let (auth_url, csrf_state) = auth_session.backend.authorize_g_url();
-
-            session
-                .insert(CSRF_STATE_KEY, csrf_state.secret())
-                .await
-                .expect("Serialization should not fail.");
-
-            tracing::info!("next: {:?}", &next.clone());
-            session
-                .insert(NEXT_URL_KEY, next)
-                .await
-                .expect("Serialization should not fail.");
-
-            tracing::info!("auth_url: {:?}", auth_url);
-
-            Json(NextUrl {
-                next: Some(auth_url.to_string()),
-            })
-            .into_response()
         }
     }
 }

@@ -75,11 +75,13 @@ fn server_launch() -> ! {
             let layer = SessionManagerLayer::new(session_store)
                 .with_secure(false)
                 .with_same_site(SameSite::Lax)
+                .with_name("milesstorm.bff")
                 .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
             let router = Router::new()
                 .serve_dioxus_application(ServeConfig::default(), App)
-                .route("/oauth/callback", get(oauth_callback))
+                .route("/oauth/start/{provider}", get(oauth_start))
+                .route("/oauth/callback/{provider}", get(oauth_callback))
                 .layer(layer);
             Ok(router)
         }
@@ -88,34 +90,37 @@ fn server_launch() -> ! {
 
 // ---- OAuth Axum handlers ----
 
-/// Handles the BFF handoff redirect from the auth service after any OAuth provider login.
-/// The auth service creates a short-lived code and redirects here; we exchange it for a
-/// session-bound opaque token and redirect the user home.
+const OAUTH_CSRF_KEY: &str = "oauth_csrf_state";
+const OAUTH_PROVIDER_KEY: &str = "oauth_provider";
+
+/// Begin the OAuth flow for `provider`. Asks auth (cluster-internal) for the provider's
+/// authorization URL, stashes the CSRF state in the BFF session, and redirects the browser.
 #[cfg(not(target_arch = "wasm32"))]
-async fn oauth_callback(
+async fn oauth_start(
+    axum::extract::Path(provider): axum::extract::Path<String>,
     session: tower_sessions::Session,
-    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> axum::response::Response {
     use axum::response::{IntoResponse, Redirect};
 
-    let Some(code) = params.get("code").cloned() else {
-        return Redirect::to("/login?error=missing_code").into_response();
-    };
+    if provider != "github" && provider != "google" {
+        return Redirect::to("/login?error=unknown_provider").into_response();
+    }
 
-    match api::exchange_handoff_code(&code).await {
-        Ok((token, username)) => {
-            let _ = session.insert("opaque_token", token).await;
-            let _ = session.insert("username", username).await;
-            Redirect::to("/").into_response()
+    match api::start_oauth(&provider).await {
+        Ok((auth_url, state)) => {
+            let _ = session.insert(OAUTH_CSRF_KEY, &state).await;
+            let _ = session.insert(OAUTH_PROVIDER_KEY, &provider).await;
+            Redirect::to(&auth_url).into_response()
         }
-        Err(_) => Redirect::to("/login?error=exchange_failed").into_response(),
+        Err(_) => Redirect::to("/login?error=start_failed").into_response(),
     }
 }
 
-/// Handles Google OAuth when Google is configured to redirect directly to the BFF
-/// (i.e. the redirect_uri is the BFF rather than the auth service).
+/// Provider callback. Validates CSRF state, asks auth to exchange the code, and
+/// stores the resulting opaque token + username on the BFF session.
 #[cfg(not(target_arch = "wasm32"))]
-async fn google_callback(
+async fn oauth_callback(
+    axum::extract::Path(provider): axum::extract::Path<String>,
     session: tower_sessions::Session,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> axum::response::Response {
@@ -124,8 +129,21 @@ async fn google_callback(
     let Some(code) = params.get("code").cloned() else {
         return Redirect::to("/login?error=missing_code").into_response();
     };
+    let Some(state) = params.get("state").cloned() else {
+        return Redirect::to("/login?error=missing_state").into_response();
+    };
 
-    match api::exchange_google_auth_code(&code).await {
+    let expected_state: Option<String> = session.get(OAUTH_CSRF_KEY).await.ok().flatten();
+    let expected_provider: Option<String> = session.get(OAUTH_PROVIDER_KEY).await.ok().flatten();
+    let _ = session.remove::<String>(OAUTH_CSRF_KEY).await;
+    let _ = session.remove::<String>(OAUTH_PROVIDER_KEY).await;
+
+    if expected_state.as_deref() != Some(&state) || expected_provider.as_deref() != Some(&provider)
+    {
+        return Redirect::to("/login?error=csrf_mismatch").into_response();
+    }
+
+    match api::exchange_oauth_code(&provider, &code).await {
         Ok((token, username)) => {
             let _ = session.insert("opaque_token", token).await;
             let _ = session.insert("username", username).await;
@@ -160,8 +178,8 @@ enum Route {
 
 #[component]
 fn App() -> Element {
-    let status = use_resource(|| async move { check_login_status().await });
-    let perms = use_resource(|| async move { get_my_permissions().await });
+    let status = use_server_future(check_login_status)?;
+    let perms = use_server_future(get_my_permissions)?;
 
     use_effect(move || {
         if let Some(Ok(s)) = status.value()() {

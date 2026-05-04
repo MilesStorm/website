@@ -30,42 +30,48 @@ mod session {
 
 // ---- Plain async helpers for Axum OAuth handlers in the web crate ----
 
+/// Ask the auth service to begin an OAuth flow. Returns `(auth_url, csrf_state)`.
 #[cfg(feature = "server")]
-pub async fn exchange_handoff_code(code: &str) -> Result<(String, String), String> {
+pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
     use session::{auth_url, service_secret};
 
     #[derive(Serialize)]
     struct Req<'a> {
-        code: &'a str,
+        provider: &'a str,
     }
     #[derive(Deserialize)]
     struct Resp {
-        token: String,
-        username: String,
+        auth_url: String,
+        state: String,
     }
 
     let resp = reqwest::Client::new()
-        .post(format!("{}/internal/token/exchange/code", auth_url()))
+        .post(format!("{}/internal/oauth/start", auth_url()))
         .header("x-service-token", service_secret())
-        .json(&Req { code })
+        .json(&Req { provider })
         .send()
         .await
         .map_err(|e| e.to_string())?;
 
     if !resp.status().is_success() {
-        return Err(format!("exchange failed: {}", resp.status()));
+        return Err(format!("oauth start failed: {}", resp.status()));
     }
 
     let data: Resp = resp.json().await.map_err(|e| e.to_string())?;
-    Ok((data.token, data.username))
+    Ok((data.auth_url, data.state))
 }
 
+/// Exchange an OAuth authorization code for a BFF opaque token + username.
 #[cfg(feature = "server")]
-pub async fn exchange_google_auth_code(code: &str) -> Result<(String, String), String> {
+pub async fn exchange_oauth_code(
+    provider: &str,
+    code: &str,
+) -> Result<(String, String), String> {
     use session::{auth_url, service_secret};
 
     #[derive(Serialize)]
     struct Req<'a> {
+        provider: &'a str,
         code: &'a str,
     }
     #[derive(Deserialize)]
@@ -75,9 +81,9 @@ pub async fn exchange_google_auth_code(code: &str) -> Result<(String, String), S
     }
 
     let resp = reqwest::Client::new()
-        .post(format!("{}/internal/oauth/exchange/google", auth_url()))
+        .post(format!("{}/internal/oauth/exchange", auth_url()))
         .header("x-service-token", service_secret())
-        .json(&Req { code })
+        .json(&Req { provider, code })
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -241,16 +247,6 @@ pub async fn register_password(
 
     tracing::info!(username = %data.username, "registration succeeded");
     Ok(LoginStatus::LoggedIn(data.username))
-}
-
-/// Returns the auth service URL for a given OAuth provider init endpoint.
-/// Uses PUBLIC_AUTH_URL (browser-facing base) rather than AUTH_SERVICE_URL (internal cluster URL)
-/// so the browser can actually reach it. Empty string → relative path, which Istio routes to auth.
-#[server(prefix = "/bff")]
-pub async fn get_oauth_init_url(provider: String) -> Result<String, ServerFnError> {
-    let base = std::env::var("PUBLIC_AUTH_URL")
-        .unwrap_or_else(|_| "http://localhost:7070".to_string());
-    Ok(format!("{}/auth/login/{}/init", base, provider))
 }
 
 /// Returns the list of permission names held by the current session's user.
