@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use api::{get_oauth_init_url, login_password, register_password};
+use api::{login_password, register_password};
 
 use crate::LOGIN_STATUS;
 
@@ -8,9 +8,6 @@ use crate::LOGIN_STATUS;
 
 #[component]
 pub fn Login(error: String) -> Element {
-    let github_url = use_server_future(|| get_oauth_init_url("github".to_string()))?;
-    let google_url = use_server_future(|| get_oauth_init_url("google".to_string()))?;
-
     let mut login_error = use_signal(String::new);
 
     let handle_login = move |evt: FormEvent| {
@@ -36,21 +33,13 @@ pub fn Login(error: String) -> Element {
 
                 // OAuth buttons
                 div { class: "space-y-4 flex flex-col mb-4",
-                    if let Some(Ok(url)) = github_url.value()() {
-                        a { href: "{url}", class: "btn bg-black text-white border-black",
-                            github_icon {}
-                            "Login with GitHub"
-                        }
-                    } else {
-                        button { class: "btn btn-disabled", "Login with GitHub" }
+                    a { href: "/oauth/start/github", class: "btn bg-black text-white border-black",
+                        github_icon {}
+                        "Login with GitHub"
                     }
-                    if let Some(Ok(url)) = google_url.value()() {
-                        a { href: "{url}", class: "btn bg-white text-black border-[#e5e5e5]",
-                            google_icon {}
-                            "Login with Google"
-                        }
-                    } else {
-                        button { class: "btn btn-disabled", "Login with Google" }
+                    a { href: "/oauth/start/google", class: "btn bg-white text-black border-[#e5e5e5]",
+                        google_icon {}
+                        "Login with Google"
                     }
                 }
 
@@ -103,9 +92,6 @@ pub fn Login(error: String) -> Element {
 
 #[component]
 pub fn Register() -> Element {
-    let github_url = use_server_future(|| get_oauth_init_url("github".to_string()))?;
-    let google_url = use_server_future(|| get_oauth_init_url("google".to_string()))?;
-
     let mut reg_error = use_signal(String::new);
 
     let handle_register = move |evt: FormEvent| {
@@ -131,19 +117,11 @@ pub fn Register() -> Element {
                 h2 { class: "text-center text-2xl font-bold mb-6", "Sign Up" }
 
                 div { class: "flex flex-col space-y-4 mb-6",
-                    if let Some(Ok(url)) = github_url.value()() {
-                        a { href: "{url}", class: "btn btn-outline btn-accent w-full",
-                            "Sign up with GitHub"
-                        }
-                    } else {
-                        button { class: "btn btn-disabled", "Sign up with GitHub" }
+                    a { href: "/oauth/start/github", class: "btn btn-outline btn-accent w-full",
+                        "Sign up with GitHub"
                     }
-                    if let Some(Ok(url)) = google_url.value()() {
-                        a { href: "{url}", class: "btn btn-outline btn-accent w-full",
-                            "Sign up with Google"
-                        }
-                    } else {
-                        button { class: "btn btn-disabled", "Sign up with Google" }
+                    a { href: "/oauth/start/google", class: "btn btn-outline btn-accent w-full",
+                        "Sign up with Google"
                     }
                 }
 

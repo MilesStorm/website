@@ -8,23 +8,20 @@ use axum::{
     routing::post,
 };
 use jsonwebtoken::{EncodingKey, Header, encode};
-use oauth2::{AuthorizationCode, RedirectUrl, TokenResponse};
 use password_auth::verify_password;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::task;
 use ulid::Ulid;
 
-use super::user::{BasicClientSet, BffToken};
+use super::user::{Backend, BackendError, BffToken, OAuthProvider};
 
 #[derive(Clone)]
 pub struct InternalState {
     pub db: PgPool,
     pub jwt_secret: String,
     pub service_secret: String,
-    pub bff_callback_url: String,
-    pub g_client: BasicClientSet,
-    pub http_client: reqwest::Client,
+    pub backend: Backend,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,10 +37,10 @@ pub struct JwtClaims {
 pub fn router(state: InternalState) -> Router<()> {
     Router::new()
         .route("/internal/token/exchange", post(exchange_password))
-        .route("/internal/token/exchange/code", post(exchange_code))
         .route("/internal/token/introspect", post(introspect))
         .route("/internal/register", post(register))
-        .route("/internal/oauth/exchange/google", post(exchange_google))
+        .route("/internal/oauth/start", post(oauth_start))
+        .route("/internal/oauth/exchange", post(oauth_exchange))
         .route("/internal/ark/num_players", post(ark_num_players))
         .route("/internal/ark/command", post(ark_command))
         .layer(middleware::from_fn_with_state(
@@ -139,152 +136,56 @@ async fn exchange_password(
     }
 }
 
-// ---- Token exchange (OAuth handoff code) ----
+// ---- OAuth start / exchange (BFF-mediated) ----
 
 #[derive(Deserialize)]
-struct ExchangeCodeReq {
+struct OAuthStartReq {
+    provider: OAuthProvider,
+}
+
+#[derive(Serialize)]
+struct OAuthStartResp {
+    auth_url: String,
+    state: String,
+}
+
+#[derive(Deserialize)]
+struct OAuthExchangeReq {
+    provider: OAuthProvider,
     code: String,
 }
 
-#[derive(sqlx::FromRow)]
-struct HandoffRow {
-    user_id: i64,
-}
-
-async fn exchange_code(
+async fn oauth_start(
     State(state): State<InternalState>,
-    Json(req): Json<ExchangeCodeReq>,
+    Json(req): Json<OAuthStartReq>,
 ) -> impl IntoResponse {
-    let row: Option<HandoffRow> = sqlx::query_as(
-        "DELETE FROM oauth_handoff_codes WHERE code = $1 AND expires_at > NOW() RETURNING user_id",
-    )
-    .bind(&req.code)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
-
-    let Some(row) = row else {
-        return (StatusCode::UNAUTHORIZED, "Invalid or expired code").into_response();
+    let (url, csrf) = match req.provider {
+        OAuthProvider::Github => state.backend.authorize_url(),
+        OAuthProvider::Google => state.backend.authorize_g_url(),
     };
-
-    let username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-            .bind(row.user_id)
-            .fetch_optional(&state.db)
-            .await
-            .unwrap_or(None)
-            .flatten();
-
-    let Some(username) = username else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
-
-    let bff_token = match create_bff_token(&state.db, row.user_id).await {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!(user_id = row.user_id, error = %e, "failed to insert bff_token after oauth code exchange");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    tracing::info!(user_id = row.user_id, username = %username, "oauth code exchange succeeded");
-    Json(TokenResp { token: bff_token.token, username }).into_response()
+    Json(OAuthStartResp {
+        auth_url: url.to_string(),
+        state: csrf.secret().to_string(),
+    })
+    .into_response()
 }
 
-// ---- Google OAuth code exchange ----
-
-#[derive(Deserialize)]
-struct GoogleExchangeReq {
-    code: String,
-}
-
-#[derive(Deserialize)]
-struct GoogleUserInfo {
-    email: String,
-    name: Option<String>,
-}
-
-async fn exchange_google(
+async fn oauth_exchange(
     State(state): State<InternalState>,
-    Json(req): Json<GoogleExchangeReq>,
+    Json(req): Json<OAuthExchangeReq>,
 ) -> impl IntoResponse {
-    let redirect_uri = RedirectUrl::new(format!(
-        "{}/auth/login/google/callback",
-        state.bff_callback_url
-    ))
-    .expect("invalid redirect uri");
-
-    let token_res = match state
-        .g_client
-        .exchange_code(AuthorizationCode::new(req.code))
-        .set_redirect_uri(std::borrow::Cow::Owned(redirect_uri))
-        .request_async(&state.http_client)
-        .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("Google token exchange failed: {e}");
-            return (StatusCode::BAD_GATEWAY, "Google token exchange failed").into_response();
-        }
-    };
-
-    let user_info: GoogleUserInfo = match reqwest::Client::new()
-        .get("https://www.googleapis.com/oauth2/v2/userinfo")
-        .header("user-agent", "milesstorm-bff")
-        .bearer_auth(token_res.access_token().secret())
-        .send()
-        .await
-        .map_err(|e| e.to_string())
-    {
-        Ok(r) => match r.json().await {
-            Ok(info) => info,
-            Err(e) => {
-                tracing::error!("Failed to parse Google user info: {e}");
-                return StatusCode::BAD_GATEWAY.into_response();
-            }
-        },
-        Err(e) => {
-            tracing::error!("Failed to fetch Google user info: {e}");
-            return StatusCode::BAD_GATEWAY.into_response();
-        }
-    };
-
-    // Reject if email belongs to a password-based account
-    let has_password: Option<bool> = sqlx::query_scalar(
-        "SELECT password IS NOT NULL FROM users WHERE email = $1",
-    )
-    .bind(&user_info.email)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
-
-    if has_password == Some(true) {
-        return (StatusCode::CONFLICT, "Email already in use by a password account").into_response();
-    }
-
-    let username = user_info
-        .name
-        .unwrap_or_else(|| user_info.email.split('@').next().unwrap_or("user").to_string());
-
-    let user: Result<UserRow, sqlx::Error> = sqlx::query_as(
-        r#"
-        INSERT INTO users (username, email, access_token)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (username) DO UPDATE
-        SET email = excluded.email, access_token = excluded.access_token
-        RETURNING id, username, password
-        "#,
-    )
-    .bind(&username)
-    .bind(&user_info.email)
-    .bind(token_res.access_token().secret())
-    .fetch_one(&state.db)
-    .await;
-
-    let user = match user {
+    let user = match state.backend.complete_oauth(req.provider, req.code).await {
         Ok(u) => u,
+        Err(BackendError::EmailAlreadyInUse) => {
+            tracing::warn!("oauth exchange: email already in use by a password account");
+            return (
+                StatusCode::CONFLICT,
+                "Email already in use by a password account",
+            )
+                .into_response();
+        }
         Err(e) => {
-            tracing::error!("Failed to upsert Google user: {e}");
+            tracing::error!(error = ?e, "oauth exchange failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
@@ -292,12 +193,17 @@ async fn exchange_google(
     let bff_token = match create_bff_token(&state.db, user.id).await {
         Ok(t) => t,
         Err(e) => {
-            tracing::error!("Failed to insert bff_token for Google user: {e}");
+            tracing::error!(user_id = user.id, error = %e, "failed to insert bff_token after oauth exchange");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    Json(TokenResp { token: bff_token.token, username: user.username }).into_response()
+    tracing::info!(user_id = user.id, username = %user.username, "oauth exchange succeeded");
+    Json(TokenResp {
+        token: bff_token.token,
+        username: user.username,
+    })
+    .into_response()
 }
 
 // ---- Token introspection → JWT ----

@@ -14,8 +14,8 @@ use tokio::task;
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
-    id: i64,
-    username: String,
+    pub id: i64,
+    pub username: String,
     email: Option<String>,
     password: Option<String>,
     access_token: Option<String>,
@@ -96,8 +96,13 @@ impl AuthUser for User {
 #[derive(Debug, Clone, Deserialize)]
 pub enum Credentials {
     Password(PasswordCreds),
-    AccessToken(OAuthCreds),
-    GoogleToken(OAuthCreds),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OAuthProvider {
+    Github,
+    Google,
 }
 
 #[derive(Debug)]
@@ -149,13 +154,6 @@ pub struct SignUpCreds {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct OAuthCreds {
-    pub code: String,
-    pub old_state: CsrfToken,
-    pub new_state: CsrfToken,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct UserInfo {
     login: String,
 }
@@ -201,13 +199,15 @@ impl Backend {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("Could not build http_Client");
+        let bff_callback_url = std::env::var("BFF_CALLBACK_URL")
+            .unwrap_or_else(|_| "http://localhost:8080".to_string());
         let g_client = g_client.set_redirect_uri(
-            RedirectUrl::new(String::from(if cfg!(debug_assertions) {
-                "http://localhost:8080/auth/login/google/callback"
-            } else {
-                "https://milesstorm.com/auth/login/google/callback"
-            }))
-            .expect("invalid redirect uri"),
+            RedirectUrl::new(format!("{bff_callback_url}/oauth/callback/google"))
+                .expect("invalid redirect uri"),
+        );
+        let client = client.set_redirect_uri(
+            RedirectUrl::new(format!("{bff_callback_url}/oauth/callback/github"))
+                .expect("invalid redirect uri"),
         );
 
         Self {
@@ -215,6 +215,129 @@ impl Backend {
             client,
             g_client,
             http_client,
+        }
+    }
+
+    pub async fn complete_oauth(
+        &self,
+        provider: OAuthProvider,
+        code: String,
+    ) -> Result<User, BackendError> {
+        match provider {
+            OAuthProvider::Github => {
+                let token_res = self
+                    .client
+                    .exchange_code(AuthorizationCode::new(code))
+                    .request_async(&self.http_client)
+                    .await
+                    .map_err(BackendError::OAuth2)?;
+
+                let user_info = reqwest::Client::new()
+                    .get("https://api.github.com/user")
+                    .header(USER_AGENT.as_str(), "milesstorm-auth")
+                    .header(
+                        AUTHORIZATION.as_str(),
+                        format!("Bearer {}", token_res.access_token().secret()),
+                    )
+                    .send()
+                    .await
+                    .map_err(BackendError::Reqwest)?
+                    .json::<UserInfo>()
+                    .await
+                    .map_err(BackendError::Reqwest)?;
+
+                // The `WHERE users.password IS NULL` guards against account takeover:
+                // if a password account already owns this username, the conflict update is
+                // skipped, RETURNING yields no row, and we treat that as an account collision.
+                let user: Option<User> = sqlx::query_as(
+                    r#"
+                    insert into users (username, access_token)
+                    values ($1, $2)
+                    on conflict(username) do update
+                    set access_token = excluded.access_token
+                    where users.password is null
+                    returning *
+                    "#,
+                )
+                .bind(user_info.login)
+                .bind(token_res.access_token().secret())
+                .fetch_optional(&self.db)
+                .await?;
+
+                user.ok_or(BackendError::EmailAlreadyInUse)
+            }
+            OAuthProvider::Google => {
+                let token_res = self
+                    .g_client
+                    .exchange_code(AuthorizationCode::new(code))
+                    .request_async(&self.http_client)
+                    .await
+                    .map_err(BackendError::OAuth2)?;
+
+                let user_info = reqwest::Client::new()
+                    .get("https://www.googleapis.com/oauth2/v2/userinfo")
+                    .header(USER_AGENT.as_str(), "milesstorm-auth")
+                    .header(
+                        AUTHORIZATION.as_str(),
+                        format!("Bearer {}", token_res.access_token().secret()),
+                    )
+                    .send()
+                    .await
+                    .map_err(BackendError::Reqwest)?
+                    .json::<GoogleUserInfo>()
+                    .await
+                    .map_err(BackendError::Reqwest)?;
+
+                // Identify Google users by email (unique on Google's side and in our schema).
+                // Matching on `username` would let two Googlers with the same display name
+                // overwrite each other's row.
+                let existing: Option<User> =
+                    sqlx::query_as("select * from users where email = $1")
+                        .bind(&user_info.email)
+                        .fetch_optional(&self.db)
+                        .await?;
+
+                if let Some(existing) = existing {
+                    if existing.password.is_some() {
+                        return Err(BackendError::EmailAlreadyInUse);
+                    }
+                    // Returning Google user — refresh the access token by id (stable).
+                    let user = sqlx::query_as(
+                        "update users set access_token = $1 where id = $2 returning *",
+                    )
+                    .bind(token_res.access_token().secret())
+                    .bind(existing.id)
+                    .fetch_one(&self.db)
+                    .await?;
+                    return Ok(user);
+                }
+
+                // First-time Google login. A username collision with another account would
+                // surface as a unique-violation Sqlx error rather than silently overwriting.
+                let username = user_info.name.clone().unwrap_or_else(|| {
+                    user_info
+                        .email
+                        .split('@')
+                        .next()
+                        .unwrap_or("user")
+                        .to_string()
+                });
+
+                let user = sqlx::query_as(
+                    r#"
+                    insert into users (username, email, access_token)
+                    values ($1, $2, $3)
+                    returning *
+                    "#,
+                )
+                .bind(&username)
+                .bind(&user_info.email)
+                .bind(token_res.access_token().secret())
+                .fetch_one(&self.db)
+                .await?;
+
+                Ok(user)
+            }
         }
     }
 
@@ -285,137 +408,26 @@ impl AuthnBackend for Backend {
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
-        match creds {
-            Credentials::Password(password_cred) => {
-                let user: Option<Self::User> = sqlx::query_as(
-                    "select * from users where username = $1 and password is not null",
-                )
-                .bind(password_cred.username)
-                .fetch_optional(&self.db)
-                .await?;
+        let Credentials::Password(password_cred) = creds;
 
-                // Verifying the password is blocking and potentially slow, so we'll do so via
-                // `spawn_blocking`.
-                task::spawn_blocking(|| {
-                    // We're using password-based authentication: this works by comparing our form
-                    // input with an argon2 password hash.
-                    Ok(user.filter(|user| {
-                        let Some(ref password) = user.password else {
-                            return false;
-                        };
-                        verify_password(password_cred.password, password).is_ok()
-                    }))
-                })
-                .await?
-            }
-            Credentials::AccessToken(oauth_cred) => {
-                tracing::debug!("oauth_cred: {:?}", oauth_cred);
-                if oauth_cred.old_state.secret() != oauth_cred.new_state.secret() {
-                    return Ok(None);
-                }
+        let user: Option<Self::User> = sqlx::query_as(
+            "select * from users where username = $1 and password is not null",
+        )
+        .bind(password_cred.username)
+        .fetch_optional(&self.db)
+        .await?;
 
-                let token_res = self
-                    .client
-                    .exchange_code(AuthorizationCode::new(oauth_cred.code))
-                    .request_async(&self.http_client)
-                    .await
-                    .map_err(BackendError::OAuth2)?;
-
-                let user_info = reqwest::Client::new()
-                    .get("https://api.github.com/user")
-                    .header(USER_AGENT.as_str(), "axum-login") // See: https://docs.github.com/en/rest/overview/resources-in-the-rest-api?apiVersion=2022-11-28#user-agent-required
-                    .header(
-                        AUTHORIZATION.as_str(),
-                        format!("Bearer {}", token_res.access_token().secret()),
-                    )
-                    .send()
-                    .await
-                    .map_err(Self::Error::Reqwest)?
-                    .json::<UserInfo>()
-                    .await
-                    .map_err(Self::Error::Reqwest)?;
-
-                let user = sqlx::query_as(
-                    r#"
-                    insert into users (username, access_token)
-                    values ($1, $2)
-                    on conflict(username) do update
-                    set access_token = excluded.access_token
-                    returning *
-                    "#,
-                )
-                .bind(user_info.login)
-                .bind(token_res.access_token().secret())
-                .fetch_one(&self.db)
-                .await?;
-
-                Ok(Some(user))
-            }
-            Credentials::GoogleToken(oauth_cred) => {
-                tracing::info!("Google token: {:?}", oauth_cred);
-                if oauth_cred.old_state.secret() != oauth_cred.new_state.secret() {
-                    return Ok(None);
-                }
-
-                let token_res = self
-                    .g_client
-                    .exchange_code(AuthorizationCode::new(oauth_cred.code))
-                    .request_async(&self.http_client)
-                    .await
-                    .map_err(BackendError::OAuth2)?;
-
-                tracing::info!("token_res: {:?}", token_res);
-
-                let user_info = reqwest::Client::new()
-                    .get("https://www.googleapis.com/oauth2/v2/userinfo")
-                    .header(USER_AGENT.as_str(), "axum-login")
-                    .header(
-                        AUTHORIZATION.as_str(),
-                        format!("Bearer {}", token_res.access_token().secret()),
-                    )
-                    .send()
-                    .await
-                    .map_err(Self::Error::Reqwest)?
-                    .json::<GoogleUserInfo>()
-                    .await
-                    .map_err(Self::Error::Reqwest)?;
-
-                let existing_user_test: Option<User> = sqlx::query_as(
-                    r#"
-                    select * from users where email = $1
-                    "#,
-                )
-                .bind(&user_info.email)
-                .fetch_optional(&self.db)
-                .await?;
-                tracing::info!("existing_user_test: {:?}", existing_user_test);
-
-                if let Some(user) = existing_user_test {
-                    if user.password.is_some() {
-                        tracing::error!("An account with this email already exists!");
-                        return Err(BackendError::EmailAlreadyInUse);
-                    }
-                }
-
-                let user = sqlx::query_as(
-                    r#"
-                    insert into users (username, email, access_token)
-                    values ($1, $2, $3)
-                    on conflict(username) do update
-                    set email = excluded.email,
-                        access_token = excluded.access_token
-                    returning *
-                    "#,
-                )
-                .bind(&user_info.name)
-                .bind(&user_info.email)
-                .bind(token_res.access_token().secret())
-                .fetch_one(&self.db)
-                .await?;
-
-                Ok(Some(user))
-            }
-        }
+        // Verifying the password is blocking and potentially slow, so we'll do so via
+        // `spawn_blocking`.
+        task::spawn_blocking(|| {
+            Ok(user.filter(|user| {
+                let Some(ref password) = user.password else {
+                    return false;
+                };
+                verify_password(password_cred.password, password).is_ok()
+            }))
+        })
+        .await?
     }
 
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {

@@ -1,7 +1,6 @@
 pub mod arcane;
 mod core;
 mod internal;
-mod oauth;
 pub mod permissions;
 mod protected_route;
 mod session_store;
@@ -91,28 +90,22 @@ impl Auth {
         );
 
         let session_layer = SessionManagerLayer::new(session_store)
-            .with_secure(false)
+            // Defense-in-depth: even though auth is now cluster-internal, require Secure
+            // cookies in release builds. Debug builds get plain HTTP for local dev.
+            .with_secure(!cfg!(debug_assertions))
             .with_same_site(SameSite::Lax)
+            .with_name("milesstorm.auth")
             .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
-        let g_client_for_internal = self.g_client.clone();
         let backend = Backend::new(self.db.clone(), self.client, self.g_client);
-        let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
-
-        let http_client = oauth2::reqwest::ClientBuilder::new()
-            .redirect(oauth2::reqwest::redirect::Policy::none())
-            .build()
-            .expect("Could not build http_client");
+        let auth_layer = AuthManagerLayerBuilder::new(backend.clone(), session_layer).build();
 
         let internal_state = InternalState {
             db: self.db.clone(),
             jwt_secret: env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
             service_secret: env::var("BFF_SERVICE_SECRET")
                 .expect("BFF_SERVICE_SECRET must be set"),
-            bff_callback_url: env::var("BFF_CALLBACK_URL")
-                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
-            g_client: g_client_for_internal,
-            http_client,
+            backend,
         };
 
         let app = Router::new()
@@ -121,7 +114,6 @@ impl Auth {
             .merge(protected_route::router())
             .merge(permissions::router())
             .merge(core::router())
-            .merge(oauth::router())
             .layer(auth_layer)
             .layer(
                 TraceLayer::new_for_http()
