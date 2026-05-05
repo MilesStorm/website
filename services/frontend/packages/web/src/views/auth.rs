@@ -32,12 +32,39 @@ pub fn Login(error: String) -> Element {
                 h2 { class: "text-2xl font-bold text-center mb-8", "Log In" }
 
                 // OAuth buttons
+                //
+                // Why onclick + window.location instead of letting the anchor navigate:
+                // dioxus-history attaches a global click handler that hijacks same-origin
+                // anchor navigations into client-side routing. Our catch-all NotFound route
+                // would match `/oauth/start/{provider}`, so the click never becomes a real
+                // GET that reaches the BFF Axum handler. preventDefault stops the router's
+                // listener (it honors defaultPrevented), then we force a real navigation.
                 div { class: "space-y-4 flex flex-col mb-4",
-                    a { href: "/oauth/start/github", class: "btn bg-black text-white border-black",
+                    a {
+                        href: "/oauth/start/github",
+                        class: "btn bg-black text-white border-black",
+                        onclick: |evt: MouseEvent| {
+                            evt.prevent_default();
+                            spawn(async move {
+                                let _ = document::eval(
+                                    "window.location.href = '/oauth/start/github';",
+                                ).await;
+                            });
+                        },
                         github_icon {}
                         "Login with GitHub"
                     }
-                    a { href: "/oauth/start/google", class: "btn bg-white text-black border-[#e5e5e5]",
+                    a {
+                        href: "/oauth/start/google",
+                        class: "btn bg-white text-black border-[#e5e5e5]",
+                        onclick: |evt: MouseEvent| {
+                            evt.prevent_default();
+                            spawn(async move {
+                                let _ = document::eval(
+                                    "window.location.href = '/oauth/start/google';",
+                                ).await;
+                            });
+                        },
                         google_icon {}
                         "Login with Google"
                     }
@@ -117,10 +144,30 @@ pub fn Register() -> Element {
                 h2 { class: "text-center text-2xl font-bold mb-6", "Sign Up" }
 
                 div { class: "flex flex-col space-y-4 mb-6",
-                    a { href: "/oauth/start/github", class: "btn btn-outline btn-accent w-full",
+                    a {
+                        href: "/oauth/start/github",
+                        class: "btn btn-outline btn-accent w-full",
+                        onclick: |evt: MouseEvent| {
+                            evt.prevent_default();
+                            spawn(async move {
+                                let _ = document::eval(
+                                    "window.location.href = '/oauth/start/github';",
+                                ).await;
+                            });
+                        },
                         "Sign up with GitHub"
                     }
-                    a { href: "/oauth/start/google", class: "btn btn-outline btn-accent w-full",
+                    a {
+                        href: "/oauth/start/google",
+                        class: "btn btn-outline btn-accent w-full",
+                        onclick: |evt: MouseEvent| {
+                            evt.prevent_default();
+                            spawn(async move {
+                                let _ = document::eval(
+                                    "window.location.href = '/oauth/start/google';",
+                                ).await;
+                            });
+                        },
                         "Sign up with Google"
                     }
                 }
