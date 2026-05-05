@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tracing::info;
 
+use super::telemetry;
 use super::user::Backend;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, FromRow)]
@@ -184,6 +185,7 @@ mod get {
         auth_session: axum_login::AuthSession<Backend>,
         op: Operation,
     ) -> axum::http::Response<axum::body::Body> {
+        let op_str = op.to_string();
         match auth_session.user {
             Some(user) => {
                 tracing::info!("{:?} {}ed ark server", user, op);
@@ -194,24 +196,31 @@ mod get {
                             resp.json::<DockerRequestResponse>().await;
 
                         match json {
-                            Ok(suc) => (
-                                StatusCode::OK,
-                                Json(DockerRequestResponse {
-                                    restart_result: suc.restart_result,
-                                    command_result: suc.command_result,
-                                }),
-                            )
-                                .into_response(),
+                            Ok(suc) => {
+                                telemetry::ark_command(&op_str, "success");
+                                (
+                                    StatusCode::OK,
+                                    Json(DockerRequestResponse {
+                                        restart_result: suc.restart_result,
+                                        command_result: suc.command_result,
+                                    }),
+                                )
+                                    .into_response()
+                            }
                             Err(ere) => {
+                                telemetry::ark_command(&op_str, "error");
                                 (StatusCode::INTERNAL_SERVER_ERROR, ere.to_string()).into_response()
                             }
                         }
                     }
-                    Err(_) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to {op} ark server",
-                    )
-                        .into_response(),
+                    Err(_) => {
+                        telemetry::ark_command(&op_str, "unreachable");
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Failed to {op} ark server",
+                        )
+                            .into_response()
+                    }
                 }
             }
             .into_response(),

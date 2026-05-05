@@ -14,6 +14,7 @@ use sqlx::PgPool;
 use tokio::task;
 use ulid::Ulid;
 
+use super::telemetry;
 use super::user::{Backend, BackendError, BffToken, OAuthProvider};
 
 #[derive(Clone)]
@@ -96,6 +97,7 @@ struct UserRow {
     password: Option<String>,
 }
 
+#[tracing::instrument(name = "token.exchange.password", skip_all)]
 async fn exchange_password(
     State(state): State<InternalState>,
     Json(req): Json<ExchangePasswordReq>,
@@ -121,16 +123,21 @@ async fn exchange_password(
 
     if !valid {
         tracing::warn!(username = %req.username, "password login failed: invalid credentials");
+        telemetry::login_attempt("password", "failure");
+        telemetry::token_operation("exchange", "failure");
         return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
     }
 
     match create_bff_token(&state.db, user.id).await {
         Ok(bff_token) => {
             tracing::info!(user_id = user.id, username = %user.username, "password login succeeded");
+            telemetry::login_attempt("password", "success");
+            telemetry::token_operation("exchange", "success");
             Json(TokenResp { token: bff_token.token, username: user.username }).into_response()
         }
         Err(e) => {
             tracing::error!(user_id = user.id, error = %e, "failed to insert bff_token");
+            telemetry::token_operation("exchange", "error");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -170,14 +177,19 @@ async fn oauth_start(
     .into_response()
 }
 
+#[tracing::instrument(name = "token.exchange.oauth", skip_all, fields(provider = ?req.provider))]
 async fn oauth_exchange(
     State(state): State<InternalState>,
     Json(req): Json<OAuthExchangeReq>,
 ) -> impl IntoResponse {
+    let provider_str = format!("{:?}", req.provider).to_lowercase();
+
     let user = match state.backend.complete_oauth(req.provider, req.code).await {
         Ok(u) => u,
         Err(BackendError::EmailAlreadyInUse) => {
             tracing::warn!("oauth exchange: email already in use by a password account");
+            telemetry::login_attempt(&provider_str, "conflict");
+            telemetry::token_operation("exchange", "conflict");
             return (
                 StatusCode::CONFLICT,
                 "Email already in use by a password account",
@@ -186,6 +198,8 @@ async fn oauth_exchange(
         }
         Err(e) => {
             tracing::error!(error = ?e, "oauth exchange failed");
+            telemetry::login_attempt(&provider_str, "error");
+            telemetry::token_operation("exchange", "error");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
@@ -194,11 +208,14 @@ async fn oauth_exchange(
         Ok(t) => t,
         Err(e) => {
             tracing::error!(user_id = user.id, error = %e, "failed to insert bff_token after oauth exchange");
+            telemetry::token_operation("exchange", "error");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
     tracing::info!(user_id = user.id, username = %user.username, "oauth exchange succeeded");
+    telemetry::login_attempt(&provider_str, "success");
+    telemetry::token_operation("exchange", "success");
     Json(TokenResp {
         token: bff_token.token,
         username: user.username,
@@ -226,6 +243,7 @@ struct TokenRow {
     username: String,
 }
 
+#[tracing::instrument(name = "token.introspect", skip_all)]
 async fn introspect(
     State(state): State<InternalState>,
     Json(req): Json<IntrospectReq>,
@@ -244,6 +262,7 @@ async fn introspect(
     .unwrap_or(None);
 
     let Some(row) = row else {
+        telemetry::token_operation("introspect", "invalid");
         return (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response();
     };
 
@@ -288,6 +307,7 @@ async fn introspect(
     };
 
     tracing::debug!(user_id = row.user_id, username = %row.username, permissions = ?permissions, "token introspected");
+    telemetry::token_operation("introspect", "success");
     Json(IntrospectResp {
         jwt,
         username: row.username,
@@ -409,31 +429,44 @@ async fn resolve_ark_user(db: &PgPool, token: &str) -> Option<i64> {
     row.map(|(id,)| id)
 }
 
+#[tracing::instrument(name = "ark.num_players", skip_all)]
 async fn ark_num_players(
     State(state): State<InternalState>,
     Json(req): Json<ArkTokenReq>,
 ) -> impl IntoResponse {
     let Some(user_id) = resolve_ark_user(&state.db, &req.token).await else {
         tracing::warn!("ark num_players denied: missing llama permission");
+        telemetry::ark_command("num_players", "denied");
         return (StatusCode::FORBIDDEN, "No ark permission").into_response();
     };
     tracing::debug!(user_id, "ark num_players request");
 
     match reqwest::get("http://192.168.1.21:9090/ark/num_players").await {
         Ok(resp) => match resp.json::<DockerRequestResponse>().await {
-            Ok(body) => Json(body).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(body) => {
+                telemetry::ark_command("num_players", "success");
+                Json(body).into_response()
+            }
+            Err(e) => {
+                telemetry::ark_command("num_players", "error");
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            }
         },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Could not reach ark host").into_response(),
+        Err(_) => {
+            telemetry::ark_command("num_players", "unreachable");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Could not reach ark host").into_response()
+        }
     }
 }
 
+#[tracing::instrument(name = "ark.command", skip_all, fields(cmd = %req.cmd))]
 async fn ark_command(
     State(state): State<InternalState>,
     Json(req): Json<ArkCommandReq>,
 ) -> impl IntoResponse {
     let Some(user_id) = resolve_ark_user(&state.db, &req.token).await else {
         tracing::warn!(cmd = %req.cmd, "ark command denied: missing llama permission");
+        telemetry::ark_command(&req.cmd, "denied");
         return (StatusCode::FORBIDDEN, "No ark permission").into_response();
     };
 
@@ -441,6 +474,7 @@ async fn ark_command(
         "start" | "stop" | "restart" => req.cmd.clone(),
         _ => {
             tracing::warn!(user_id, cmd = %req.cmd, "ark command rejected: unknown command");
+            telemetry::ark_command(&req.cmd, "invalid");
             return (StatusCode::BAD_REQUEST, "Unknown command").into_response();
         }
     };
@@ -448,9 +482,18 @@ async fn ark_command(
 
     match reqwest::get(format!("http://192.168.1.21:9090/ark/{cmd}")).await {
         Ok(resp) => match resp.json::<DockerRequestResponse>().await {
-            Ok(body) => Json(body).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Ok(body) => {
+                telemetry::ark_command(&cmd, "success");
+                Json(body).into_response()
+            }
+            Err(e) => {
+                telemetry::ark_command(&cmd, "error");
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            }
         },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Could not reach ark host").into_response(),
+        Err(_) => {
+            telemetry::ark_command(&cmd, "unreachable");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Could not reach ark host").into_response()
+        }
     }
 }

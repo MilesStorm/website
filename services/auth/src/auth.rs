@@ -4,11 +4,13 @@ mod internal;
 pub mod permissions;
 mod protected_route;
 mod session_store;
+pub mod telemetry;
 mod user;
 
 use std::{env, panic};
 
 use axum::{Router, routing::get};
+use axum_prometheus::PrometheusMetricLayer;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use axum_login::{
     AuthManagerLayerBuilder,
@@ -108,7 +110,10 @@ impl Auth {
             backend,
         };
 
+        let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+
         let app = Router::new()
+            .route("/metrics", get(move || async move { metric_handle.render() }))
             .route("/auth", get(handler))
             .merge(internal::router(internal_state))
             .merge(protected_route::router())
@@ -119,7 +124,8 @@ impl Auth {
                 TraceLayer::new_for_http()
                     .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
                     .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
-            );
+            )
+            .layer(prometheus_layer);
 
         let listener = match tokio::net::TcpListener::bind(format!(
             "{}:{}",

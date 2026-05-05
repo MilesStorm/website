@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::user::AuthSession;
 
+use super::telemetry;
 use super::user::ClientUser;
 
 #[derive(Serialize)]
@@ -55,6 +56,7 @@ mod post {
 
         use super::*;
 
+        #[tracing::instrument(name = "register.password", skip_all)]
         pub async fn password(
             auth_session: AuthSession,
             Form(creds): Form<SignUpCreds>,
@@ -106,6 +108,7 @@ mod post {
 
         use super::*;
 
+        #[tracing::instrument(name = "login.password", skip_all)]
         pub async fn password(
             mut auth_session: AuthSession,
             Form(creds): Form<PasswordCreds>,
@@ -117,18 +120,25 @@ mod post {
                 Ok(Some(user)) => user,
                 Ok(None) => {
                     tracing::info!("Invalid password");
+                    telemetry::login_attempt("password", "failure");
                     return (StatusCode::UNAUTHORIZED, "invalid password".to_string())
                         .into_response();
                 }
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                Err(_) => {
+                    telemetry::login_attempt("password", "error");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
             };
 
             if auth_session.login(&user).await.is_err() {
+                telemetry::login_attempt("password", "error");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
             let client_user = ClientUser::from(user);
             tracing::info!(user_id = client_user.id, username = %client_user.username, "legacy password login succeeded");
+            telemetry::login_attempt("password", "success");
+            telemetry::session_inc();
 
             if let Some(ref next) = creds.next {
                 // Redirect::to(next).into_response();
@@ -168,11 +178,12 @@ mod get {
         }
     }
 
+    #[tracing::instrument(name = "logout", skip_all)]
     pub async fn logout(mut auth_session: AuthSession) -> impl IntoResponse {
         match auth_session.logout().await {
             Ok(user) => {
                 tracing::info!("User logged out: {:?}", user);
-
+                telemetry::session_dec();
                 StatusCode::RESET_CONTENT.into_response()
             }
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),

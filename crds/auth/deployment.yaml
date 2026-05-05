@@ -74,5 +74,7 @@ spec:
             value: "0.0.0.0"
           - name: RUST_LOG
             value: "info"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://alloy.monitoring.svc.cluster.local:4317"
       imagePullSecrets:
         - name: dockerconfigjson-github-com

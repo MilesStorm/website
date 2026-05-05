@@ -29,3 +29,13 @@ tower-sessions = { version = "0.14.0", features = ["axum-core"] }
 tower-http = { version = "0.6", features = ["trace"] }
 jsonwebtoken = "9"
 ulid = "1"
+
+# Metrics (Prometheus exposition format → Alloy → Mimir)
+axum-prometheus = "0.10"
+metrics = "0.24"
+
+# Distributed tracing (OTLP → Alloy → Tempo)
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.28"
