@@ -65,9 +65,7 @@ spec:
     metadata:
       labels:
         app: frontend
-      annotations:
         monitoring.milesstorm.com/scrape: "true"
-        monitoring.milesstorm.com/port: "80"
     spec:
       topologySpreadConstraints:
         - maxSkew: 1
@@ -81,6 +79,7 @@ spec:
         image: ghcr.io/milesstorm/frontend:latest
         ports:
         - containerPort: 80
+          name: http
         env:
           - name: AUTH_SERVICE_URL
             value: "http://auth-service.auth.svc.cluster.local"

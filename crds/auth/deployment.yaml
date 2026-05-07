@@ -19,9 +19,7 @@ spec:
     metadata:
       labels:
         app: auth
-      annotations:
         monitoring.milesstorm.com/scrape: "true"
-        monitoring.milesstorm.com/port: "7070"
     spec:
       topologySpreadConstraints:
         - maxSkew: 1
@@ -32,9 +30,10 @@ spec:
               app: auth
       containers:
       - name: auth
-        image: ghcr.io/milesstorm/auth:latest 
+        image: ghcr.io/milesstorm/auth:latest
         ports:
         - containerPort: 7070
+          name: http
         env:
           - name: DATABASE_URL
             valueFrom: 
