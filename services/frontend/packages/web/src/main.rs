@@ -35,6 +35,14 @@ fn main() {
 #[cfg(not(target_arch = "wasm32"))]
 fn server_launch() -> ! {
     use axum::{routing::get, Router};
+    use axum_prometheus::PrometheusMetricLayer;
+    use opentelemetry::KeyValue;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::{
+        Resource, runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider,
+    };
+    use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
     use tower_sessions::cookie::time::Duration;
     use tower_sessions::cookie::SameSite;
     use tower_sessions::{Expiry, SessionManagerLayer};
@@ -42,12 +50,38 @@ fn server_launch() -> ! {
     use tower_sessions_redis_store::RedisStore;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+    // Only init OTLP when the endpoint is explicitly configured. In dev (no env var) the
+    // layer is None and tracing-subscriber skips it, so there are no connection errors.
+    let otel_layer = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        Ok(endpoint) => {
+            let exporter = opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint)
+                .build()
+                .expect("failed to build OTLP exporter");
+
+            let provider = SdkTracerProvider::builder()
+                .with_batch_exporter(exporter, OtelTokio)
+                .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
+                .build();
+
+            // Take the SDK Tracer before handing provider to global — global::tracer() returns
+            // BoxedTracer which doesn't satisfy tracing-opentelemetry's PreSampledTracer bound.
+            let tracer = provider.tracer("frontend");
+            opentelemetry::global::set_tracer_provider(provider);
+
+            Some(tracing_opentelemetry::layer().with_tracer(tracer))
+        }
+        Err(_) => None,
+    };
+
     // try_init() is a no-op if something already registered a subscriber, so this is safe.
     tracing_subscriber::registry()
         .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
             |_| "info,dioxus=warn,tower_sessions=warn".into(),
         )))
         .with(tracing_subscriber::fmt::layer().json())
+        .with(otel_layer)
         .try_init()
         .ok();
 
@@ -80,11 +114,20 @@ fn server_launch() -> ! {
                 .with_name("milesstorm.bff")
                 .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
+            let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+
             let router = Router::new()
                 .serve_dioxus_application(ServeConfig::default(), App)
                 .route("/oauth/start/{provider}", get(oauth_start))
                 .route("/oauth/callback/{provider}", get(oauth_callback))
-                .layer(layer);
+                .route("/metrics", get(move || async move { metric_handle.render() }))
+                .layer(layer)
+                .layer(
+                    TraceLayer::new_for_http()
+                        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
+                        .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
+                )
+                .layer(prometheus_layer);
             Ok(router)
         }
     })
