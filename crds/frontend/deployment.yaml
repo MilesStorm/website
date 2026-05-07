@@ -65,6 +65,9 @@ spec:
     metadata:
       labels:
         app: frontend
+      annotations:
+        monitoring.milesstorm.com/scrape: "true"
+        monitoring.milesstorm.com/port: "80"
     spec:
       topologySpreadConstraints:
         - maxSkew: 1
@@ -99,5 +102,7 @@ spec:
                 key: redis-password
           - name: RUST_LOG
             value: "info"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://alloy.monitoring.svc.cluster.local:4317"
       imagePullSecrets:
         - name: dockerconfigjson-github-com

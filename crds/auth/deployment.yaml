@@ -19,6 +19,9 @@ spec:
     metadata:
       labels:
         app: auth
+      annotations:
+        monitoring.milesstorm.com/scrape: "true"
+        monitoring.milesstorm.com/port: "7070"
     spec:
       topologySpreadConstraints:
         - maxSkew: 1
