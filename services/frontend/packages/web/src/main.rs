@@ -50,41 +50,6 @@ fn server_launch() -> ! {
     use tower_sessions_redis_store::RedisStore;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-    // Only init OTLP when the endpoint is explicitly configured. In dev (no env var) the
-    // layer is None and tracing-subscriber skips it, so there are no connection errors.
-    let otel_layer = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
-        Ok(endpoint) => {
-            let exporter = opentelemetry_otlp::SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(endpoint)
-                .build()
-                .expect("failed to build OTLP exporter");
-
-            let provider = SdkTracerProvider::builder()
-                .with_batch_exporter(exporter, OtelTokio)
-                .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
-                .build();
-
-            // Take the SDK Tracer before handing provider to global — global::tracer() returns
-            // BoxedTracer which doesn't satisfy tracing-opentelemetry's PreSampledTracer bound.
-            let tracer = provider.tracer("frontend");
-            opentelemetry::global::set_tracer_provider(provider);
-
-            Some(tracing_opentelemetry::layer().with_tracer(tracer))
-        }
-        Err(_) => None,
-    };
-
-    // try_init() is a no-op if something already registered a subscriber, so this is safe.
-    tracing_subscriber::registry()
-        .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
-            |_| "info,dioxus=warn,tower_sessions=warn".into(),
-        )))
-        .with(tracing_subscriber::fmt::layer().json())
-        .with(otel_layer)
-        .try_init()
-        .ok();
-
     let redis_host = std::env::var("REDIS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let redis_port = std::env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
     let redis_password = std::env::var("REDIS_PASSWORD")
@@ -98,6 +63,44 @@ fn server_launch() -> ! {
     dioxus::serve(move || {
         let redis_url = redis_url.clone();
         async move {
+            // OTLP exporter + tracing-subscriber must be initialized inside the tokio
+            // runtime: the tonic gRPC client and BatchExporter both spawn tasks via
+            // hyper-util / OtelTokio, which panic with "no reactor running" if built
+            // synchronously from `main`. Only init OTLP when the endpoint is explicitly
+            // configured; in dev (no env var) the layer is None.
+            let otel_layer = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+                Ok(endpoint) => {
+                    let exporter = opentelemetry_otlp::SpanExporter::builder()
+                        .with_tonic()
+                        .with_endpoint(endpoint)
+                        .build()
+                        .expect("failed to build OTLP exporter");
+
+                    let provider = SdkTracerProvider::builder()
+                        .with_batch_exporter(exporter, OtelTokio)
+                        .with_resource(Resource::new([KeyValue::new(
+                            "service.name",
+                            "frontend",
+                        )]))
+                        .build();
+
+                    let tracer = provider.tracer("frontend");
+                    opentelemetry::global::set_tracer_provider(provider);
+
+                    Some(tracing_opentelemetry::layer().with_tracer(tracer))
+                }
+                Err(_) => None,
+            };
+
+            tracing_subscriber::registry()
+                .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
+                    |_| "info,dioxus=warn,tower_sessions=warn".into(),
+                )))
+                .with(tracing_subscriber::fmt::layer().json())
+                .with(otel_layer)
+                .try_init()
+                .ok();
+
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
             let pool = Pool::new(config, None, None, None, 6).expect("failed to build Redis pool");
             pool.connect();
