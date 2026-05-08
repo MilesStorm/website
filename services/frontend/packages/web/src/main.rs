@@ -36,11 +36,11 @@ fn main() {
 fn server_launch() -> ! {
     use axum::{routing::get, Router};
     use axum_prometheus::PrometheusMetricLayer;
-    use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::KeyValue;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{
-        Resource, runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider,
+        runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider, Resource,
     };
     use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
     use tower_sessions::cookie::time::Duration;
@@ -78,10 +78,7 @@ fn server_launch() -> ! {
 
                     let provider = SdkTracerProvider::builder()
                         .with_batch_exporter(exporter, OtelTokio)
-                        .with_resource(Resource::new([KeyValue::new(
-                            "service.name",
-                            "frontend",
-                        )]))
+                        .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
                         .build();
 
                     let tracer = provider.tracer("frontend");
@@ -102,7 +99,14 @@ fn server_launch() -> ! {
                 .ok();
 
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
-            let pool = Pool::new(config, None, None, None, 6).expect("failed to build Redis pool");
+            let pool = Pool::new(
+                config,
+                None,
+                None,
+                Some(ReconnectPolicy::new_exponential(0, 100, 30_000, 2)),
+                6,
+            )
+            .expect("failed to build Redis pool");
             pool.connect();
             pool.wait_for_connect()
                 .await
@@ -123,7 +127,10 @@ fn server_launch() -> ! {
                 .serve_dioxus_application(ServeConfig::default(), App)
                 .route("/oauth/start/{provider}", get(oauth_start))
                 .route("/oauth/callback/{provider}", get(oauth_callback))
-                .route("/metrics", get(move || async move { metric_handle.render() }))
+                .route(
+                    "/metrics",
+                    get(move || async move { metric_handle.render() }),
+                )
                 .layer(layer)
                 .layer(
                     TraceLayer::new_for_http()
