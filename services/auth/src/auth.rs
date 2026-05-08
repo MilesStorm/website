@@ -11,7 +11,7 @@ use std::{env, panic};
 
 use axum::{Router, routing::get};
 use axum_prometheus::PrometheusMetricLayer;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use axum_login::{
     AuthManagerLayerBuilder,
     tower_sessions::{
@@ -120,11 +120,11 @@ impl Auth {
             .merge(permissions::router())
             .merge(core::router())
             .layer(auth_layer)
-            .layer(
-                TraceLayer::new_for_http()
-                    .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
-                    .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
-            )
+            // OtelInResponseLayer must sit *outside* OtelAxumLayer so the response
+            // header (`traceresponse`) is added after the inner layer has populated
+            // the OTel context for the request span.
+            .layer(OtelInResponseLayer)
+            .layer(OtelAxumLayer::default())
             .layer(prometheus_layer);
 
         let listener = match tokio::net::TcpListener::bind(format!(

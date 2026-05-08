@@ -36,13 +36,13 @@ fn main() {
 fn server_launch() -> ! {
     use axum::{routing::get, Router};
     use axum_prometheus::PrometheusMetricLayer;
+    use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
     use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{
         Resource, runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider,
     };
-    use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
     use tower_sessions::cookie::time::Duration;
     use tower_sessions::cookie::SameSite;
     use tower_sessions::{Expiry, SessionManagerLayer};
@@ -125,11 +125,11 @@ fn server_launch() -> ! {
                 .route("/oauth/callback/{provider}", get(oauth_callback))
                 .route("/metrics", get(move || async move { metric_handle.render() }))
                 .layer(layer)
-                .layer(
-                    TraceLayer::new_for_http()
-                        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
-                        .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
-                )
+                // OtelInResponseLayer must sit *outside* OtelAxumLayer so the
+                // `traceresponse` header is added after the inner layer has
+                // populated the OTel context for the request span.
+                .layer(OtelInResponseLayer)
+                .layer(OtelAxumLayer::default())
                 .layer(prometheus_layer);
             Ok(router)
         }

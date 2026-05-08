@@ -28,6 +28,22 @@ mod session {
     }
 }
 
+// Shared HTTP client wrapped with reqwest-tracing middleware so every outbound
+// request to the auth service injects W3C `traceparent` from the current span.
+// Using a process-wide client also reuses the connection pool across calls.
+#[cfg(feature = "server")]
+fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
+    use std::sync::OnceLock;
+    use reqwest_middleware::ClientBuilder;
+    use reqwest_tracing::TracingMiddleware;
+    static CLIENT: OnceLock<reqwest_middleware::ClientWithMiddleware> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        ClientBuilder::new(reqwest::Client::new())
+            .with(TracingMiddleware::default())
+            .build()
+    })
+}
+
 // ---- Plain async helpers for Axum OAuth handlers in the web crate ----
 
 /// Ask the auth service to begin an OAuth flow. Returns `(auth_url, csrf_state)`.
@@ -45,7 +61,7 @@ pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
         state: String,
     }
 
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/internal/oauth/start", auth_url()))
         .header("x-service-token", service_secret())
         .json(&Req { provider })
@@ -80,7 +96,7 @@ pub async fn exchange_oauth_code(
         username: String,
     }
 
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/internal/oauth/exchange", auth_url()))
         .header("x-service-token", service_secret())
         .json(&Req { provider, code })
@@ -126,7 +142,7 @@ pub async fn login_password(
         username: String,
     }
 
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/internal/token/exchange", auth_url()))
         .header("x-service-token", service_secret())
         .json(&Req { username: username.clone(), password })
@@ -213,7 +229,7 @@ pub async fn register_password(
         username: String,
     }
 
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/internal/register", auth_url()))
         .header("x-service-token", service_secret())
         .json(&Req { username: username.clone(), email, password })
@@ -278,7 +294,7 @@ pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
         permissions: Vec<String>,
     }
 
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/internal/token/introspect", auth_url()))
         .header("x-service-token", service_secret())
         .json(&Req { token })
@@ -323,7 +339,7 @@ pub async fn ark_player_count() -> Result<i32, ServerFnError> {
         token: String,
     }
 
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/internal/ark/num_players", auth_url()))
         .header("x-service-token", service_secret())
         .json(&Req { token })
@@ -366,7 +382,7 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
         cmd: String,
     }
 
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{}/internal/ark/command", auth_url()))
         .header("x-service-token", service_secret())
         .json(&Req { token, cmd })
