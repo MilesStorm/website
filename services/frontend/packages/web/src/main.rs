@@ -37,11 +37,11 @@ fn server_launch() -> ! {
     use axum::{routing::get, Router};
     use axum_prometheus::PrometheusMetricLayer;
     use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
-    use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::KeyValue;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{
-        Resource, runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider,
+        runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider, Resource,
     };
     use tower_sessions::cookie::time::Duration;
     use tower_sessions::cookie::SameSite;
@@ -68,6 +68,8 @@ fn server_launch() -> ! {
             // hyper-util / OtelTokio, which panic with "no reactor running" if built
             // synchronously from `main`. Only init OTLP when the endpoint is explicitly
             // configured; in dev (no env var) the layer is None.
+
+            use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
             let otel_layer = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
                 Ok(endpoint) => {
                     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -78,10 +80,7 @@ fn server_launch() -> ! {
 
                     let provider = SdkTracerProvider::builder()
                         .with_batch_exporter(exporter, OtelTokio)
-                        .with_resource(Resource::new([KeyValue::new(
-                            "service.name",
-                            "frontend",
-                        )]))
+                        .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
                         .build();
 
                     let tracer = provider.tracer("frontend");
@@ -102,7 +101,27 @@ fn server_launch() -> ! {
                 .ok();
 
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
-            let pool = Pool::new(config, None, None, None, 6).expect("failed to build Redis pool");
+            let con_conf = ConnectionConfig {
+                tcp: TcpConfig {
+                    nodelay: Some(true),
+                    keepalive: Some(
+                        TcpKeepalive::new()
+                            .with_time(std::time::Duration::from_secs(30))
+                            .with_interval(std::time::Duration::from_secs(10))
+                            .with_retries(3),
+                    ),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let pool = Pool::new(
+                config,
+                None,
+                Some(con_conf),
+                Some(ReconnectPolicy::new_exponential(0, 100, 30_000, 2)),
+                6,
+            )
+            .expect("failed to build Redis pool");
             pool.connect();
             pool.wait_for_connect()
                 .await
@@ -123,7 +142,10 @@ fn server_launch() -> ! {
                 .serve_dioxus_application(ServeConfig::default(), App)
                 .route("/oauth/start/{provider}", get(oauth_start))
                 .route("/oauth/callback/{provider}", get(oauth_callback))
-                .route("/metrics", get(move || async move { metric_handle.render() }))
+                .route(
+                    "/metrics",
+                    get(move || async move { metric_handle.render() }),
+                )
                 .layer(layer)
                 // OtelInResponseLayer must sit *outside* OtelAxumLayer so the
                 // `traceresponse` header is added after the inner layer has
