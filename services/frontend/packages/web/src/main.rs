@@ -68,6 +68,10 @@ fn server_launch() -> ! {
             // hyper-util / OtelTokio, which panic with "no reactor running" if built
             // synchronously from `main`. Only init OTLP when the endpoint is explicitly
             // configured; in dev (no env var) the layer is None.
+
+            use std::time::Duration;
+
+            use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
             let otel_layer = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
                 Ok(endpoint) => {
                     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -99,10 +103,21 @@ fn server_launch() -> ! {
                 .ok();
 
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
+            let mut con_conf = ConnectionConfig::default();
+            con_conf.tcp = TcpConfig {
+                nodelay: Some(true),
+                keepalive: Some(
+                    TcpKeepalive::new()
+                        .with_time(Duration::from_secs(30))
+                        .with_interval(Duration::from_secs(10))
+                        .with_retries(3),
+                ),
+                ..Default::default()
+            };
             let pool = Pool::new(
                 config,
                 None,
-                None,
+                Some(con_conf),
                 Some(ReconnectPolicy::new_exponential(0, 100, 30_000, 2)),
                 6,
             )
