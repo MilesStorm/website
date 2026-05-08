@@ -99,6 +99,7 @@ dependencies = [
  "axum 0.8.8",
  "axum-login",
  "axum-prometheus",
+ "axum-tracing-opentelemetry",
  "chrono",
  "dotenvy",
  "jsonwebtoken",
@@ -114,7 +115,6 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
- "tower-http",
  "tower-sessions",
  "tower-sessions-sqlx-store",
  "tracing",
@@ -280,6 +280,24 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tower-http",
+]
+
+[[package]]
+name = "axum-tracing-opentelemetry"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "537b722ea45bf47f9fe55c9aac9ca7122e0fea5edb85dced4f6ec411c42fbec5"
+dependencies = [
+ "axum 0.8.8",
+ "futures-core",
+ "futures-util",
+ "http",
+ "opentelemetry",
+ "pin-project-lite",
+ "tower 0.5.3",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-opentelemetry-instrumentation-sdk",
 ]
 
 [[package]]
@@ -3122,7 +3140,6 @@ dependencies = [
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -3262,6 +3279,18 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "web-time",
+]
+
+[[package]]
+name = "tracing-opentelemetry-instrumentation-sdk"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cf359b8862d097418bc1a3edd0ab8a1700dc155258557195b29d96fde14c5a8"
+dependencies = [
+ "http",
+ "opentelemetry",
+ "tracing",
+ "tracing-opentelemetry",
 ]
 
 [[package]]

@@ -15,6 +15,13 @@ jsonwebtoken = { workspace = true }
 http = "1"
 tracing = { workspace = true }
 tower-sessions = { workspace = true, optional = true }
+reqwest-middleware = { version = "0.5", features = ["json"], optional = true }
+reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_27"], optional = true }
 
 [features]
-server = ["dioxus/server", "dep:tower-sessions"]
+server = [
+    "dioxus/server",
+    "dep:tower-sessions",
+    "dep:reqwest-middleware",
+    "dep:reqwest-tracing",
+]
