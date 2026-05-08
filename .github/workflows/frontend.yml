@@ -19,7 +19,7 @@ jobs:
       contents: read
       packages: write
     name: Build
-    runs-on: self-hosted
+    runs-on: [self-hosted, eta]
     steps:
       - name: check out repo code
         uses: actions/checkout@v4
@@ -58,5 +58,3 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
