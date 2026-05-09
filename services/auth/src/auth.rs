@@ -10,8 +10,6 @@ mod user;
 use std::{env, panic};
 
 use axum::{Router, routing::get};
-use axum_prometheus::PrometheusMetricLayer;
-use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use axum_login::{
     AuthManagerLayerBuilder,
     tower_sessions::{
@@ -20,6 +18,8 @@ use axum_login::{
         session_store::ExpiredDeletion,
     },
 };
+use axum_prometheus::PrometheusMetricLayer;
+use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use oauth2::{AuthUrl, ClientId, ClientSecret, TokenUrl, basic::BasicClient};
 use sqlx::PgPool;
 use tower_sessions_sqlx_store::PostgresStore;
@@ -79,7 +79,11 @@ impl Auth {
             Err(e) => panic!("Could not apply migrations: {e}"),
         }
 
-        Ok(Auth { db, client, g_client })
+        Ok(Auth {
+            db,
+            client,
+            g_client,
+        })
     }
 
     pub async fn server(self) -> Result<(), Box<dyn std::error::Error>> {
@@ -105,15 +109,17 @@ impl Auth {
         let internal_state = InternalState {
             db: self.db.clone(),
             jwt_secret: env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
-            service_secret: env::var("BFF_SERVICE_SECRET")
-                .expect("BFF_SERVICE_SECRET must be set"),
+            service_secret: env::var("BFF_SERVICE_SECRET").expect("BFF_SERVICE_SECRET must be set"),
             backend,
         };
 
         let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
         let app = Router::new()
-            .route("/metrics", get(move || async move { metric_handle.render() }))
+            .route(
+                "/metrics",
+                get(move || async move { metric_handle.render() }),
+            )
             .route("/auth", get(handler))
             .merge(internal::router(internal_state))
             .merge(protected_route::router())

@@ -75,7 +75,10 @@ pub fn router() -> Router<()> {
             get(self::get::restart_valheim),
         )
         .route("/auth/permission/ark/restart", get(self::get::restart_ark))
-        .route("/auth/permission/ark/num_players", get(self::get::count_ark))
+        .route(
+            "/auth/permission/ark/num_players",
+            get(self::get::count_ark),
+        )
         .route("/auth/permission/ark/start", get(self::get::start_ark))
         .route("/auth/permission/ark/stop", get(self::get::stop_ark))
         .route_layer(permission_required!(
@@ -83,7 +86,10 @@ pub fn router() -> Router<()> {
             login_url = "/auth/login",
             "llama"
         ))
-        .route("/auth/permission/valheim_player", get(self::get::permission))
+        .route(
+            "/auth/permission/valheim_player",
+            get(self::get::permission),
+        )
         .route("/auth/permission/ark", get(self::get::permission))
         .route("/auth/permission/llama", get(self::get::permission))
         .route("/auth/permission/photoview", get(self::get::permission))

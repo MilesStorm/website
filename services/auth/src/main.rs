@@ -3,7 +3,9 @@ mod auth;
 use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{Resource, runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider};
+use opentelemetry_sdk::{
+    Resource, runtime::Tokio as OtelTokio, trace::TracerProvider as SdkTracerProvider,
+};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -27,7 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tracer = provider.tracer("auth");
             opentelemetry::global::set_tracer_provider(provider.clone());
 
-            (Some(tracing_opentelemetry::layer().with_tracer(tracer)), Some(provider))
+            (
+                Some(tracing_opentelemetry::layer().with_tracer(tracer)),
+                Some(provider),
+            )
         }
         Err(_) => (None, None),
     };

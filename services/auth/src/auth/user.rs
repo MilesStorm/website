@@ -291,11 +291,10 @@ impl Backend {
                 // Identify Google users by email (unique on Google's side and in our schema).
                 // Matching on `username` would let two Googlers with the same display name
                 // overwrite each other's row.
-                let existing: Option<User> =
-                    sqlx::query_as("select * from users where email = $1")
-                        .bind(&user_info.email)
-                        .fetch_optional(&self.db)
-                        .await?;
+                let existing: Option<User> = sqlx::query_as("select * from users where email = $1")
+                    .bind(&user_info.email)
+                    .fetch_optional(&self.db)
+                    .await?;
 
                 if let Some(existing) = existing {
                     if existing.password.is_some() {
@@ -410,12 +409,11 @@ impl AuthnBackend for Backend {
     ) -> Result<Option<Self::User>, Self::Error> {
         let Credentials::Password(password_cred) = creds;
 
-        let user: Option<Self::User> = sqlx::query_as(
-            "select * from users where username = $1 and password is not null",
-        )
-        .bind(password_cred.username)
-        .fetch_optional(&self.db)
-        .await?;
+        let user: Option<Self::User> =
+            sqlx::query_as("select * from users where username = $1 and password is not null")
+                .bind(password_cred.username)
+                .fetch_optional(&self.db)
+                .await?;
 
         // Verifying the password is blocking and potentially slow, so we'll do so via
         // `spawn_blocking`.

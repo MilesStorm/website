@@ -133,7 +133,11 @@ async fn exchange_password(
             tracing::info!(user_id = user.id, username = %user.username, "password login succeeded");
             telemetry::login_attempt("password", "success");
             telemetry::token_operation("exchange", "success");
-            Json(TokenResp { token: bff_token.token, username: user.username }).into_response()
+            Json(TokenResp {
+                token: bff_token.token,
+                username: user.username,
+            })
+            .into_response()
         }
         Err(e) => {
             tracing::error!(user_id = user.id, error = %e, "failed to insert bff_token");
@@ -344,34 +348,34 @@ async fn register(
     .await;
 
     match user {
-        Ok(u) => {
-            match create_bff_token(&state.db, u.id).await {
-                Ok(bff_token) => {
-                    tracing::info!(user_id = u.id, username = %u.username, "registration succeeded");
-                    Json(TokenResp { token: bff_token.token, username: u.username }).into_response()
-                }
-                Err(e) => {
-                    tracing::error!(user_id = u.id, error = %e, "failed to insert bff_token after register");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+        Ok(u) => match create_bff_token(&state.db, u.id).await {
+            Ok(bff_token) => {
+                tracing::info!(user_id = u.id, username = %u.username, "registration succeeded");
+                Json(TokenResp {
+                    token: bff_token.token,
+                    username: u.username,
+                })
+                .into_response()
             }
-        }
-        Err(sqlx::Error::Database(db_err)) => {
-            match db_err.constraint() {
-                Some("users_username_key") => {
-                    tracing::warn!(username = %req.username, "registration failed: username already exists");
-                    (StatusCode::CONFLICT, "User already exists").into_response()
-                }
-                Some("users_email_key") => {
-                    tracing::warn!(email = %req.email, "registration failed: email already in use");
-                    (StatusCode::CONFLICT, "Email already in use").into_response()
-                }
-                _ => {
-                    tracing::error!(username = %req.username, error = %db_err, "registration failed");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+            Err(e) => {
+                tracing::error!(user_id = u.id, error = %e, "failed to insert bff_token after register");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
-        }
+        },
+        Err(sqlx::Error::Database(db_err)) => match db_err.constraint() {
+            Some("users_username_key") => {
+                tracing::warn!(username = %req.username, "registration failed: username already exists");
+                (StatusCode::CONFLICT, "User already exists").into_response()
+            }
+            Some("users_email_key") => {
+                tracing::warn!(email = %req.email, "registration failed: email already in use");
+                (StatusCode::CONFLICT, "Email already in use").into_response()
+            }
+            _ => {
+                tracing::error!(username = %req.username, error = %db_err, "registration failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        },
         Err(e) => {
             tracing::error!(username = %req.username, error = %e, "registration failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -454,7 +458,11 @@ async fn ark_num_players(
         },
         Err(_) => {
             telemetry::ark_command("num_players", "unreachable");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Could not reach ark host").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not reach ark host",
+            )
+                .into_response()
         }
     }
 }
@@ -493,7 +501,11 @@ async fn ark_command(
         },
         Err(_) => {
             telemetry::ark_command(&cmd, "unreachable");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Could not reach ark host").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not reach ark host",
+            )
+                .into_response()
         }
     }
 }
