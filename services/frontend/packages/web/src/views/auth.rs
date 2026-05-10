@@ -1,8 +1,8 @@
 use dioxus::prelude::*;
 
-use api::{login_password, register_password};
+use api::{get_my_permissions, login_password, register_password};
 
-use crate::LOGIN_STATUS;
+use crate::{LOGIN_STATUS, PERMISSIONS};
 
 // ---- Login ----
 
@@ -19,6 +19,10 @@ pub fn Login(error: String) -> Element {
             match login_password(username, password).await {
                 Ok(status) => {
                     *LOGIN_STATUS.write() = status;
+                    if let Ok(perms) = get_my_permissions().await {
+                        let map = perms.into_iter().map(|n| (n, true)).collect();
+                        *PERMISSIONS.write() = map;
+                    }
                     navigator().push("/");
                 }
                 Err(e) => login_error.set(e.to_string()),
@@ -131,6 +135,10 @@ pub fn Register() -> Element {
             match register_password(username, email, password).await {
                 Ok(status) => {
                     *LOGIN_STATUS.write() = status;
+                    if let Ok(perms) = get_my_permissions().await {
+                        let map = perms.into_iter().map(|n| (n, true)).collect();
+                        *PERMISSIONS.write() = map;
+                    }
                     navigator().push("/");
                 }
                 Err(e) => reg_error.set(e.to_string()),
