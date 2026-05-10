@@ -108,10 +108,12 @@ pub async fn exchange_oauth_code(
 
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
+        metrics::counter!("bff_login_attempts_total", "method" => provider.to_string(), "status" => "failure").increment(1);
         return Err(body);
     }
 
     let data: Resp = resp.json().await.map_err(|e| e.to_string())?;
+    metrics::counter!("bff_login_attempts_total", "method" => provider.to_string(), "status" => "success").increment(1);
     Ok((data.token, data.username))
 }
 
@@ -155,6 +157,7 @@ pub async fn login_password(
 
     if !resp.status().is_success() {
         tracing::warn!(username = %username, "password login failed: invalid credentials");
+        metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "failure").increment(1);
         return Err(ServerFnError::new("Invalid credentials"));
     }
 
@@ -172,6 +175,7 @@ pub async fn login_password(
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     tracing::info!(username = %data.username, "password login succeeded");
+    metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "success").increment(1);
     Ok(LoginStatus::LoggedIn(data.username))
 }
 
@@ -246,11 +250,13 @@ pub async fn register_password(
     if resp.status() == reqwest::StatusCode::CONFLICT {
         let body = resp.text().await.unwrap_or_default();
         tracing::warn!(username = %username, reason = %body, "registration conflict");
+        metrics::counter!("bff_register_attempts_total", "status" => "conflict").increment(1);
         return Err(ServerFnError::new(body));
     }
 
     if !resp.status().is_success() {
         tracing::error!(username = %username, status = %resp.status(), "registration failed");
+        metrics::counter!("bff_register_attempts_total", "status" => "error").increment(1);
         return Err(ServerFnError::new("Registration failed"));
     }
 
@@ -268,6 +274,7 @@ pub async fn register_password(
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     tracing::info!(username = %data.username, "registration succeeded");
+    metrics::counter!("bff_register_attempts_total", "status" => "success").increment(1);
     Ok(LoginStatus::LoggedIn(data.username))
 }
 
@@ -392,6 +399,7 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
         cmd: String,
     }
 
+    let cmd_label = cmd.clone();
     let resp = http_client()
         .post(format!("{}/internal/ark/command", auth_url()))
         .header("x-service-token", service_secret())
@@ -401,6 +409,7 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     if !resp.status().is_success() {
+        metrics::counter!("bff_ark_commands_total", "cmd" => cmd_label, "status" => "error").increment(1);
         return Err(ServerFnError::new("Ark command failed"));
     }
 
@@ -409,6 +418,7 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
+    metrics::counter!("bff_ark_commands_total", "cmd" => cmd_label, "status" => "success").increment(1);
     body.command_result
         .ok_or_else(|| ServerFnError::new("No command result"))
 }
