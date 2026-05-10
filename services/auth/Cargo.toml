@@ -33,9 +33,10 @@ ulid = "1"
 axum-prometheus = "0.10"
 metrics = "0.24"
 
-# Distributed tracing (OTLP → Alloy → Tempo)
+# Distributed tracing (OTLP → Alloy → Tempo) + log bridge (OTLP → Alloy → Loki)
 opentelemetry = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "logs"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "logs"] }
+opentelemetry-appender-tracing = "0.27"
 tracing-opentelemetry = "0.28"
 axum-tracing-opentelemetry = "0.25"
