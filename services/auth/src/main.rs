@@ -28,6 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // BoxedTracer which doesn't satisfy tracing-opentelemetry's PreSampledTracer bound.
             let tracer = provider.tracer("auth");
             opentelemetry::global::set_tracer_provider(provider.clone());
+            opentelemetry::global::set_text_map_propagator(
+                opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+            );
 
             (
                 Some(tracing_opentelemetry::layer().with_tracer(tracer)),

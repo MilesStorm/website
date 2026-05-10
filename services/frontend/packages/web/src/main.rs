@@ -85,6 +85,9 @@ fn server_launch() -> ! {
 
                 let tracer = provider.tracer("frontend");
                 opentelemetry::global::set_tracer_provider(provider);
+                opentelemetry::global::set_text_map_propagator(
+                    opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+                );
                 Some(tracing_opentelemetry::layer().with_tracer(tracer))
             }
             Err(_) => None,
