@@ -63,6 +63,7 @@ dependencies = [
  "dioxus",
  "http",
  "jsonwebtoken",
+ "metrics",
  "reqwest 0.13.3",
  "reqwest-middleware",
  "reqwest-tracing",

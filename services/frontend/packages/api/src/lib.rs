@@ -364,6 +364,7 @@ pub async fn ark_player_count() -> Result<i32, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     if !resp.status().is_success() {
+        metrics::counter!("bff_ark_commands_total", "cmd" => "num_players", "status" => "error").increment(1);
         return Err(ServerFnError::new("Ark request failed"));
     }
 
@@ -372,6 +373,7 @@ pub async fn ark_player_count() -> Result<i32, ServerFnError> {
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
+    metrics::counter!("bff_ark_commands_total", "cmd" => "num_players", "status" => "success").increment(1);
     Ok(match body.command_result {
         Some(CommandResult::NumPlayers(n)) => n,
         _ => -1,

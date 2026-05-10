@@ -391,6 +391,18 @@ async fn register(
     }
 }
 
+// Extracts the W3C traceparent header value from the current OTel span context
+// so it can be injected into outbound ark requests without pulling in a
+// separate HTTP middleware crate (which would conflict with oauth2's reqwest).
+fn traceparent() -> Option<String> {
+    use opentelemetry::propagation::TextMapPropagator as _;
+    let propagator = opentelemetry_sdk::propagation::TraceContextPropagator::new();
+    let cx = opentelemetry::Context::current();
+    let mut carrier = std::collections::HashMap::<String, String>::new();
+    propagator.inject_context(&cx, &mut carrier);
+    carrier.remove("traceparent")
+}
+
 // ---- Internal Ark operations ----
 
 #[derive(Deserialize)]
@@ -453,7 +465,11 @@ async fn ark_num_players(
     };
     tracing::debug!(user_id, "ark num_players request");
 
-    match reqwest::get("http://192.168.1.21:9090/ark/num_players").await {
+    let mut builder = reqwest::Client::new().get("http://192.168.1.21:9090/ark/num_players");
+    if let Some(tp) = traceparent() {
+        builder = builder.header("traceparent", tp);
+    }
+    match builder.send().await {
         Ok(resp) => match resp.json::<DockerRequestResponse>().await {
             Ok(body) => {
                 telemetry::ark_command("num_players", "success");
@@ -496,7 +512,11 @@ async fn ark_command(
     };
     tracing::info!(user_id, cmd = %cmd, "ark command issued");
 
-    match reqwest::get(format!("http://192.168.1.21:9090/ark/{cmd}")).await {
+    let mut builder = reqwest::Client::new().get(format!("http://192.168.1.21:9090/ark/{cmd}"));
+    if let Some(tp) = traceparent() {
+        builder = builder.header("traceparent", tp);
+    }
+    match builder.send().await {
         Ok(resp) => match resp.json::<DockerRequestResponse>().await {
             Ok(body) => {
                 telemetry::ark_command(&cmd, "success");

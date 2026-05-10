@@ -95,6 +95,7 @@ impl Auth {
                 .continuously_delete_expired(tokio::time::Duration::from_secs(60)),
         );
         tokio::spawn(sync_sessions_gauge(self.db.clone()));
+        tokio::spawn(poll_pool_metrics(self.db.clone()));
 
         let session_layer = SessionManagerLayer::new(session_store)
             // Defense-in-depth: even though auth is now cluster-internal, require Secure
@@ -153,6 +154,14 @@ impl Auth {
         deletion_task.await??;
 
         Ok(())
+    }
+}
+
+async fn poll_pool_metrics(db: PgPool) {
+    loop {
+        metrics::gauge!("auth_db_pool_size").set(db.size() as f64);
+        metrics::gauge!("auth_db_pool_idle").set(db.num_idle() as f64);
+        tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
     }
 }
 
