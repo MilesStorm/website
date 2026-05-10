@@ -166,6 +166,7 @@ struct OAuthExchangeReq {
     code: String,
 }
 
+#[tracing::instrument(name = "auth.oauth_start", skip_all, fields(provider = ?req.provider))]
 async fn oauth_start(
     State(state): State<InternalState>,
     Json(req): Json<OAuthStartReq>,
@@ -329,6 +330,7 @@ struct RegisterReq {
     password: String,
 }
 
+#[tracing::instrument(name = "auth.register", skip_all)]
 async fn register(
     State(state): State<InternalState>,
     Json(req): Json<RegisterReq>,
@@ -351,6 +353,7 @@ async fn register(
         Ok(u) => match create_bff_token(&state.db, u.id).await {
             Ok(bff_token) => {
                 tracing::info!(user_id = u.id, username = %u.username, "registration succeeded");
+                telemetry::token_operation("register", "success");
                 Json(TokenResp {
                     token: bff_token.token,
                     username: u.username,
@@ -359,25 +362,30 @@ async fn register(
             }
             Err(e) => {
                 tracing::error!(user_id = u.id, error = %e, "failed to insert bff_token after register");
+                telemetry::token_operation("register", "error");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         },
         Err(sqlx::Error::Database(db_err)) => match db_err.constraint() {
             Some("users_username_key") => {
                 tracing::warn!(username = %req.username, "registration failed: username already exists");
+                telemetry::token_operation("register", "conflict");
                 (StatusCode::CONFLICT, "User already exists").into_response()
             }
             Some("users_email_key") => {
                 tracing::warn!(email = %req.email, "registration failed: email already in use");
+                telemetry::token_operation("register", "conflict");
                 (StatusCode::CONFLICT, "Email already in use").into_response()
             }
             _ => {
                 tracing::error!(username = %req.username, error = %db_err, "registration failed");
+                telemetry::token_operation("register", "error");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         },
         Err(e) => {
             tracing::error!(username = %req.username, error = %e, "registration failed");
+            telemetry::token_operation("register", "error");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

@@ -48,6 +48,7 @@ fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
 
 /// Ask the auth service to begin an OAuth flow. Returns `(auth_url, csrf_state)`.
 #[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.start_oauth", skip_all, fields(provider = %provider))]
 pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
     use session::{auth_url, service_secret};
 
@@ -79,6 +80,7 @@ pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
 
 /// Exchange an OAuth authorization code for a BFF opaque token + username.
 #[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.exchange_oauth_code", skip_all, fields(provider = %provider))]
 pub async fn exchange_oauth_code(
     provider: &str,
     code: &str,
@@ -125,6 +127,7 @@ pub struct DockerRequestResponse {
 
 /// Log in with username + password.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.login_password", skip_all, fields(username = %username))]
 pub async fn login_password(
     username: String,
     password: String,
@@ -174,6 +177,7 @@ pub async fn login_password(
 
 /// Clear the current session.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.logout", skip_all)]
 pub async fn logout() -> Result<(), ServerFnError> {
     use session::*;
 
@@ -189,6 +193,7 @@ pub async fn logout() -> Result<(), ServerFnError> {
 
 /// Check the current login status from the BFF session.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.check_login_status", skip_all)]
 pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
     use session::*;
 
@@ -210,6 +215,7 @@ pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
 
 /// Register a new account and auto-login on success.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.register_password", skip_all, fields(username = %username))]
 pub async fn register_password(
     username: String,
     email: String,
@@ -267,6 +273,7 @@ pub async fn register_password(
 
 /// Returns the list of permission names held by the current session's user.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.get_my_permissions", skip_all)]
 pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
     use session::*;
 
@@ -316,6 +323,7 @@ pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
 
 /// Check whether the current user holds a specific permission.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.check_permission", skip_all, fields(permission = %name))]
 pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
     let result = get_my_permissions().await?.contains(&name);
     tracing::debug!(permission = %name, granted = result, "permission check");
@@ -324,6 +332,7 @@ pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
 
 /// Get the number of active players on the Ark server.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.ark_player_count", skip_all)]
 pub async fn ark_player_count() -> Result<i32, ServerFnError> {
     use session::*;
 
@@ -364,6 +373,7 @@ pub async fn ark_player_count() -> Result<i32, ServerFnError> {
 
 /// Execute an Ark server command (start | stop | restart).
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.ark_command", skip_all, fields(cmd = %cmd))]
 pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
     use session::*;
 
