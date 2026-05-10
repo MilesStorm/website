@@ -7154,6 +7154,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "tokio",
  "tower-sessions",
  "tower-sessions-redis-store",
  "tracing",

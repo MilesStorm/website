@@ -60,45 +60,52 @@ fn server_launch() -> ! {
         None => format!("redis://{redis_host}:{redis_port}"),
     };
 
+    // Dedicated runtime for the OTel batch exporter. Lives for the process lifetime
+    // because server_launch() is `-> !` and never returns, so _otel_rt is never dropped.
+    let _otel_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .thread_name("otel-exporter")
+        .build()
+        .expect("failed to build OTel runtime");
+
+    let otel_layer = _otel_rt.block_on(async {
+        match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+            Ok(endpoint) => {
+                let exporter = opentelemetry_otlp::SpanExporter::builder()
+                    .with_tonic()
+                    .with_endpoint(endpoint)
+                    .build()
+                    .expect("failed to build OTLP exporter");
+
+                let provider = SdkTracerProvider::builder()
+                    .with_batch_exporter(exporter, OtelTokio)
+                    .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
+                    .build();
+
+                let tracer = provider.tracer("frontend");
+                opentelemetry::global::set_tracer_provider(provider);
+                Some(tracing_opentelemetry::layer().with_tracer(tracer))
+            }
+            Err(_) => None,
+        }
+    });
+
+    // Init subscriber before dioxus::serve — Dioxus's own try_init().ok() will
+    // then fail silently and our subscriber (JSON + OTel) wins.
+    tracing_subscriber::registry()
+        .with(EnvFilter::new(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "info,dioxus=warn,tower_sessions=warn".into()),
+        ))
+        .with(tracing_subscriber::fmt::layer().json())
+        .with(otel_layer)
+        .init();
+
     dioxus::serve(move || {
         let redis_url = redis_url.clone();
         async move {
-            // OTLP exporter + tracing-subscriber must be initialized inside the tokio
-            // runtime: the tonic gRPC client and BatchExporter both spawn tasks via
-            // hyper-util / OtelTokio, which panic with "no reactor running" if built
-            // synchronously from `main`. Only init OTLP when the endpoint is explicitly
-            // configured; in dev (no env var) the layer is None.
-
             use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
-            let otel_layer = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
-                Ok(endpoint) => {
-                    let exporter = opentelemetry_otlp::SpanExporter::builder()
-                        .with_tonic()
-                        .with_endpoint(endpoint)
-                        .build()
-                        .expect("failed to build OTLP exporter");
-
-                    let provider = SdkTracerProvider::builder()
-                        .with_batch_exporter(exporter, OtelTokio)
-                        .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
-                        .build();
-
-                    let tracer = provider.tracer("frontend");
-                    opentelemetry::global::set_tracer_provider(provider);
-
-                    Some(tracing_opentelemetry::layer().with_tracer(tracer))
-                }
-                Err(_) => None,
-            };
-
-            tracing_subscriber::registry()
-                .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
-                    |_| "info,dioxus=warn,tower_sessions=warn".into(),
-                )))
-                .with(tracing_subscriber::fmt::layer().json())
-                .with(otel_layer)
-                .try_init()
-                .ok();
 
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
             let con_conf = ConnectionConfig {
@@ -129,8 +136,6 @@ fn server_launch() -> ! {
             let session_store = RedisStore::new(pool);
 
             let layer = SessionManagerLayer::new(session_store)
-                // BFF cookie carries the user's login session token. Require Secure (HTTPS-only)
-                // in release builds; allow plain HTTP in debug for local `dx serve`.
                 .with_secure(!cfg!(debug_assertions))
                 .with_same_site(SameSite::Lax)
                 .with_name("milesstorm.bff")
@@ -147,9 +152,6 @@ fn server_launch() -> ! {
                     get(move || async move { metric_handle.render() }),
                 )
                 .layer(layer)
-                // OtelInResponseLayer must sit *outside* OtelAxumLayer so the
-                // `traceresponse` header is added after the inner layer has
-                // populated the OTel context for the request span.
                 .layer(OtelInResponseLayer)
                 .layer(OtelAxumLayer::default())
                 .layer(prometheus_layer);
