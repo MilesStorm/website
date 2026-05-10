@@ -94,6 +94,7 @@ impl Auth {
                 .clone()
                 .continuously_delete_expired(tokio::time::Duration::from_secs(60)),
         );
+        tokio::spawn(sync_sessions_gauge(self.db.clone()));
 
         let session_layer = SessionManagerLayer::new(session_store)
             // Defense-in-depth: even though auth is now cluster-internal, require Secure
@@ -152,5 +153,22 @@ impl Auth {
         deletion_task.await??;
 
         Ok(())
+    }
+}
+
+async fn sync_sessions_gauge(db: PgPool) {
+    loop {
+        let result = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM bff_tokens WHERE expires_at > NOW()",
+        )
+        .fetch_one(&db)
+        .await;
+
+        match result {
+            Ok(count) => metrics::gauge!("auth_sessions_active").set(count as f64),
+            Err(e) => tracing::warn!(error = %e, "failed to sync sessions gauge"),
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
     }
 }

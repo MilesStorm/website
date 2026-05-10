@@ -138,7 +138,6 @@ mod post {
             let client_user = ClientUser::from(user);
             tracing::info!(user_id = client_user.id, username = %client_user.username, "legacy password login succeeded");
             telemetry::login_attempt("password", "success");
-            telemetry::session_inc();
 
             if let Some(ref next) = creds.next {
                 // Redirect::to(next).into_response();
@@ -183,7 +182,6 @@ mod get {
         match auth_session.logout().await {
             Ok(user) => {
                 tracing::info!("User logged out: {:?}", user);
-                telemetry::session_dec();
                 StatusCode::RESET_CONTENT.into_response()
             }
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
