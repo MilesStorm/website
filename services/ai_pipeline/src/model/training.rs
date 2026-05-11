@@ -3,14 +3,13 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::datasets::dataset::{DatasetType, load_dataset, load_dataset_folder};
-use crate::datasets::{DiceBatch, DiceBatcher, augment_crop, prepare_training_data_augmented};
-use crate::model::head::evaluate_mode;
+use crate::datasets::{DiceBatch, DiceBatcher, augment_batches, prepare_crops};
+use crate::model::head::{NUM_CLASSES, evaluate_mode};
 
 use burn::grad_clipping::GradientClippingConfig;
 use burn::lr_scheduler::cosine::CosineAnnealingLrSchedulerConfig;
 use burn::module::AutodiffModule;
 use burn::optim::decay::WeightDecayConfig;
-use burn::prelude::Backend;
 use burn::{
     config::Config, data::dataloader::DataLoaderBuilder, data::dataset::InMemDataset,
     module::Module, optim::AdamConfig, record::CompactRecorder, tensor::backend::AutodiffBackend,
@@ -40,8 +39,6 @@ pub struct TrainingConfig {
     pub weight_decay: f32,
 }
 
-const AUG_FACTOR: usize = 1;
-
 pub fn train<B: AutodiffBackend>(
     artifact_dir: &str,
     config: TrainingConfig,
@@ -58,6 +55,8 @@ pub fn train<B: AutodiffBackend>(
 
     B::seed(&device, config.seed);
 
+    const AUG_FACTOR: usize = 1;
+
     let (train_batches, val_batches) = match folder_type {
         DatasetType::YOLO => {
             let samples = load_dataset::<B>(root, device.clone()).expect("Failed to load dataset");
@@ -67,9 +66,8 @@ pub fn train<B: AutodiffBackend>(
             let split = (samples.len() as f32 * 0.8) as usize;
             let (train_samples, val_samples) = samples.split_at(split);
 
-            let train_batches =
-                prepare_training_data_augmented::<B>(train_samples, &device, AUG_FACTOR);
-            let val_batches = prepare_training_data_augmented::<B>(val_samples, &device, 1);
+            let train_batches = prepare_crops::<B>(train_samples, &device, AUG_FACTOR);
+            let val_batches = prepare_crops::<B>(val_samples, &device, 0);
 
             (train_batches, val_batches)
         }
@@ -77,7 +75,6 @@ pub fn train<B: AutodiffBackend>(
             let mut batches =
                 load_dataset_folder(root, device.clone()).expect("Failed to load dataset");
 
-            // Shuffle before splitting
             use rand::SeedableRng;
             use rand::seq::SliceRandom;
             let mut rng = rand::rngs::StdRng::seed_from_u64(config.seed);
@@ -86,24 +83,12 @@ pub fn train<B: AutodiffBackend>(
             println!("Loaded {} folder batches", batches.len());
 
             let split = (batches.len() as f32 * 0.8) as usize;
-            let (train_batches, val_batches) = batches.split_at(split);
+            let (train_raw, val_raw) = batches.split_at(split);
 
-            // Apply augmentation to training data only
-            let mut train_augmented = Vec::new();
-            for batch in train_batches {
-                // Add original
-                train_augmented.push(batch.clone());
-                // Add 3 augmentations
-                for i in 0..AUG_FACTOR {
-                    let aug = augment_crop(batch.images.clone(), &device, i);
-                    train_augmented.push(DiceBatch {
-                        images: aug,
-                        targets: batch.targets.clone(),
-                    });
-                }
-            }
+            let train_batches = augment_batches(train_raw, &device, AUG_FACTOR);
+            let val_batches = val_raw.to_vec();
 
-            (train_augmented, val_batches.to_vec())
+            (train_batches, val_batches)
         }
     };
 
@@ -135,7 +120,9 @@ pub fn train<B: AutodiffBackend>(
         .num_workers(config.num_workers)
         .build(InMemDataset::new(val_batches_inner));
 
-    let model = crate::model::DiceHead::new(&device);
+    let class_weights = compute_class_weights::<B>(&train_batches);
+    println!("class weights: {:?}", class_weights);
+    let model = crate::model::DiceHead::new(&device).with_class_weights(class_weights);
 
     // Use metric_train_numeric and metric_valid_numeric for graph visualization
     let valid_loss = LossMetric::new();
@@ -152,7 +139,7 @@ pub fn train<B: AutodiffBackend>(
             Aggregate::Mean,
             Direction::Lowest,
             Split::Valid,
-            StoppingCondition::NoImprovementSince { n_epochs: 15 },
+            StoppingCondition::NoImprovementSince { n_epochs: 10 },
         ))
         .metric_valid_numeric(valid_loss)
         .summary();
@@ -211,11 +198,8 @@ pub fn eval<B: AutodiffBackend>(
 
     match load_res {
         Ok(_) => {
-            let matrix = evaluate_mode(model.valid(), &batches, 20);
-            let mut names = vec![];
-            for i in 1..=20 {
-                names.push(format!("{i}"));
-            }
+            let matrix = evaluate_mode(model.valid(), &batches, NUM_CLASSES);
+            let names = class_label_names();
 
             print_confusion_matrix(&matrix, &names, artifact_dir);
         }
@@ -225,6 +209,50 @@ pub fn eval<B: AutodiffBackend>(
             panic!("");
         }
     }
+}
+
+/// Inverse-frequency class weights, capped at 10x. Classes with zero training
+/// samples fall back to weight 1.0 (CrossEntropyLoss requires strictly
+/// positive weights).
+pub fn compute_class_weights<B: AutodiffBackend>(batches: &[DiceBatch<B>]) -> Vec<f32> {
+    let mut counts = vec![0usize; NUM_CLASSES];
+    for batch in batches {
+        let data: Vec<i64> = batch
+            .targets
+            .clone()
+            .into_data()
+            .convert::<i64>()
+            .to_vec()
+            .unwrap();
+        for t in data {
+            let idx = t as usize;
+            if idx < NUM_CLASSES {
+                counts[idx] += 1;
+            }
+        }
+    }
+    let total: usize = counts.iter().sum();
+    counts
+        .iter()
+        .map(|&c| {
+            if c == 0 {
+                1.0
+            } else {
+                let w = total as f32 / (NUM_CLASSES as f32 * c as f32);
+                w.clamp(0.1, 10.0)
+            }
+        })
+        .collect()
+}
+
+/// Class label names ordered to match obj.names: "1".."9", "0", "10".."20".
+/// Label index N corresponds to the N-th line of obj.names.
+pub fn class_label_names() -> Vec<String> {
+    let mut names: Vec<String> = (1..=9).map(|i| i.to_string()).collect();
+    names.push("0".to_string());
+    names.extend((10..=20).map(|i| i.to_string()));
+    debug_assert_eq!(names.len(), NUM_CLASSES);
+    names
 }
 
 pub fn print_confusion_matrix(matrix: &[Vec<usize>], class_names: &[String], experiment_dir: &str) {

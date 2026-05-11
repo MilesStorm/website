@@ -14,6 +14,8 @@ use burn::{
 
 use crate::datasets::DiceBatch;
 
+pub const NUM_CLASSES: usize = 21;
+
 #[derive(Module, Debug)]
 pub struct DiceHead<B: Backend> {
     conv1: Conv2d<B>,
@@ -40,6 +42,9 @@ pub struct DiceHead<B: Backend> {
     dropout: Dropout,
     fc1: Linear<B>,
     fc2: Linear<B>,
+
+    #[module(skip)]
+    class_weights: Option<Vec<f32>>,
 }
 
 impl<B: Backend> DiceHead<B> {
@@ -80,8 +85,19 @@ impl<B: Backend> DiceHead<B> {
             pool: AdaptiveAvgPool2dConfig::new([1, 1]).init(),
             dropout: DropoutConfig::new(0.1).init(),
             fc1: LinearConfig::new(128, 128).init(device),
-            fc2: LinearConfig::new(128, 20).init(device),
+            fc2: LinearConfig::new(128, NUM_CLASSES).init(device),
+            class_weights: None,
         }
+    }
+
+    pub fn with_class_weights(mut self, weights: Vec<f32>) -> Self {
+        assert_eq!(
+            weights.len(),
+            NUM_CLASSES,
+            "class_weights len must equal NUM_CLASSES"
+        );
+        self.class_weights = Some(weights);
+        self
     }
 
     pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
@@ -138,6 +154,7 @@ impl<B: Backend> DiceHead<B> {
         let output = self.forward(images);
         let loss = burn::nn::loss::CrossEntropyLossConfig::new()
             .with_smoothing(Some(0.05))
+            .with_weights(self.class_weights.clone())
             .init(&output.device())
             .forward(output.clone(), targets.clone());
         ClassificationOutput::new(loss, output, targets)

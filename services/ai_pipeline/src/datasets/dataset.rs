@@ -12,6 +12,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rand::seq::SliceRandom;
 
 use crate::datasets::DiceBatch;
+use crate::model::head::NUM_CLASSES;
 
 pub enum DatasetType {
     #[allow(clippy::upper_case_acronyms)]
@@ -20,6 +21,25 @@ pub enum DatasetType {
 }
 
 const TARGET_SIZE: usize = 75;
+
+/// Map a face-value folder name (e.g. "1", "0", "10") to the canonical label
+/// index used by the model, matching the order in `obj.names`:
+///   "1".."9"   -> 0..8
+///   "0"        -> 9   (the d10 "0" glyph, semantically face value 10)
+///   "10".."20" -> 10..20
+fn folder_name_to_label(name: &str) -> Option<u32> {
+    match name {
+        "0" => Some(9),
+        n => {
+            let v: u32 = n.parse().ok()?;
+            match v {
+                1..=9 => Some(v - 1),
+                10..=20 => Some(v),
+                _ => None,
+            }
+        }
+    }
+}
 
 /// Annotation for a single bounding box.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,25 +69,30 @@ pub fn load_dataset_folder<B: Backend>(
 ) -> Result<Vec<DiceBatch<B>>> {
     let mut batches = Vec::new();
 
+    let class_dirs: Vec<(String, u32, PathBuf)> = std::fs::read_dir(root)?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let name = path.file_name()?.to_str()?.to_string();
+            let label = folder_name_to_label(&name)?;
+            Some((name, label, path))
+        })
+        .collect();
+
     let m = Arc::new(MultiProgress::new());
     let sty = ProgressStyle::with_template("{bar:40.green/yellow} {pos:>7}/{len:7}").unwrap();
 
-    let pb = m.add(ProgressBar::new(20));
+    let pb = m.add(ProgressBar::new(class_dirs.len() as u64));
     pb.set_style(sty.clone());
 
-    for class_id in 1..21 {
-        let class_path = root.join(format!("{}", class_id));
+    for (_name, label, class_path) in class_dirs {
+        let entries: Vec<_> = std::fs::read_dir(&class_path)?.flatten().collect();
+        let pb2 = m.add(ProgressBar::new(entries.len() as u64));
 
-        if !class_path.exists() {
-            eprintln!("Missing folder: {:?}", class_path);
-            continue;
-        }
-
-        // For each face value 0-20
-        let itr: Vec<_> = std::fs::read_dir(&class_path).unwrap().flatten().collect();
-        let pb2 = m.add(ProgressBar::new(itr.len() as u64));
-
-        for entry in std::fs::read_dir(&class_path).unwrap().flatten() {
+        for entry in entries {
             let path = entry.path();
             if !path
                 .extension()
@@ -97,7 +122,7 @@ pub fn load_dataset_folder<B: Backend>(
             );
 
             let target = Tensor::<B, 1, Int>::from_data(
-                TensorData::new(vec![(class_id - 1) as i64], [1]),
+                TensorData::new(vec![label as i64], [1]),
                 &device,
             );
 
@@ -191,16 +216,20 @@ pub fn load_dataset<B: Backend>(root: &Path, device: B::Device) -> Result<Vec<Sa
                 .filter_map(|line| {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() != 5 {
-                        None
-                    } else {
-                        // Use map to propagate parse errors silently.
-                        let class = parts[0].parse::<u32>().ok()?;
-                        let x = parts[1].parse::<f32>().ok()?;
-                        let y = parts[2].parse::<f32>().ok()?;
-                        let w = parts[3].parse::<f32>().ok()?;
-                        let h = parts[4].parse::<f32>().ok()?;
-                        Some(Annotation { class, x, y, w, h })
+                        return None;
                     }
+                    let class = parts[0].parse::<u32>().ok()?;
+                    if class as usize >= NUM_CLASSES {
+                        eprintln!(
+                            "warning: dropping annotation with class {class} >= NUM_CLASSES ({NUM_CLASSES}) in {ann_path:?}"
+                        );
+                        return None;
+                    }
+                    let x = parts[1].parse::<f32>().ok()?;
+                    let y = parts[2].parse::<f32>().ok()?;
+                    let w = parts[3].parse::<f32>().ok()?;
+                    let h = parts[4].parse::<f32>().ok()?;
+                    Some(Annotation { class, x, y, w, h })
                 })
                 .collect();
 

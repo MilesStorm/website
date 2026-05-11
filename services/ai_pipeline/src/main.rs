@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     println!("Done.");
 
     let config = TrainingConfig::new(AdamConfig::new())
-        .with_num_epochs(150)
+        .with_num_epochs(80)
         .with_batch_size(32)
         .with_num_workers(4)
         .with_seed(42)
@@ -39,8 +39,11 @@ fn main() -> anyhow::Result<()> {
         .with_weight_decay(5e-5);
 
     if args.contains(&String::from("yolo")) {
-        let data_path = std::path::Path::new("./data/dice_bbox");
-        train::<MyBackend>("./art", config, device, data_path, DatasetType::YOLO);
+        anyhow::bail!(
+            "`yolo` is the production inference path (camera -> YOLO bbox -> DiceHead) and \
+             is not implemented yet. Use `folder` to train the head, or `eval` to score it \
+             against data/dice_face."
+        );
     } else if args.contains(&String::from("eval")) {
         let exp_dir = latest_experiment_dir(Path::new(ART_ROOT))
             .unwrap_or_else(|| panic!("No experiment_* directories found in {}", ART_ROOT));
