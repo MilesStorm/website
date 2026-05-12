@@ -20,7 +20,7 @@ pub enum DatasetType {
     Folder,
 }
 
-const TARGET_SIZE: usize = 75;
+const TARGET_SIZE: usize = 128;
 
 /// Map a face-value folder name (e.g. "1", "0", "10") to the canonical label
 /// index used by the model, matching the order in `obj.names`:

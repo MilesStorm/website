@@ -5,10 +5,9 @@ pub mod model;
 use std::{env, path::Path};
 
 use burn::{
-    backend::{
-        Autodiff, Cuda, autodiff::checkpoint::strategy::BalancedCheckpointing, cuda::CudaDevice,
-    },
+    backend::{Autodiff, Cuda, cuda::CudaDevice},
     optim::AdamConfig,
+    tensor::bf16,
 };
 
 use crate::{
@@ -20,7 +19,7 @@ const ART_ROOT: &str = "./art";
 // Add a quick test in main to verify dataset loading.
 
 fn main() -> anyhow::Result<()> {
-    type MyBackend = Autodiff<Cuda, BalancedCheckpointing>;
+    type MyBackend = Autodiff<Cuda<bf16>>;
 
     let args: Vec<String> = env::args().collect();
 
@@ -32,10 +31,10 @@ fn main() -> anyhow::Result<()> {
 
     let config = TrainingConfig::new(AdamConfig::new())
         .with_num_epochs(80)
-        .with_batch_size(32)
-        .with_num_workers(4)
+        .with_batch_size(128)
+        .with_num_workers(0)
         .with_seed(42)
-        .with_learning_rate(5e-4)
+        .with_learning_rate(1e-3)
         .with_weight_decay(5e-5);
 
     if args.contains(&String::from("yolo")) {

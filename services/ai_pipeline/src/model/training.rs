@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::datasets::dataset::{DatasetType, load_dataset, load_dataset_folder};
 use crate::datasets::{DiceBatch, DiceBatcher, augment_batches, prepare_crops};
-use crate::model::head::{NUM_CLASSES, evaluate_mode};
+use crate::model::head::{NUM_CLASSES, evaluate_with_tta};
 
 use burn::grad_clipping::GradientClippingConfig;
 use burn::lr_scheduler::cosine::CosineAnnealingLrSchedulerConfig;
@@ -105,6 +105,11 @@ pub fn train<B: AutodiffBackend>(
             targets: batch.targets.clone().inner(),
         })
         .collect();
+    // val_batches lives on the autodiff backend; the dataloader only consumes
+    // val_batches_inner, so release the autodiff copy before training starts
+    // to avoid carrying a duplicate of the validation set on GPU for the
+    // whole run.
+    drop(val_batches);
 
     let batcher_train = DiceBatcher::<B>::new(device.clone());
     let batcher_valid = DiceBatcher::<B::InnerBackend>::new(device.clone());
@@ -163,7 +168,15 @@ pub fn train<B: AutodiffBackend>(
         lr_scheduler,
     ));
 
-    //save
+    // KNOWN LIMITATION: burn-train 0.21 SupervisedTraining::launch returns the
+    // final-epoch model, not the best-valid-loss epoch. The MetricEarlyStoppingStrategy
+    // wired above only halts training; it does not restore the best weights, and no
+    // "restore best" API exists on the Learner / SupervisedTraining builder. Per-epoch
+    // checkpoints are also not written because we do not call .with_file_checkpointer(),
+    // so we cannot reload a better epoch post-hoc. To capture the best-valid-loss
+    // epoch in the future, install .with_file_checkpointer(CompactRecorder::new()) +
+    // .with_checkpointing_strategy(MetricCheckpointingStrategy::new(...)) and reload
+    // the surviving checkpoint here.
     let mut store = BurnpackStore::from_file(format!("{}/model/model", artifact_dir));
 
     result.model.save_into(&mut store).unwrap_or_else(|e| {
@@ -196,9 +209,33 @@ pub fn eval<B: AutodiffBackend>(
 
     let load_res = model.load_from(&mut store);
 
+    // load_dataset_folder emits one [1,3,64,64] DiceBatch per image. Running
+    // forward at batch=1 is kernel-launch bound (GPU idle 95% of the time),
+    // so concat into chunks of EVAL_BATCH first. evaluate_with_tta runs on
+    // B::InnerBackend (no autodiff needed for eval), so strip the autodiff
+    // wrapper as we batch.
+    const EVAL_BATCH: usize = 128;
+    let batcher = crate::datasets::DiceBatcher::<B::InnerBackend>::new(device.clone());
+    let batched: Vec<crate::datasets::DiceBatch<B::InnerBackend>> = {
+        use burn::data::dataloader::batcher::Batcher;
+        batches
+            .chunks(EVAL_BATCH)
+            .map(|chunk: &[crate::datasets::DiceBatch<B>]| {
+                let inner: Vec<crate::datasets::DiceBatch<B::InnerBackend>> = chunk
+                    .iter()
+                    .map(|b| crate::datasets::DiceBatch {
+                        images: b.images.clone().inner(),
+                        targets: b.targets.clone().inner(),
+                    })
+                    .collect();
+                batcher.batch(inner, &device)
+            })
+            .collect()
+    };
+
     match load_res {
         Ok(_) => {
-            let matrix = evaluate_mode(model.valid(), &batches, NUM_CLASSES);
+            let matrix = evaluate_with_tta(model.valid(), &batched, NUM_CLASSES, 0);
             let names = class_label_names();
 
             print_confusion_matrix(&matrix, &names, artifact_dir);
@@ -211,9 +248,11 @@ pub fn eval<B: AutodiffBackend>(
     }
 }
 
-/// Inverse-frequency class weights, capped at 10x. Classes with zero training
-/// samples fall back to weight 1.0 (CrossEntropyLoss requires strictly
-/// positive weights).
+/// Sqrt-inverse-frequency class weights, capped at 3x. Plain inverse-frequency
+/// (previous behaviour, 10x cap) hurt accuracy on the abundant low-value faces
+/// (classes 1-5 at 57-74%) because it gave rare classes ~25x the gradient
+/// pull. Sqrt softens the curve so rare classes still get a lift but common
+/// classes aren't sacrificed.
 pub fn compute_class_weights<B: AutodiffBackend>(batches: &[DiceBatch<B>]) -> Vec<f32> {
     let mut counts = vec![0usize; NUM_CLASSES];
     for batch in batches {
@@ -238,8 +277,8 @@ pub fn compute_class_weights<B: AutodiffBackend>(batches: &[DiceBatch<B>]) -> Ve
             if c == 0 {
                 1.0
             } else {
-                let w = total as f32 / (NUM_CLASSES as f32 * c as f32);
-                w.clamp(0.1, 10.0)
+                let raw = total as f32 / (NUM_CLASSES as f32 * c as f32);
+                raw.sqrt().clamp(0.3, 3.0)
             }
         })
         .collect()

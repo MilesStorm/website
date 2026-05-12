@@ -2,8 +2,8 @@ use burn::{
     Tensor,
     module::Module,
     nn::{
-        BatchNorm, BatchNormConfig, Dropout, DropoutConfig, GroupNorm, GroupNormConfig, Linear,
-        LinearConfig,
+        BatchNorm, BatchNormConfig, Dropout, DropoutConfig, Linear, LinearConfig,
+        PaddingConfig2d,
         conv::{Conv2d, Conv2dConfig},
         pool::{AdaptiveAvgPool2d, AdaptiveAvgPool2dConfig},
     },
@@ -16,32 +16,64 @@ use crate::datasets::DiceBatch;
 
 pub const NUM_CLASSES: usize = 21;
 
+/// One residual block: two stride-1 3x3 convs with BN+GELU, identity add.
+/// Channels stay constant inside the block; the preceding stride-2 down-conv
+/// already brought the activation to the block's channel/spatial shape.
 #[derive(Module, Debug)]
-pub struct DiceHead<B: Backend> {
+struct ResBlock<B: Backend> {
     conv1: Conv2d<B>,
     bn1: BatchNorm<B>,
-
     conv2: Conv2d<B>,
     bn2: BatchNorm<B>,
+}
 
-    conv3: Conv2d<B>,
-    bn3: BatchNorm<B>,
-    proj3: Conv2d<B>,
+impl<B: Backend> ResBlock<B> {
+    fn new(channels: usize, device: &B::Device) -> Self {
+        Self {
+            conv1: Conv2dConfig::new([channels, channels], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            bn1: BatchNormConfig::new(channels).init(device),
+            conv2: Conv2dConfig::new([channels, channels], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            bn2: BatchNormConfig::new(channels).init(device),
+        }
+    }
 
-    conv4: Conv2d<B>,
-    gn4: GroupNorm<B>,
+    fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+        let residual = x.clone();
+        let y = self.bn1.forward(self.conv1.forward(x));
+        let y = gelu(y);
+        let y = self.bn2.forward(self.conv2.forward(y));
+        gelu(y + residual)
+    }
+}
 
-    conv5: Conv2d<B>,
-    bn5: BatchNorm<B>,
-    proj5: Conv2d<B>,
+#[derive(Module, Debug)]
+pub struct DiceHead<B: Backend> {
+    // Stem: 3 -> 48, stride 2. 128 -> 64.
+    stem_conv: Conv2d<B>,
+    stem_bn: BatchNorm<B>,
 
-    conv6: Conv2d<B>,
-    bn6: BatchNorm<B>,
+    // Stage 1: 48 -> 96, stride 2. 64 -> 32.
+    s1_down: Conv2d<B>,
+    s1_bn: BatchNorm<B>,
+    s1_block: ResBlock<B>,
+
+    // Stage 2: 96 -> 192, stride 2. 32 -> 16.
+    s2_down: Conv2d<B>,
+    s2_bn: BatchNorm<B>,
+    s2_block: ResBlock<B>,
+
+    // Stage 3: 192 -> 384, stride 2. 16 -> 8.
+    s3_down: Conv2d<B>,
+    s3_bn: BatchNorm<B>,
+    s3_block: ResBlock<B>,
 
     pool: AdaptiveAvgPool2d,
     dropout: Dropout,
-    fc1: Linear<B>,
-    fc2: Linear<B>,
+    fc: Linear<B>,
 
     #[module(skip)]
     class_weights: Option<Vec<f32>>,
@@ -49,43 +81,31 @@ pub struct DiceHead<B: Backend> {
 
 impl<B: Backend> DiceHead<B> {
     pub fn new(device: &B::Device) -> Self {
+        let down = |in_c: usize, out_c: usize| -> Conv2dConfig {
+            Conv2dConfig::new([in_c, out_c], [3, 3])
+                .with_stride([2, 2])
+                .with_padding(PaddingConfig2d::Same)
+        };
+
         Self {
-            conv1: Conv2dConfig::new([3, 48], [3, 3])
-                .with_padding(burn::nn::PaddingConfig2d::Same)
-                .init(device),
-            bn1: BatchNormConfig::new(48).init(device),
+            stem_conv: down(3, 48).init(device),
+            stem_bn: BatchNormConfig::new(48).init(device),
 
-            conv2: Conv2dConfig::new([48, 48], [3, 3])
-                .with_padding(burn::nn::PaddingConfig2d::Same)
-                .init(device),
-            bn2: BatchNormConfig::new(48).init(device),
+            s1_down: down(48, 96).init(device),
+            s1_bn: BatchNormConfig::new(96).init(device),
+            s1_block: ResBlock::new(96, device),
 
-            conv3: Conv2dConfig::new([48, 64], [3, 3])
-                .with_padding(burn::nn::PaddingConfig2d::Same)
-                .init(device),
-            bn3: BatchNormConfig::new(64).init(device),
-            proj3: Conv2dConfig::new([48, 64], [1, 1]).init(device),
+            s2_down: down(96, 192).init(device),
+            s2_bn: BatchNormConfig::new(192).init(device),
+            s2_block: ResBlock::new(192, device),
 
-            conv4: Conv2dConfig::new([64, 64], [3, 3])
-                .with_padding(burn::nn::PaddingConfig2d::Same)
-                .init(device),
-            gn4: GroupNormConfig::new(1, 64).init(device),
-
-            conv5: Conv2dConfig::new([64, 128], [3, 3])
-                .with_padding(burn::nn::PaddingConfig2d::Same)
-                .init(device),
-            bn5: BatchNormConfig::new(128).init(device),
-            proj5: Conv2dConfig::new([64, 128], [1, 1]).init(device),
-
-            conv6: Conv2dConfig::new([128, 128], [3, 3])
-                .with_padding(burn::nn::PaddingConfig2d::Same)
-                .init(device),
-            bn6: BatchNormConfig::new(128).init(device),
+            s3_down: down(192, 384).init(device),
+            s3_bn: BatchNormConfig::new(384).init(device),
+            s3_block: ResBlock::new(384, device),
 
             pool: AdaptiveAvgPool2dConfig::new([1, 1]).init(),
-            dropout: DropoutConfig::new(0.1).init(),
-            fc1: LinearConfig::new(128, 128).init(device),
-            fc2: LinearConfig::new(128, NUM_CLASSES).init(device),
+            dropout: DropoutConfig::new(0.2).init(),
+            fc: LinearConfig::new(384, NUM_CLASSES).init(device),
             class_weights: None,
         }
     }
@@ -101,34 +121,21 @@ impl<B: Backend> DiceHead<B> {
     }
 
     pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
-        let mut x = gelu(self.bn1.forward(self.conv1.forward(x)));
+        let x = gelu(self.stem_bn.forward(self.stem_conv.forward(x)));
 
-        let mut residual = x.clone();
-        x = self.bn2.forward(self.conv2.forward(x));
-        x = gelu(x + residual);
+        let x = gelu(self.s1_bn.forward(self.s1_down.forward(x)));
+        let x = self.s1_block.forward(x);
 
-        residual = self.proj3.forward(x.clone());
-        x = self.bn3.forward(self.conv3.forward(x));
-        x = gelu(x + residual);
+        let x = gelu(self.s2_bn.forward(self.s2_down.forward(x)));
+        let x = self.s2_block.forward(x);
 
-        residual = x.clone();
-        x = self.gn4.forward(self.conv4.forward(x));
-        x = gelu(x + residual);
+        let x = gelu(self.s3_bn.forward(self.s3_down.forward(x)));
+        let x = self.s3_block.forward(x);
 
-        residual = self.proj5.forward(x.clone());
-        x = self.bn5.forward(self.conv5.forward(x));
-        x = gelu(x + residual);
-
-        residual = x.clone();
-        x = self.bn6.forward(self.conv6.forward(x));
-        x = gelu(x + residual);
-
-        x = self.pool.forward(x);
-        let mut x = x.flatten(1, 3);
-        x = gelu(self.fc1.forward(x));
-        x = self.dropout.forward(x);
-
-        self.fc2.forward(x)
+        let x = self.pool.forward(x);
+        let x = x.flatten(1, 3);
+        let x = self.dropout.forward(x);
+        self.fc.forward(x)
     }
 }
 
@@ -138,8 +145,6 @@ impl<B: burn::tensor::backend::AutodiffBackend> TrainStep for DiceHead<B> {
 
     fn step(&self, batch: Self::Input) -> TrainOutput<Self::Output> {
         let item = self.forward_classification(batch.images, batch.targets);
-        // Check if gradients exist and are non-zero
-
         TrainOutput::new(self, item.loss.backward(), item)
     }
 }
@@ -175,10 +180,31 @@ pub fn evaluate_mode<B: Backend>(
     val_batches: &[DiceBatch<B>],
     num_classes: usize,
 ) -> Vec<Vec<usize>> {
+    evaluate_with_tta(model, val_batches, num_classes, 0)
+}
+
+/// Evaluate with test-time augmentation. Averages logits across the
+/// original crop plus `num_tta` mildly-augmented copies (rotation + color
+/// jitter only; no spatial crop). `num_tta = 0` reduces to the plain
+/// single-pass evaluator.
+pub fn evaluate_with_tta<B: Backend>(
+    model: DiceHead<B>,
+    val_batches: &[DiceBatch<B>],
+    num_classes: usize,
+    num_tta: usize,
+) -> Vec<Vec<usize>> {
+    use crate::datasets::augment_crop_tta;
+
     let mut matrix = vec![vec![0usize; num_classes]; num_classes];
 
     for batch in val_batches {
-        let output = model.forward(batch.images.clone());
+        let device = batch.images.device();
+        let mut output = model.forward(batch.images.clone());
+
+        for _ in 0..num_tta {
+            let augmented = augment_crop_tta(batch.images.clone(), &device);
+            output = output + model.forward(augmented);
+        }
 
         let predictions = output.argmax(1);
         let targets = batch.targets.clone();

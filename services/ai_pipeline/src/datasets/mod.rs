@@ -64,7 +64,7 @@ pub fn prepare_crops<B: Backend>(
 
     for sample in samples {
         for ann in &sample.annotations {
-            let crop = crop_dice(sample.image.clone(), ann, [64, 64], device);
+            let crop = crop_dice(sample.image.clone(), ann, [128, 128], device);
 
             let target_data = TensorData::new(vec![ann.class as i64], vec![1]);
             let target = Tensor::<B, 1, Int>::from_data(target_data, device);
@@ -141,6 +141,15 @@ pub fn crop_dice<B: Backend>(
     )
 }
 
+/// Mild augmentation for test-time augmentation: rotation + color jitter
+/// only, no spatial crop. Used to generate variants for logit averaging at
+/// eval time.
+pub fn augment_crop_tta<B: Backend>(crop: Tensor<B, 4>, device: &B::Device) -> Tensor<B, 4> {
+    let mut x = small_rotate(crop, device);
+    x = color_jitter(x, device);
+    x
+}
+
 /// Stochastic augmentation chain. Each transform is applied with some
 /// probability; all are label-preserving for numeric D&D dice (no 90deg
 /// rotations, no flips).
@@ -200,13 +209,14 @@ fn small_rotate<B: Backend>(image: Tensor<B, 4>, device: &B::Device) -> Tensor<B
     image.grid_sample_2d(grid, GridSampleOptions::default())
 }
 
-/// Random zoom: crop a 90-100% box of the input and resize back to the
-/// original spatial dims. Tighter than the previous 80-100% range to avoid
-/// chopping glyphs.
+/// Random zoom: crop a 95-100% box of the input and resize back to the
+/// original spatial dims. At 128x128 with whole-die framing a tighter range
+/// is needed since a 90% crop can shave the top face entirely if the die
+/// isn't centered.
 fn random_crop_resize<B: Backend>(image: Tensor<B, 4>, device: &B::Device) -> Tensor<B, 4> {
     let [batch, channels, h, w] = image.dims();
 
-    let scale = Tensor::<B, 1>::random([1], Distribution::Uniform(0.9f64, 1.0f64), device)
+    let scale = Tensor::<B, 1>::random([1], Distribution::Uniform(0.95f64, 1.0f64), device)
         .into_scalar()
         .elem::<f32>();
 
