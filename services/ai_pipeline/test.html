@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dice Detector Test</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font-family: monospace; display: flex; flex-direction: column; align-items: center; padding: 16px; gap: 8px; }
+  #wrap { position: relative; }
+  video, canvas { position: absolute; top: 0; left: 0; }
+  video { opacity: 0; }
+  canvas { background: #000; }
+  #status { font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="status">Connecting...</div>
+<div id="wrap">
+  <canvas id="out" width="640" height="480"></canvas>
+  <video id="cam" width="640" height="480" autoplay playsinline muted></video>
+</div>
+<script>
+const WS_URL = 'ws://localhost:9000';
+const JPEG_QUALITY = 0.7;
+const FPS_CAP = 15;
+
+const status = document.getElementById('status');
+const video = document.getElementById('cam');
+const canvas = document.getElementById('out');
+const ctx = canvas.getContext('2d');
+
+let ws = null;
+let waiting = false;
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { status.textContent = 'Connected — starting webcam'; startCam(); };
+  ws.onclose = () => { status.textContent = 'Disconnected — retrying in 2s'; setTimeout(connect, 2000); };
+  ws.onerror = () => {};
+  ws.onmessage = (e) => {
+    waiting = false;
+    try {
+      const data = JSON.parse(e.data);
+      drawFrame(data);
+      status.textContent = `frame_ms: ${data.frame_ms ?? '?'} | detections: ${(data.detections ?? []).length}`;
+    } catch {}
+  };
+}
+
+async function startCam() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+  video.srcObject = stream;
+  await video.play();
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+  canvas.width = vw;
+  canvas.height = vh;
+  video.width = vw;
+  video.height = vh;
+  document.getElementById('wrap').style.width = vw + 'px';
+  document.getElementById('wrap').style.height = vh + 'px';
+  setInterval(sendFrame, 1000 / FPS_CAP);
+}
+
+function sendFrame() {
+  if (waiting || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ctx.drawImage(video, 0, 0);
+  canvas.toBlob(blob => {
+    if (!blob) return;
+    blob.arrayBuffer().then(buf => {
+      ws.send(buf);
+      waiting = true;
+    });
+  }, 'image/jpeg', JPEG_QUALITY);
+}
+
+const COLORS = ['#f00','#0f0','#08f','#f80','#f0f','#0ff','#ff0'];
+
+function drawFrame(data) {
+  ctx.drawImage(video, 0, 0);
+  for (const d of (data.detections ?? [])) {
+    const x = d.x1 * canvas.width;
+    const y = d.y1 * canvas.height;
+    const w = (d.x2 - d.x1) * canvas.width;
+    const h = (d.y2 - d.y1) * canvas.height;
+    const color = COLORS[d.dice_class % COLORS.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+    const label = `die:${d.dice_class} ${(d.dice_conf * 100).toFixed(0)}%`;
+    ctx.fillStyle = color;
+    ctx.font = '13px monospace';
+    ctx.fillText(label, x + 2, y - 4 < 10 ? y + 14 : y - 4);
+  }
+}
+
+connect();
+</script>
+</body>
+</html>
