@@ -42,10 +42,8 @@ fn server_launch() -> ! {
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{
-        logs::LoggerProvider as SdkLoggerProvider,
-        runtime::Tokio as OtelTokio,
-        trace::TracerProvider as SdkTracerProvider,
-        Resource,
+        logs::LoggerProvider as SdkLoggerProvider, runtime::Tokio as OtelTokio,
+        trace::TracerProvider as SdkTracerProvider, Resource,
     };
     use tower_sessions::cookie::time::Duration;
     use tower_sessions::cookie::SameSite;
@@ -73,54 +71,59 @@ fn server_launch() -> ! {
         .build()
         .expect("failed to build OTel runtime");
 
-    let (otel_layer, _otel_log_provider): (Option<_>, Option<SdkLoggerProvider>) = _otel_rt.block_on(async {
-        match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
-            Ok(endpoint) => {
-                let exporter = opentelemetry_otlp::SpanExporter::builder()
-                    .with_tonic()
-                    .with_endpoint(endpoint.clone())
-                    .build()
-                    .expect("failed to build OTLP exporter");
+    let (otel_layer, _otel_log_provider): (Option<_>, Option<SdkLoggerProvider>) = _otel_rt
+        .block_on(async {
+            match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+                Ok(endpoint) => {
+                    let exporter = opentelemetry_otlp::SpanExporter::builder()
+                        .with_tonic()
+                        .with_endpoint(endpoint.clone())
+                        .build()
+                        .expect("failed to build OTLP exporter");
 
-                let provider = SdkTracerProvider::builder()
-                    .with_batch_exporter(exporter, OtelTokio)
-                    .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
-                    .build();
+                    let provider = SdkTracerProvider::builder()
+                        .with_batch_exporter(exporter, OtelTokio)
+                        .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
+                        .build();
 
-                let tracer = provider.tracer("frontend");
-                opentelemetry::global::set_tracer_provider(provider);
-                opentelemetry::global::set_text_map_propagator(
-                    opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-                );
+                    let tracer = provider.tracer("frontend");
+                    opentelemetry::global::set_tracer_provider(provider);
+                    opentelemetry::global::set_text_map_propagator(
+                        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+                    );
 
-                let log_exporter = opentelemetry_otlp::LogExporter::builder()
-                    .with_tonic()
-                    .with_endpoint(endpoint)
-                    .build()
-                    .expect("failed to build OTLP log exporter");
+                    let log_exporter = opentelemetry_otlp::LogExporter::builder()
+                        .with_tonic()
+                        .with_endpoint(endpoint)
+                        .build()
+                        .expect("failed to build OTLP log exporter");
 
-                let log_provider = SdkLoggerProvider::builder()
-                    .with_batch_exporter(log_exporter, OtelTokio)
-                    .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
-                    .build();
+                    let log_provider = SdkLoggerProvider::builder()
+                        .with_batch_exporter(log_exporter, OtelTokio)
+                        .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
+                        .build();
 
-                (Some(tracing_opentelemetry::layer().with_tracer(tracer)), Some(log_provider))
+                    (
+                        Some(tracing_opentelemetry::layer().with_tracer(tracer)),
+                        Some(log_provider),
+                    )
+                }
+                Err(_) => (None, None),
             }
-            Err(_) => (None, None),
-        }
-    });
+        });
 
-    let otel_log_layer = _otel_log_provider.as_ref().map(|p| OpenTelemetryTracingBridge::new(p));
+    let otel_log_layer = _otel_log_provider
+        .as_ref()
+        .map(|p| OpenTelemetryTracingBridge::new(p));
 
     // Init subscriber before dioxus::serve — Dioxus's own try_init().ok() will
     // then fail silently and our subscriber (JSON + OTel) wins.
     // The OTel log bridge additionally ships log events via OTLP so Loki entries carry
     // trace_id/span_id, enabling Tempo → Loki correlation.
     tracing_subscriber::registry()
-        .with(EnvFilter::new(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "info,dioxus=warn,tower_sessions=warn".into()),
-        ))
+        .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
+            |_| "info,dioxus=warn,tower_sessions=warn".into(),
+        )))
         .with(tracing_subscriber::fmt::layer().json())
         .with(otel_layer)
         .with(otel_log_layer)
