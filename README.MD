@@ -60,7 +60,7 @@ Contributions are welcome! Please fork the repository and submit a pull request 
 
 ## Contact
 
-For any questions or inquiries, please contact me at milesstorm@gmail.com.
+For any questions or inquiries, please contact me at milesrstorm@gmail.com.
 
 ---
 
