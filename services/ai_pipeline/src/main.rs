@@ -1,6 +1,7 @@
 mod datasets;
 mod helper;
 pub mod model;
+mod serve;
 
 use std::{env, path::Path};
 
@@ -16,17 +17,33 @@ use crate::{
     model::training::{TrainingConfig, eval, train},
 };
 const ART_ROOT: &str = "./art";
-// Add a quick test in main to verify dataset loading.
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     type MyBackend = Autodiff<Cuda<bf16>>;
 
     let args: Vec<String> = env::args().collect();
 
+    if args.contains(&String::from("yolo")) {
+        // WebSocket inference server: browser webcam → YOLO bbox → DiceHead → JSON detections.
+        // Default address can be overridden: cargo r --release -- yolo 0.0.0.0:9001
+        let addr = args
+            .iter()
+            .skip(2)
+            .find(|a| a.contains(':'))
+            .map(String::as_str)
+            .unwrap_or("0.0.0.0:9000");
+
+        let exp_dir = latest_experiment_dir(Path::new(ART_ROOT))
+            .unwrap_or_else(|| panic!("No experiment_* dirs found in {}", ART_ROOT));
+        println!("Using weights from {}", exp_dir.display());
+
+        serve::serve(addr, exp_dir).await?;
+        return Ok(());
+    }
+
     println!("creating device..");
-
     let device = CudaDevice::new(0);
-
     println!("Done.");
 
     let config = TrainingConfig::new(AdamConfig::new())
@@ -37,13 +54,7 @@ fn main() -> anyhow::Result<()> {
         .with_learning_rate(1e-3)
         .with_weight_decay(5e-5);
 
-    if args.contains(&String::from("yolo")) {
-        anyhow::bail!(
-            "`yolo` is the production inference path (camera -> YOLO bbox -> DiceHead) and \
-             is not implemented yet. Use `folder` to train the head, or `eval` to score it \
-             against data/dice_face."
-        );
-    } else if args.contains(&String::from("eval")) {
+    if args.contains(&String::from("eval")) {
         let exp_dir = latest_experiment_dir(Path::new(ART_ROOT))
             .unwrap_or_else(|| panic!("No experiment_* directories found in {}", ART_ROOT));
         let exp_dir_str = exp_dir.to_string_lossy().to_string();

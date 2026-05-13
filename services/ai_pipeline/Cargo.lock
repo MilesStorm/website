@@ -2290,10 +2290,15 @@ dependencies = [
  "burn-onnx",
  "burn-store",
  "burn-train",
+ "futures-util",
  "image",
  "indicatif",
  "log",
  "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use burn::prelude::Backend;
+use serde::Serialize;
 use burn::tensor::activation::softmax;
 use burn::tensor::module::interpolate;
 use burn::tensor::ops::{InterpolateMode, InterpolateOptions};
@@ -18,7 +19,7 @@ const HEAD_INPUT: usize = 128;
 /// Default YOLO confidence threshold.
 const DEFAULT_CONF: f32 = 0.25;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Detection {
     /// Bounding box in normalized [0, 1] coordinates within the input frame.
     pub x1: f32,
