@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 
 use api::{check_login_status, get_my_permissions, logout};
 use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
-use views::{Ark, Landing, Login, NotFound, Profile, Register};
+use views::{Arcane, Ark, Landing, Login, NotFound, Profile, Register};
 
 mod views;
 
@@ -174,6 +174,7 @@ fn server_launch() -> ! {
                 .serve_dioxus_application(ServeConfig::default(), App)
                 .route("/oauth/start/{provider}", get(oauth_start))
                 .route("/oauth/callback/{provider}", get(oauth_callback))
+                .route("/ws/arcane", get(arcane_ws_proxy))
                 .route(
                     "/metrics",
                     get(move || async move { metric_handle.render() }),
@@ -185,6 +186,79 @@ fn server_launch() -> ! {
             Ok(router)
         }
     })
+}
+
+// ---- Arcane WebSocket proxy ----
+
+/// Upgrades to WebSocket and bidirectionally proxies to the ai_pipeline inference service.
+/// Requires a valid session with the `arcane` permission; returns 401/403 otherwise.
+#[cfg(not(target_arch = "wasm32"))]
+async fn arcane_ws_proxy(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    session: tower_sessions::Session,
+) -> axum::response::Response {
+    use axum::{http::StatusCode, response::IntoResponse};
+
+    let token: Option<String> = session.get("opaque_token").await.ok().flatten();
+    let Some(token) = token else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    if !api::has_arcane_permission(&token).await {
+        tracing::warn!("arcane WebSocket rejected: permission denied");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let ai_url = std::env::var("AI_PIPELINE_SERVICE_URL")
+        .unwrap_or_else(|_| "ws://localhost:9000".to_string());
+
+    tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
+    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
+    use axum::extract::ws::Message as AxMsg;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as TngMsg;
+
+    let (mut upstream, _) = match tokio_tungstenite::connect_async(&upstream_url).await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::error!(error = %e, upstream = %upstream_url, "ai_pipeline connect failed");
+            return;
+        }
+    };
+
+    let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    let (mut client_tx, mut client_rx) = client.split();
+
+    tokio::select! {
+        // Browser sends binary camera frames → forward to ai_pipeline.
+        _ = async {
+            while let Some(Ok(msg)) = client_rx.next().await {
+                match msg {
+                    AxMsg::Binary(b) => {
+                        if upstream_tx.send(TngMsg::Binary(b)).await.is_err() { break; }
+                    }
+                    AxMsg::Close(_) => break,
+                    _ => {}
+                }
+            }
+        } => {}
+        // ai_pipeline sends JSON detection results → forward to browser.
+        _ = async {
+            while let Some(Ok(msg)) = upstream_rx.next().await {
+                match msg {
+                    TngMsg::Text(t) => {
+                        if client_tx.send(AxMsg::Text(t.to_string().into())).await.is_err() { break; }
+                    }
+                    TngMsg::Close(_) => break,
+                    _ => {}
+                }
+            }
+        } => {}
+    }
 }
 
 // ---- OAuth Axum handlers ----
@@ -289,6 +363,8 @@ enum Route {
         Profile {},
         #[route("/ark")]
         Ark {},
+        #[route("/arcane")]
+        Arcane {},
         #[route("/:..segments")]
         NotFound { segments: Vec<String> },
 }
@@ -330,10 +406,13 @@ fn WebNavbar() -> Element {
         });
     };
 
+    let perms = PERMISSIONS.read();
     rsx! {
         Navbar {
             user: LOGIN_STATUS(),
-            on_logout: logout_handler
+            on_logout: logout_handler,
+            has_ark: perms.contains_key("llama"),
+            has_arcane: perms.contains_key("arcane"),
         }
         Outlet::<Route> {}
     }

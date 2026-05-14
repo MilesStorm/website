@@ -8,6 +8,8 @@ dioxus = { workspace = true, features = ["router", "fullstack"] }
 ui = { workspace = true }
 api = { workspace = true }
 manganis = { version = "0.7.7", features = ["dioxus"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dotenvy = { workspace = true }
@@ -29,10 +31,30 @@ axum-tracing-opentelemetry = "0.25"
 # Metrics (Prometheus exposition format → Alloy → Mimir)
 axum-prometheus = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio-tungstenite = "0.29"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Location",
+    "Navigator",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "HtmlVideoElement",
+    "HtmlMediaElement",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 
 [features]
 web = ["dioxus/web"]

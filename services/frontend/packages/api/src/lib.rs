@@ -328,6 +328,47 @@ pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
     Ok(data.permissions)
 }
 
+/// Check whether a raw opaque token grants the `arcane` permission.
+/// Used by Axum handlers that have direct session access (e.g. the WebSocket proxy)
+/// but are outside the Dioxus server function context.
+#[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.has_arcane_permission", skip_all)]
+pub async fn has_arcane_permission(token: &str) -> bool {
+    use session::{auth_url, service_secret};
+
+    #[derive(Serialize)]
+    struct Req<'a> {
+        token: &'a str,
+    }
+    #[derive(Deserialize)]
+    struct Resp {
+        permissions: Vec<String>,
+    }
+
+    let result = http_client()
+        .post(format!("{}/internal/token/introspect", auth_url()))
+        .header("x-service-token", service_secret())
+        .json(&Req { token })
+        .send()
+        .await;
+
+    match result {
+        Ok(r) if r.status().is_success() => r
+            .json::<Resp>()
+            .await
+            .map(|data| data.permissions.iter().any(|p| p == "arcane"))
+            .unwrap_or(false),
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), "arcane permission introspect returned non-success");
+            false
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "arcane permission introspect request failed");
+            false
+        }
+    }
+}
+
 /// Check whether the current user holds a specific permission.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.check_permission", skip_all, fields(permission = %name))]

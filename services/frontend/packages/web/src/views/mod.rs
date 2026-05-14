@@ -1,9 +1,11 @@
+mod arcane;
 mod ark;
 mod auth;
 mod landing;
 mod page_404;
 mod profile;
 
+pub use arcane::Arcane;
 pub use ark::Ark;
 pub use auth::{Login, Register};
 pub use landing::Landing;

@@ -18,8 +18,14 @@ pub fn Navbarr(children: Element) -> Element {
 
 /// Full DaisyUI navbar. `user` drives the profile dropdown.
 /// `on_logout` is called when the user clicks Logout.
+/// `has_ark` / `has_arcane` gate the permission-protected nav items.
 #[component]
-pub fn Navbar(user: LoginStatus, on_logout: EventHandler<()>) -> Element {
+pub fn Navbar(
+    user: LoginStatus,
+    on_logout: EventHandler<()>,
+    has_ark: bool,
+    has_arcane: bool,
+) -> Element {
     rsx! {
         header { class: "sticky top-0 z-50 navbar bg-base-200 shadow-xl rounded-box",
 
@@ -46,7 +52,8 @@ pub fn Navbar(user: LoginStatus, on_logout: EventHandler<()>) -> Element {
                         li { Link { to: "/", "Home" } }
                         match &user {
                             LoginStatus::LoggedIn(_) => rsx! {
-                                li { Link { to: "/ark", "Ark" } }
+                                if has_ark { li { Link { to: "/ark", "Ark" } } }
+                                if has_arcane { li { Link { to: "/arcane", "Arcane" } } }
                                 li { Link { to: "/profile", "Profile" } }
                             },
                             LoginStatus::LoggedOut => rsx! {}
@@ -64,7 +71,8 @@ pub fn Navbar(user: LoginStatus, on_logout: EventHandler<()>) -> Element {
                     li { Link { to: "/", "Home" } }
                     match &user {
                         LoginStatus::LoggedIn(_) => rsx! {
-                            li { Link { to: "/ark", "Ark" } }
+                            if has_ark { li { Link { to: "/ark", "Ark" } } }
+                            if has_arcane { li { Link { to: "/arcane", "Arcane" } } }
                         },
                         LoginStatus::LoggedOut => rsx! {}
                     }
