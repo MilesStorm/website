@@ -50,7 +50,7 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/dice_detector ./dice_detector
 COPY --from=builder /app/yolo26n.bpk               ./models/yolo26n.bpk
-COPY art/experiment_32/model/model.bpk             ./art/experiment_32/model/model.bpk
+COPY weights/                                       ./weights/
 
 RUN chown -R appuser:appuser /app
 USER appuser

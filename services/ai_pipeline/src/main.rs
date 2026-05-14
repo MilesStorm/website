@@ -35,8 +35,12 @@ async fn main() -> anyhow::Result<()> {
             .map(String::as_str)
             .unwrap_or("0.0.0.0:9000");
 
-        let exp_dir = latest_experiment_dir(Path::new(ART_ROOT))
-            .unwrap_or_else(|| panic!("No experiment_* dirs found in {}", ART_ROOT));
+        let exp_dir = if let Ok(p) = std::env::var("DICE_HEAD_PATH") {
+            std::path::PathBuf::from(p)
+        } else {
+            latest_experiment_dir(Path::new(ART_ROOT))
+                .unwrap_or_else(|| panic!("No experiment_* dirs found in {}", ART_ROOT))
+        };
         tracing::info!(path = %exp_dir.display(), "loading model weights");
 
         serve::serve(addr, exp_dir).await?;

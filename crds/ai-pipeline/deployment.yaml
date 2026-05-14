@@ -38,6 +38,8 @@ spec:
             value: "info"
           - name: YOLO_MODEL_PATH
             value: "/app/models/yolo26n.bpk"
+          - name: DICE_HEAD_PATH
+            value: "/app/weights"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: "http://alloy.monitoring.svc.cluster.local:4317"
       imagePullSecrets:
