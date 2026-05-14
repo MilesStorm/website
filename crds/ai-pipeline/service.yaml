@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: ai-pipeline
+  name: ai-pipeline-service
+spec:
+  selector:
+    app: ai-pipeline
+  ports:
+    - name: ws
+      protocol: TCP
+      port: 9000
+      targetPort: 9000

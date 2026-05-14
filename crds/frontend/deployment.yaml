@@ -99,6 +99,8 @@ spec:
               secretKeyRef:
                 name: redis
                 key: redis-password
+          - name: AI_PIPELINE_SERVICE_URL
+            value: "ws://ai-pipeline-service.ai-pipeline.svc.cluster.local:9000"
           - name: RUST_LOG
             value: "info"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT

@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: ai-pipeline
+  name: ai-pipeline-deployment
+  labels:
+    istio-injection: enabled
+    app: ai-pipeline
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ai-pipeline
+  template:
+    metadata:
+      labels:
+        app: ai-pipeline
+        monitoring.milesstorm.com/scrape: "true"
+    spec:
+      # Only the eta node has NVIDIA GPUs.
+      nodeSelector:
+        kubernetes.io/hostname: eta
+      containers:
+      - name: ai-pipeline
+        image: ghcr.io/milesstorm/ai-pipeline:latest
+        ports:
+        - containerPort: 9000
+          name: ws
+        resources:
+          limits:
+            nvidia.com/gpu: "1"
+        env:
+          - name: RUST_LOG
+            value: "info"
+          - name: YOLO_MODEL_PATH
+            value: "/app/models/yolo26n.bpk"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://alloy.monitoring.svc.cluster.local:4317"
+      imagePullSecrets:
+        - name: dockerconfigjson-github-com
