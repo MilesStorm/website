@@ -24,6 +24,7 @@ spec:
       # Only the eta node has NVIDIA GPUs.
       nodeSelector:
         kubernetes.io/hostname: eta
+      runtimeClassName: nvidia
       containers:
       - name: ai-pipeline
         image: ghcr.io/milesstorm/ai-pipeline:latest
