@@ -22,7 +22,13 @@ burn-store = { version = "^0.21.0", features = [
 image = "^0.25.10"
 anyhow = "1.0.102"
 rand = "0.10.1"
-log = "0.4.29"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = "0.27"
+opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.28"
+opentelemetry-appender-tracing = "0.27"
 indicatif = "0.18.4"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync"] }
 tokio-tungstenite = "0.29"

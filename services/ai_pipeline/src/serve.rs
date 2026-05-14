@@ -33,7 +33,7 @@ impl InferHandle {
         std::thread::spawn(move || {
             let device = CudaDevice::new(0);
             let pipeline = DicePipeline::<InferBackend>::new(device, &head_dir);
-            println!("Inference pipeline ready.");
+            tracing::info!("inference pipeline ready");
 
             while let Some((frame_bytes, resp_tx)) = rx.blocking_recv() {
                 let t = Instant::now();
@@ -88,19 +88,19 @@ fn decode_and_infer(
 /// Frames are processed serially; excess frames are silently dropped so latency stays low.
 pub async fn serve(addr: &str, head_dir: PathBuf) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    println!("WebSocket server listening on ws://{addr}");
+    tracing::info!(addr, "WebSocket server listening");
 
     let handle = Arc::new(InferHandle::new(head_dir));
 
     loop {
         let (stream, peer) = listener.accept().await?;
-        println!("Client connected: {peer}");
+        tracing::info!(%peer, "client connected");
         let handle = Arc::clone(&handle);
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, handle).await {
-                eprintln!("Connection error ({peer}): {e}");
+                tracing::error!(%peer, error = %e, "connection error");
             }
-            println!("Client disconnected: {peer}");
+            tracing::info!(%peer, "client disconnected");
         });
     }
 }

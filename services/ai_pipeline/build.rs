@@ -5,6 +5,5 @@ fn main() {
     ModelGen::new()
         .input("src/model/yolo26n.onnx")
         .out_dir("model/")
-        .development(true)
         .run_from_script();
 }

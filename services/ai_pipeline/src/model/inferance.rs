@@ -10,8 +10,13 @@ use burn_store::{BurnpackStore, ModuleSnapshot};
 
 use crate::model::{my_model, DiceHead};
 
-/// Compile-time path to the YOLO burnpack produced by build.rs.
-const YOLO_BPK: &str = concat!(env!("OUT_DIR"), "/model/yolo26n.bpk");
+/// Compile-time fallback path to the YOLO burnpack produced by build.rs.
+/// Override at runtime with the YOLO_MODEL_PATH env var (required in Docker).
+const YOLO_BPK_DEFAULT: &str = concat!(env!("OUT_DIR"), "/model/yolo26n.bpk");
+
+fn yolo_bpk_path() -> String {
+    std::env::var("YOLO_MODEL_PATH").unwrap_or_else(|_| YOLO_BPK_DEFAULT.to_string())
+}
 /// YOLO model expects 640×640 input (Ultralytics default).
 const YOLO_INPUT: usize = 640;
 /// DiceHead was trained on 128×128 crops.
@@ -51,7 +56,7 @@ impl<B: Backend> DicePipeline<B> {
     }
 
     pub fn with_conf(device: B::Device, head_dir: &Path, conf_threshold: f32) -> Self {
-        let yolo = my_model::Model::<B>::from_file(YOLO_BPK, &device);
+        let yolo = my_model::Model::<B>::from_file(&yolo_bpk_path(), &device);
         let mut head = DiceHead::<B>::new(&device);
         let mut store = BurnpackStore::from_file(head_dir.join("model/model"));
         head.load_from(&mut store).expect("DiceHead weights not found");
