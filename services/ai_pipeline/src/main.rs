@@ -141,7 +141,6 @@ async fn setup_tracing() -> Option<OtelProviders> {
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(tracing_subscriber::fmt::layer().json())
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .with(OpenTelemetryTracingBridge::new(&logger_provider))
         .init();
