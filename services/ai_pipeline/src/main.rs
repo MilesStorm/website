@@ -98,7 +98,7 @@ async fn setup_tracing() -> Option<OtelProviders> {
     };
     use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-    let resource = Resource::new([KeyValue::new("service.name", "ai_pipeline")]);
+    let resource = Resource::new([KeyValue::new("service.name", "ai-pipeline")]);
     let env_filter = EnvFilter::new(
         std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
     );
@@ -122,7 +122,7 @@ async fn setup_tracing() -> Option<OtelProviders> {
         .with_resource(resource.clone())
         .build();
 
-    let tracer = tracer_provider.tracer("ai_pipeline");
+    let tracer = tracer_provider.tracer("ai-pipeline");
     opentelemetry::global::set_tracer_provider(tracer_provider.clone());
     opentelemetry::global::set_text_map_propagator(
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
