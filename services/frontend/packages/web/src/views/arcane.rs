@@ -42,6 +42,8 @@ struct Detection {
     y1: f32,
     x2: f32,
     y2: f32,
+    yolo_conf: f32,
+    yolo_class: u32,
     dice_class: u32,
     dice_conf: f32,
 }
@@ -53,17 +55,28 @@ struct InferResult {
     frame_ms: u64,
 }
 
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ServerMsg {
+    Result(InferResult),
+    Error { error: String },
+}
+
 // ── component ─────────────────────────────────────────────────────────────────
 
 #[component]
 fn ArcaneIsland() -> Element {
     let mut ws_state = use_signal(|| WsState::Connecting);
     let mut frame_ms = use_signal(|| 0u64);
+    let mut debug_mode = use_signal(|| false);
+    let mut detect_count = use_signal(|| 0usize);
+    let mut server_error = use_signal(|| Option::<String>::None);
+    let mut debug_text = use_signal(|| String::new());
 
-    // Runs once after mount; all camera/WS logic is WASM-only.
     use_coroutine(move |_: UnboundedReceiver<()>| async move {
         #[cfg(target_arch = "wasm32")]
-        run_arcane(ws_state, frame_ms).await;
+        run_arcane(ws_state, frame_ms, debug_mode, detect_count, server_error, debug_text).await;
     });
 
     rsx! {
@@ -100,6 +113,46 @@ fn ArcaneIsland() -> Element {
                         },
                     }
                 }
+                // Debug toggle — top-right corner
+                button {
+                    class: "absolute top-2 right-2 btn btn-xs btn-ghost bg-base-300/60 hover:bg-base-300",
+                    onclick: move |_| debug_mode.set(!debug_mode()),
+                    if debug_mode() { "✕ debug" } else { "debug" }
+                }
+            }
+
+            // Debug panel — only visible when debug_mode is on
+            if debug_mode() {
+                div { class: "w-full max-w-2xl rounded-xl bg-base-200 p-3 font-mono text-xs space-y-2",
+                    // Summary row
+                    div { class: "flex flex-wrap gap-4 items-center",
+                        span { class: "text-base-content/50", "frame_ms" }
+                        span { class: "font-bold tabular-nums", "{frame_ms()}ms" }
+                        span { class: "text-base-content/50", "detections" }
+                        span { class: "font-bold tabular-nums", "{detect_count()}" }
+                        span { class: "text-base-content/50", "ws" }
+                        span { class: "font-bold",
+                            match ws_state() {
+                                WsState::Connecting => "connecting",
+                                WsState::Connected => "open",
+                                WsState::Disconnected => "closed",
+                                WsState::Error(_) => "error",
+                            }
+                        }
+                    }
+                    // Server error (if any)
+                    if let Some(err) = server_error() {
+                        div { class: "text-error break-all", "server: {err}" }
+                    }
+                    // Per-detection detail
+                    if !debug_text().is_empty() {
+                        pre { class: "whitespace-pre-wrap text-base-content/80 overflow-x-auto leading-5",
+                            "{debug_text()}"
+                        }
+                    } else if matches!(ws_state(), WsState::Connected) {
+                        div { class: "text-base-content/40 italic", "no detections yet" }
+                    }
+                }
             }
         }
         // Hidden off-screen canvas used only for JPEG capture; never displayed.
@@ -110,7 +163,14 @@ fn ArcaneIsland() -> Element {
 // ── WASM implementation ───────────────────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
-async fn run_arcane(mut ws_state: Signal<WsState>, mut frame_ms: Signal<u64>) {
+async fn run_arcane(
+    mut ws_state: Signal<WsState>,
+    mut frame_ms: Signal<u64>,
+    debug_mode: Signal<bool>,
+    mut detect_count: Signal<usize>,
+    mut server_error: Signal<Option<String>>,
+    mut debug_text: Signal<String>,
+) {
     use std::{cell::RefCell, rc::Rc};
     use wasm_bindgen::{closure::Closure, JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
@@ -247,9 +307,33 @@ async fn run_arcane(mut ws_state: Signal<WsState>, mut frame_ms: Signal<u64>) {
         let mut frame_ms = frame_ms;
         let cb = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MessageEvent| {
             if let Some(text) = e.data().as_string() {
-                if let Ok(result) = serde_json::from_str::<InferResult>(&text) {
-                    frame_ms.set(result.frame_ms);
-                    *latest.borrow_mut() = Some(result);
+                match serde_json::from_str::<ServerMsg>(&text) {
+                    Ok(ServerMsg::Result(result)) => {
+                        frame_ms.set(result.frame_ms);
+                        detect_count.set(result.detections.len());
+                        server_error.set(None);
+
+                        // Build per-detection debug summary
+                        let mut dbg = String::new();
+                        for (i, d) in result.detections.iter().enumerate() {
+                            dbg.push_str(&format!(
+                                "det[{i}] dice={} ({:.1}%)  yolo_cls={} yolo_conf={:.1}%  bbox=[{:.3},{:.3} → {:.3},{:.3}]\n",
+                                dice_value(d.dice_class),
+                                d.dice_conf * 100.0,
+                                d.yolo_class,
+                                d.yolo_conf * 100.0,
+                                d.x1, d.y1, d.x2, d.y2,
+                            ));
+                        }
+                        debug_text.set(dbg);
+                        *latest.borrow_mut() = Some(result);
+                    }
+                    Ok(ServerMsg::Error { error }) => {
+                        server_error.set(Some(error));
+                        detect_count.set(0);
+                        debug_text.set(String::new());
+                    }
+                    Err(_) => {}
                 }
             }
         });
@@ -291,7 +375,7 @@ async fn run_arcane(mut ws_state: Signal<WsState>, mut frame_ms: Signal<u64>) {
             .as_ref()
             .map(|r| r.detections.clone())
             .unwrap_or_default();
-        draw_overlay(&overlay_ctx, &dets, vid_w as f64, vid_h as f64);
+        draw_overlay(&overlay_ctx, &dets, vid_w as f64, vid_h as f64, debug_mode());
     }
 }
 
@@ -310,8 +394,10 @@ async fn sleep_ms(ms: i32) {
 }
 
 /// Clear the overlay canvas and draw bounding boxes + labels for each detection.
+/// In debug mode the label includes YOLO confidence and boxes are colour-coded by
+/// dice confidence: green ≥80 %, yellow ≥50 %, red below that.
 #[cfg(target_arch = "wasm32")]
-fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: f64, h: f64) {
+fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: f64, h: f64, debug: bool) {
     use wasm_bindgen::JsValue;
 
     ctx.clear_rect(0.0, 0.0, w, h);
@@ -322,19 +408,41 @@ fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: 
         let bw = (det.x2 - det.x1) as f64 * w;
         let bh = (det.y2 - det.y1) as f64 * h;
 
+        let color = if debug {
+            if det.dice_conf >= 0.8 {
+                "rgba(52,211,153,0.95)"
+            } else if det.dice_conf >= 0.5 {
+                "rgba(251,191,36,0.95)"
+            } else {
+                "rgba(239,68,68,0.95)"
+            }
+        } else {
+            "rgba(52,211,153,0.95)"
+        };
+
         // Box
-        ctx.set_stroke_style(&JsValue::from_str("rgba(52,211,153,0.95)"));
+        ctx.set_stroke_style(&JsValue::from_str(color));
         ctx.set_line_width(2.5);
         ctx.stroke_rect(x, y, bw, bh);
 
-        // Label pill
-        let label = format!("{} {:.0}%", dice_value(det.dice_class), det.dice_conf * 100.0);
+        // Label
+        let label = if debug {
+            format!(
+                "{} {:.0}% | y:{:.0}%",
+                dice_value(det.dice_class),
+                det.dice_conf * 100.0,
+                det.yolo_conf * 100.0,
+            )
+        } else {
+            format!("{} {:.0}%", dice_value(det.dice_class), det.dice_conf * 100.0)
+        };
+
         ctx.set_font("bold 13px monospace");
         // Rough text width estimate: ~8px per character
         let pill_w = label.len() as f64 * 8.0 + 6.0;
         ctx.set_fill_style(&JsValue::from_str("rgba(0,0,0,0.55)"));
         ctx.fill_rect(x, y - 18.0, pill_w, 17.0);
-        ctx.set_fill_style(&JsValue::from_str("rgba(52,211,153,0.95)"));
+        ctx.set_fill_style(&JsValue::from_str(color));
         ctx.fill_text(&label, x + 3.0, y - 4.0).ok();
     }
 }

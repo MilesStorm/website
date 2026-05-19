@@ -31,9 +31,32 @@ impl InferHandle {
         let (tx, mut rx) = mpsc::channel::<InferRequest>(1);
 
         std::thread::spawn(move || {
-            let device = CudaDevice::new(0);
-            let pipeline = DicePipeline::<InferBackend>::new(device, &head_dir);
-            tracing::info!("inference pipeline ready");
+            let init = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let device = CudaDevice::new(0);
+                DicePipeline::<InferBackend>::new(device, &head_dir)
+            }));
+
+            let pipeline = match init {
+                Ok(p) => {
+                    tracing::info!("inference pipeline ready");
+                    p
+                }
+                Err(e) => {
+                    let msg = e
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    tracing::error!(error = %msg, "inference pipeline failed to initialize");
+                    while let Some((_, resp_tx)) = rx.blocking_recv() {
+                        let _ = resp_tx.send(format!(
+                            r#"{{"error":"pipeline init failed: {}"}}"#,
+                            msg.replace('"', "'")
+                        ));
+                    }
+                    return;
+                }
+            };
 
             while let Some((frame_bytes, resp_tx)) = rx.blocking_recv() {
                 let t = Instant::now();
@@ -47,7 +70,7 @@ impl InferHandle {
                         )
                     }
                     Err(e) => {
-                        format!(r#"{{"error":"{}"}}"#, e)
+                        format!(r#"{{"error":"{}"}}"#, e.replace('"', "'"))
                     }
                 };
                 let _ = resp_tx.send(payload);
