@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 
 use api::{check_login_status, get_my_permissions, logout};
 use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
-use views::{Arcane, Ark, Landing, Login, NotFound, Profile, Register};
+use views::{Arcane, Ark, AssholeTimer, Landing, Login, NotFound, Profile, Register};
 
 mod views;
 
@@ -222,7 +222,7 @@ async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TngMsg;
 
-    let (mut upstream, _) = match tokio_tungstenite::connect_async(&upstream_url).await {
+    let (upstream, _) = match tokio_tungstenite::connect_async(&upstream_url).await {
         Ok(conn) => conn,
         Err(e) => {
             tracing::error!(error = %e, upstream = %upstream_url, "ai_pipeline connect failed");
@@ -365,6 +365,8 @@ enum Route {
         Ark {},
         #[route("/arcane")]
         Arcane {},
+        #[route("/asshole")]
+        AssholeTimer {},
         #[route("/:..segments")]
         NotFound { segments: Vec<String> },
 }
