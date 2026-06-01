@@ -40,6 +40,7 @@ fn AdminPanelInner() -> Element {
     let mut users: Signal<Vec<AdminUser>> = use_signal(Vec::new);
     let mut roles: Signal<Vec<AdminRole>> = use_signal(Vec::new);
     let mut all_permissions: Signal<Vec<AdminPermission>> = use_signal(Vec::new);
+    let mut load_errors: Signal<Vec<String>> = use_signal(Vec::new);
     let mut refresh = use_signal(|| 0u32);
 
     let data = use_resource(move || async move {
@@ -51,10 +52,21 @@ fn AdminPanelInner() -> Element {
     });
 
     use_effect(move || {
-        if let Some((Ok(u), Ok(r), Ok(p))) = data.value()() {
-            users.set(u);
-            roles.set(r);
-            all_permissions.set(p);
+        if let Some((u, r, p)) = data.value()() {
+            let mut errs = Vec::new();
+            match u {
+                Ok(v) => users.set(v),
+                Err(e) => errs.push(format!("users: {e}")),
+            }
+            match r {
+                Ok(v) => roles.set(v),
+                Err(e) => errs.push(format!("roles: {e}")),
+            }
+            match p {
+                Ok(v) => all_permissions.set(v),
+                Err(e) => errs.push(format!("permissions: {e}")),
+            }
+            load_errors.set(errs);
         }
     });
 
@@ -62,6 +74,20 @@ fn AdminPanelInner() -> Element {
         div { class: "container mx-auto mt-10 px-4",
             div { class: "bg-base-200 p-8 rounded-lg shadow-lg",
                 h1 { class: "text-2xl font-bold mb-6", "Admin Panel" }
+
+                // Surface any server-function errors so they're not silently swallowed
+                if !load_errors().is_empty() {
+                    div { class: "alert alert-error mb-4",
+                        div {
+                            span { class: "font-bold", "Failed to load data:" }
+                            ul { class: "list-disc list-inside mt-1",
+                                for err in load_errors() {
+                                    li { class: "font-mono text-sm", "{err}" }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 div { class: "tabs tabs-boxed mb-6",
                     button {
