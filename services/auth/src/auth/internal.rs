@@ -582,7 +582,7 @@ struct UserRow2 {
 
 #[derive(sqlx::FromRow)]
 struct UserRoleRow {
-    user_id: i64,
+    user_id: i32, // user_roles.user_id is INT (not BIGINT), matching the schema
     role_id: i32,
     role_name: String,
 }
@@ -643,7 +643,7 @@ async fn admin_list_users(State(state): State<InternalState>) -> impl IntoRespon
         .map(|u| {
             let roles = user_roles
                 .iter()
-                .filter(|ur| ur.user_id == u.id)
+                .filter(|ur| ur.user_id as i64 == u.id)
                 .map(|ur| RoleResp { id: ur.role_id, name: ur.role_name.clone() })
                 .collect();
             AdminUserResp { id: u.id, username: u.username, email: u.email, roles }
