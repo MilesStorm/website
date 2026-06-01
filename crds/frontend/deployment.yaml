@@ -88,7 +88,7 @@ spec:
           - name: BFF_SERVICE_SECRET
             valueFrom:
               secretKeyRef:
-                name: bff-service-secret
+                name: website-secrets
                 key: BFF_SERVICE_SECRET
           - name: REDIS_HOST
             value: "redis-master.redis.svc.cluster.local"
