@@ -484,10 +484,15 @@ pub async fn admin_list_users(page: u32, limit: u32, search: String) -> Result<P
     #[derive(Deserialize)]
     struct Paged { items: Vec<UserResp>, total: i64 }
 
+    let mut url = reqwest::Url::parse(&format!("{}/internal/admin/users", auth_url()))
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    url.query_pairs_mut()
+        .append_pair("page", &page.to_string())
+        .append_pair("limit", &limit.to_string())
+        .append_pair("search", &search);
+
     let resp = http_client()
-        .get(format!("{}/internal/admin/users", auth_url()))
-        .query(&[("page", page), ("limit", limit)])
-        .query(&[("search", &search)])
+        .get(url)
         .header("x-service-token", service_secret())
         .send()
         .await
@@ -525,10 +530,15 @@ pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<P
     #[derive(Deserialize)]
     struct Paged { items: Vec<RoleResp>, total: i64 }
 
+    let mut url = reqwest::Url::parse(&format!("{}/internal/admin/roles", auth_url()))
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    url.query_pairs_mut()
+        .append_pair("page", &page.to_string())
+        .append_pair("limit", &limit.to_string())
+        .append_pair("search", &search);
+
     let resp = http_client()
-        .get(format!("{}/internal/admin/roles", auth_url()))
-        .query(&[("page", page), ("limit", limit)])
-        .query(&[("search", &search)])
+        .get(url)
         .header("x-service-token", service_secret())
         .send()
         .await
