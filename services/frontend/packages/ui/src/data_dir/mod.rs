@@ -130,3 +130,9 @@ pub struct AdminUser {
     pub email: Option<String>,
     pub roles: Vec<AdminUserRole>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PagedResult<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+}

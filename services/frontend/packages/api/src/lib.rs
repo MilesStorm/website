@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub use ui::data_dir::{AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus};
+pub use ui::data_dir::{AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus, PagedResult};
 
 // ---- Session helpers (server-only) ----
 
@@ -470,7 +470,7 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
 
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.admin_list_users", skip_all)]
-pub async fn admin_list_users() -> Result<Vec<AdminUser>, ServerFnError> {
+pub async fn admin_list_users(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminUser>, ServerFnError> {
     use session::*;
 
     if !check_permission("manage_permissions".to_string()).await? {
@@ -478,20 +478,16 @@ pub async fn admin_list_users() -> Result<Vec<AdminUser>, ServerFnError> {
     }
 
     #[derive(Deserialize)]
-    struct RoleRef {
-        id: i32,
-        name: String,
-    }
+    struct RoleRef { id: i32, name: String }
     #[derive(Deserialize)]
-    struct UserResp {
-        id: i64,
-        username: String,
-        email: Option<String>,
-        roles: Vec<RoleRef>,
-    }
+    struct UserResp { id: i64, username: String, email: Option<String>, roles: Vec<RoleRef> }
+    #[derive(Deserialize)]
+    struct Paged { items: Vec<UserResp>, total: i64 }
 
     let resp = http_client()
         .get(format!("{}/internal/admin/users", auth_url()))
+        .query(&[("page", page), ("limit", limit)])
+        .query(&[("search", &search)])
         .header("x-service-token", service_secret())
         .send()
         .await
@@ -501,21 +497,21 @@ pub async fn admin_list_users() -> Result<Vec<AdminUser>, ServerFnError> {
         return Err(ServerFnError::new("Failed to fetch users"));
     }
 
-    let data: Vec<UserResp> = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(data
-        .into_iter()
-        .map(|u| AdminUser {
+    let data: Paged = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(PagedResult {
+        total: data.total,
+        items: data.items.into_iter().map(|u| AdminUser {
             id: u.id,
             username: u.username,
             email: u.email,
             roles: u.roles.into_iter().map(|r| AdminUserRole { id: r.id, name: r.name }).collect(),
-        })
-        .collect())
+        }).collect(),
+    })
 }
 
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.admin_list_roles", skip_all)]
-pub async fn admin_list_roles() -> Result<Vec<AdminRole>, ServerFnError> {
+pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminRole>, ServerFnError> {
     use session::*;
 
     if !check_permission("manage_permissions".to_string()).await? {
@@ -523,19 +519,51 @@ pub async fn admin_list_roles() -> Result<Vec<AdminRole>, ServerFnError> {
     }
 
     #[derive(Deserialize)]
-    struct PermRef {
-        id: i32,
-        name: String,
-    }
+    struct PermRef { id: i32, name: String }
     #[derive(Deserialize)]
-    struct RoleResp {
-        id: i32,
-        name: String,
-        permissions: Vec<PermRef>,
-    }
+    struct RoleResp { id: i32, name: String, permissions: Vec<PermRef> }
+    #[derive(Deserialize)]
+    struct Paged { items: Vec<RoleResp>, total: i64 }
 
     let resp = http_client()
         .get(format!("{}/internal/admin/roles", auth_url()))
+        .query(&[("page", page), ("limit", limit)])
+        .query(&[("search", &search)])
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to fetch roles"));
+    }
+
+    let data: Paged = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(PagedResult {
+        total: data.total,
+        items: data.items.into_iter().map(|r| AdminRole {
+            id: r.id,
+            name: r.name,
+            permissions: r.permissions.into_iter().map(|p| AdminPermission { id: p.id, name: p.name }).collect(),
+        }).collect(),
+    })
+}
+
+/// Returns all roles (names only, no permissions) for use in assignment dropdowns.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_list_all_roles", skip_all)]
+pub async fn admin_list_all_roles() -> Result<Vec<AdminRole>, ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    #[derive(Deserialize)]
+    struct RoleResp { id: i32, name: String, permissions: Vec<serde_json::Value> }
+
+    let resp = http_client()
+        .get(format!("{}/internal/admin/roles/all", auth_url()))
         .header("x-service-token", service_secret())
         .send()
         .await
@@ -546,14 +574,7 @@ pub async fn admin_list_roles() -> Result<Vec<AdminRole>, ServerFnError> {
     }
 
     let data: Vec<RoleResp> = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(data
-        .into_iter()
-        .map(|r| AdminRole {
-            id: r.id,
-            name: r.name,
-            permissions: r.permissions.into_iter().map(|p| AdminPermission { id: p.id, name: p.name }).collect(),
-        })
-        .collect())
+    Ok(data.into_iter().map(|r| AdminRole { id: r.id, name: r.name, permissions: vec![] }).collect())
 }
 
 #[server(prefix = "/bff")]
