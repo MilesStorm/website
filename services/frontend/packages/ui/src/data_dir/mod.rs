@@ -101,3 +101,32 @@ pub struct ClientUser {
     pub username: String,
     pub email: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminPermission {
+    pub id: i32,
+    pub name: String,
+}
+
+/// A role as returned in the roles listing (includes its permissions).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminRole {
+    pub id: i32,
+    pub name: String,
+    pub permissions: Vec<AdminPermission>,
+}
+
+/// A role reference as returned in user listings (no permissions attached).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminUserRole {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminUser {
+    pub id: i64,
+    pub username: String,
+    pub email: Option<String>,
+    pub roles: Vec<AdminUserRole>,
+}
