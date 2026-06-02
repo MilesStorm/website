@@ -1,11 +1,11 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::State,
+    extract::{Path, Query, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::IntoResponse,
-    routing::post,
+    routing::{delete, get, post},
 };
 use jsonwebtoken::{EncodingKey, Header, encode};
 use password_auth::verify_password;
@@ -44,6 +44,13 @@ pub fn router(state: InternalState) -> Router<()> {
         .route("/internal/oauth/exchange", post(oauth_exchange))
         .route("/internal/ark/num_players", post(ark_num_players))
         .route("/internal/ark/command", post(ark_command))
+        // Admin RBAC management
+        .route("/internal/admin/users", get(admin_list_users))
+        .route("/internal/admin/users/{user_id}/roles/{role_id}", post(admin_assign_user_role).delete(admin_revoke_user_role))
+        .route("/internal/admin/roles", get(admin_list_roles))
+        .route("/internal/admin/roles/all", get(admin_list_all_roles))
+        .route("/internal/admin/permissions", get(admin_list_permissions))
+        .route("/internal/admin/roles/{role_id}/permissions/{permission_id}", post(admin_assign_role_permission).delete(admin_revoke_role_permission))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             verify_service_token,
@@ -534,6 +541,375 @@ async fn ark_command(
                 "Could not reach ark host",
             )
                 .into_response()
+        }
+    }
+}
+
+// ---- Admin RBAC endpoints ----
+
+#[derive(serde::Deserialize, Default)]
+struct PageQuery {
+    #[serde(default)]
+    page: u32,
+    #[serde(default = "default_page_limit")]
+    limit: u32,
+    #[serde(default)]
+    search: String,
+}
+
+fn default_page_limit() -> u32 { 25 }
+
+#[derive(Serialize)]
+struct PagedResp<T: Serialize> {
+    items: Vec<T>,
+    total: i64,
+}
+
+#[derive(Serialize)]
+struct AdminUserResp {
+    id: i64,
+    username: String,
+    email: Option<String>,
+    roles: Vec<RoleResp>,
+}
+
+#[derive(Serialize, Clone)]
+struct RoleResp {
+    id: i32,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct PermissionResp {
+    id: i32,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct AdminRoleResp {
+    id: i32,
+    name: String,
+    permissions: Vec<PermissionResp>,
+}
+
+#[derive(sqlx::FromRow)]
+struct UserRow2 {
+    id: i64,
+    username: String,
+    email: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct UserRoleRow {
+    user_id: i32, // user_roles.user_id is INT (not BIGINT), matching the schema
+    role_id: i32,
+    role_name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct RoleRow {
+    id: i32,
+    name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct RolePermRow {
+    role_id: i32,
+    permission_id: i32,
+    permission_name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct PermRow {
+    id: i32,
+    name: String,
+}
+
+#[tracing::instrument(name = "admin.list_users", skip_all)]
+async fn admin_list_users(
+    State(state): State<InternalState>,
+    Query(q): Query<PageQuery>,
+) -> impl IntoResponse {
+    let search = format!("%{}%", q.search.to_lowercase());
+    let offset = (q.page * q.limit) as i64;
+    let limit = q.limit as i64;
+
+    let total: (i64,) = match sqlx::query_as(
+        "SELECT COUNT(*) FROM users \
+         WHERE LOWER(username) LIKE $1 OR LOWER(COALESCE(email, '')) LIKE $1",
+    )
+    .bind(&search)
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "admin_list_users: count error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let users: Vec<UserRow2> = match sqlx::query_as(
+        "SELECT id, username, email FROM users \
+         WHERE LOWER(username) LIKE $1 OR LOWER(COALESCE(email, '')) LIKE $1 \
+         ORDER BY username LIMIT $2 OFFSET $3",
+    )
+    .bind(&search)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "admin_list_users: db error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Only fetch roles for users on this page.
+    let user_ids: Vec<i32> = users.iter().map(|u| u.id as i32).collect();
+    let user_roles: Vec<UserRoleRow> = if user_ids.is_empty() {
+        vec![]
+    } else {
+        match sqlx::query_as(
+            "SELECT ur.user_id, r.id as role_id, r.name as role_name \
+             FROM user_roles ur JOIN roles r ON r.id = ur.role_id \
+             WHERE ur.user_id = ANY($1)",
+        )
+        .bind(&user_ids)
+        .fetch_all(&state.db)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(error = %e, "admin_list_users: roles db error");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    };
+
+    let items: Vec<AdminUserResp> = users
+        .into_iter()
+        .map(|u| {
+            let roles = user_roles
+                .iter()
+                .filter(|ur| ur.user_id as i64 == u.id)
+                .map(|ur| RoleResp { id: ur.role_id, name: ur.role_name.clone() })
+                .collect();
+            AdminUserResp { id: u.id, username: u.username, email: u.email, roles }
+        })
+        .collect();
+
+    Json(PagedResp { items, total: total.0 }).into_response()
+}
+
+#[tracing::instrument(name = "admin.list_roles", skip_all)]
+async fn admin_list_roles(
+    State(state): State<InternalState>,
+    Query(q): Query<PageQuery>,
+) -> impl IntoResponse {
+    let search = format!("%{}%", q.search.to_lowercase());
+    let offset = (q.page * q.limit) as i64;
+    let limit = q.limit as i64;
+
+    let total: (i64,) = match sqlx::query_as(
+        "SELECT COUNT(*) FROM roles WHERE LOWER(name) LIKE $1",
+    )
+    .bind(&search)
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "admin_list_roles: count error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let roles: Vec<RoleRow> = match sqlx::query_as(
+        "SELECT id, name FROM roles WHERE LOWER(name) LIKE $1 ORDER BY name LIMIT $2 OFFSET $3",
+    )
+    .bind(&search)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "admin_list_roles: db error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Only fetch permissions for roles on this page.
+    let role_ids: Vec<i32> = roles.iter().map(|r| r.id).collect();
+    let role_perms: Vec<RolePermRow> = if role_ids.is_empty() {
+        vec![]
+    } else {
+        match sqlx::query_as(
+            "SELECT rp.role_id, p.id as permission_id, p.name as permission_name \
+             FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id \
+             WHERE rp.role_id = ANY($1)",
+        )
+        .bind(&role_ids)
+        .fetch_all(&state.db)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(error = %e, "admin_list_roles: perms db error");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    };
+
+    let items: Vec<AdminRoleResp> = roles
+        .into_iter()
+        .map(|r| {
+            let permissions = role_perms
+                .iter()
+                .filter(|rp| rp.role_id == r.id)
+                .map(|rp| PermissionResp { id: rp.permission_id, name: rp.permission_name.clone() })
+                .collect();
+            AdminRoleResp { id: r.id, name: r.name, permissions }
+        })
+        .collect();
+
+    Json(PagedResp { items, total: total.0 }).into_response()
+}
+
+/// Returns all roles (without permissions) for use in assignment dropdowns.
+/// Capped at 1000 — roles are admin-defined so this is not expected to be hit.
+#[tracing::instrument(name = "admin.list_all_roles", skip_all)]
+async fn admin_list_all_roles(State(state): State<InternalState>) -> impl IntoResponse {
+    match sqlx::query_as::<_, RoleRow>("SELECT id, name FROM roles ORDER BY name LIMIT 1000")
+        .fetch_all(&state.db)
+        .await
+    {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(|r| AdminRoleResp { id: r.id, name: r.name, permissions: vec![] })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "admin_list_all_roles: db error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[tracing::instrument(name = "admin.list_permissions", skip_all)]
+async fn admin_list_permissions(State(state): State<InternalState>) -> impl IntoResponse {
+    match sqlx::query_as::<_, PermRow>("SELECT id, name FROM permissions ORDER BY name")
+        .fetch_all(&state.db)
+        .await
+    {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(|p| PermissionResp { id: p.id, name: p.name })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "admin_list_permissions: db error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[tracing::instrument(name = "admin.assign_user_role", skip_all, fields(user_id, role_id))]
+async fn admin_assign_user_role(
+    State(state): State<InternalState>,
+    Path((user_id, role_id)): Path<(i64, i32)>,
+) -> impl IntoResponse {
+    match sqlx::query(
+        "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(role_id)
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => {
+            tracing::info!(user_id, role_id, "assigned role to user");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, user_id, role_id, "admin_assign_user_role: db error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[tracing::instrument(name = "admin.revoke_user_role", skip_all, fields(user_id, role_id))]
+async fn admin_revoke_user_role(
+    State(state): State<InternalState>,
+    Path((user_id, role_id)): Path<(i64, i32)>,
+) -> impl IntoResponse {
+    match sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2")
+        .bind(user_id)
+        .bind(role_id)
+        .execute(&state.db)
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(user_id, role_id, "revoked role from user");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, user_id, role_id, "admin_revoke_user_role: db error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[tracing::instrument(name = "admin.assign_role_permission", skip_all, fields(role_id, permission_id))]
+async fn admin_assign_role_permission(
+    State(state): State<InternalState>,
+    Path((role_id, permission_id)): Path<(i32, i32)>,
+) -> impl IntoResponse {
+    match sqlx::query(
+        "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(role_id)
+    .bind(permission_id)
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => {
+            tracing::info!(role_id, permission_id, "assigned permission to role");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, role_id, permission_id, "admin_assign_role_permission: db error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[tracing::instrument(name = "admin.revoke_role_permission", skip_all, fields(role_id, permission_id))]
+async fn admin_revoke_role_permission(
+    State(state): State<InternalState>,
+    Path((role_id, permission_id)): Path<(i32, i32)>,
+) -> impl IntoResponse {
+    match sqlx::query(
+        "DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2",
+    )
+    .bind(role_id)
+    .bind(permission_id)
+    .execute(&state.db)
+    .await
+    {
+        Ok(_) => {
+            tracing::info!(role_id, permission_id, "revoked permission from role");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, role_id, permission_id, "admin_revoke_role_permission: db error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }

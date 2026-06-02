@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub use ui::data_dir::{CommandResult, LoginStatus};
+pub use ui::data_dir::{AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus, PagedResult};
 
 // ---- Session helpers (server-only) ----
 
@@ -464,4 +464,243 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
     metrics::counter!("bff_ark_commands_total", "cmd" => cmd_label, "status" => "success").increment(1);
     body.command_result
         .ok_or_else(|| ServerFnError::new("No command result"))
+}
+
+// ---- Admin RBAC server functions ----
+
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_list_users", skip_all)]
+pub async fn admin_list_users(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminUser>, ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    #[derive(Deserialize)]
+    struct RoleRef { id: i32, name: String }
+    #[derive(Deserialize)]
+    struct UserResp { id: i64, username: String, email: Option<String>, roles: Vec<RoleRef> }
+    #[derive(Deserialize)]
+    struct Paged { items: Vec<UserResp>, total: i64 }
+
+    let mut url = reqwest::Url::parse(&format!("{}/internal/admin/users", auth_url()))
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    url.query_pairs_mut()
+        .append_pair("page", &page.to_string())
+        .append_pair("limit", &limit.to_string())
+        .append_pair("search", &search);
+
+    let resp = http_client()
+        .get(url)
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to fetch users"));
+    }
+
+    let data: Paged = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(PagedResult {
+        total: data.total,
+        items: data.items.into_iter().map(|u| AdminUser {
+            id: u.id,
+            username: u.username,
+            email: u.email,
+            roles: u.roles.into_iter().map(|r| AdminUserRole { id: r.id, name: r.name }).collect(),
+        }).collect(),
+    })
+}
+
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_list_roles", skip_all)]
+pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminRole>, ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    #[derive(Deserialize)]
+    struct PermRef { id: i32, name: String }
+    #[derive(Deserialize)]
+    struct RoleResp { id: i32, name: String, permissions: Vec<PermRef> }
+    #[derive(Deserialize)]
+    struct Paged { items: Vec<RoleResp>, total: i64 }
+
+    let mut url = reqwest::Url::parse(&format!("{}/internal/admin/roles", auth_url()))
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    url.query_pairs_mut()
+        .append_pair("page", &page.to_string())
+        .append_pair("limit", &limit.to_string())
+        .append_pair("search", &search);
+
+    let resp = http_client()
+        .get(url)
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to fetch roles"));
+    }
+
+    let data: Paged = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(PagedResult {
+        total: data.total,
+        items: data.items.into_iter().map(|r| AdminRole {
+            id: r.id,
+            name: r.name,
+            permissions: r.permissions.into_iter().map(|p| AdminPermission { id: p.id, name: p.name }).collect(),
+        }).collect(),
+    })
+}
+
+/// Returns all roles (names only, no permissions) for use in assignment dropdowns.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_list_all_roles", skip_all)]
+pub async fn admin_list_all_roles() -> Result<Vec<AdminRole>, ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    #[derive(Deserialize)]
+    struct RoleResp { id: i32, name: String, permissions: Vec<serde_json::Value> }
+
+    let resp = http_client()
+        .get(format!("{}/internal/admin/roles/all", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to fetch roles"));
+    }
+
+    let data: Vec<RoleResp> = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(data.into_iter().map(|r| AdminRole { id: r.id, name: r.name, permissions: vec![] }).collect())
+}
+
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_list_permissions", skip_all)]
+pub async fn admin_list_permissions() -> Result<Vec<AdminPermission>, ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    #[derive(Deserialize)]
+    struct PermResp {
+        id: i32,
+        name: String,
+    }
+
+    let resp = http_client()
+        .get(format!("{}/internal/admin/permissions", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to fetch permissions"));
+    }
+
+    let data: Vec<PermResp> = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(data.into_iter().map(|p| AdminPermission { id: p.id, name: p.name }).collect())
+}
+
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_assign_user_role", skip_all, fields(user_id, role_id))]
+pub async fn admin_assign_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    let resp = http_client()
+        .post(format!("{}/internal/admin/users/{user_id}/roles/{role_id}", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to assign role"));
+    }
+    Ok(())
+}
+
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_revoke_user_role", skip_all, fields(user_id, role_id))]
+pub async fn admin_revoke_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    let resp = http_client()
+        .delete(format!("{}/internal/admin/users/{user_id}/roles/{role_id}", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to revoke role"));
+    }
+    Ok(())
+}
+
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_assign_role_permission", skip_all, fields(role_id, permission_id))]
+pub async fn admin_assign_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    let resp = http_client()
+        .post(format!("{}/internal/admin/roles/{role_id}/permissions/{permission_id}", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to assign permission"));
+    }
+    Ok(())
+}
+
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_revoke_role_permission", skip_all, fields(role_id, permission_id))]
+pub async fn admin_revoke_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    let resp = http_client()
+        .delete(format!("{}/internal/admin/roles/{role_id}/permissions/{permission_id}", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to revoke permission"));
+    }
+    Ok(())
 }

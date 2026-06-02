@@ -1,3 +1,4 @@
+mod admin;
 mod arcane;
 mod ark;
 mod auth;
@@ -6,6 +7,7 @@ mod miles_countdown;
 mod page_404;
 mod profile;
 
+pub use admin::AdminPanel;
 pub use arcane::Arcane;
 pub use ark::Ark;
 pub use auth::{Login, Register};

@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 
 use api::{check_login_status, get_my_permissions, logout};
 use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
-use views::{Arcane, Ark, AssholeTimer, Landing, Login, NotFound, Profile, Register};
+use views::{AdminPanel, Arcane, Ark, AssholeTimer, Landing, Login, NotFound, Profile, Register};
 
 mod views;
 
@@ -367,6 +367,8 @@ enum Route {
         Arcane {},
         #[route("/asshole")]
         AssholeTimer {},
+        #[route("/admin")]
+        AdminPanel {},
         #[route("/:..segments")]
         NotFound { segments: Vec<String> },
 }
@@ -415,6 +417,7 @@ fn WebNavbar() -> Element {
             on_logout: logout_handler,
             has_ark: perms.contains_key("llama"),
             has_arcane: perms.contains_key("arcane"),
+            has_admin: perms.contains_key("manage_permissions"),
         }
         Outlet::<Route> {}
     }
