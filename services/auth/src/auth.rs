@@ -128,9 +128,9 @@ impl Auth {
             .merge(permissions::router())
             .merge(core::router())
             .layer(auth_layer)
+            .layer(axum::middleware::from_fn(record_trace_id))   // ← now runs after OtelAxumLayer
             .layer(OtelInResponseLayer)
             .layer(OtelAxumLayer::default())
-            .layer(axum::middleware::from_fn(record_trace_id))
             .layer(prometheus_layer);
 
         let listener = match tokio::net::TcpListener::bind(format!(

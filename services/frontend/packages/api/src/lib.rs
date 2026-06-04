@@ -78,14 +78,37 @@ impl reqwest_middleware::Middleware for PropagateTraceContext {
         use opentelemetry::trace::TraceContextExt as _;
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
+        let session_tp = session::traceparent();
         let cx = tracing::Span::current().context();
-        let traceparent = if cx.span().span_context().is_valid() {
+        let live_span = cx.span();
+        let live_sc = live_span.span_context();
+
+        tracing::warn!(
+            session_traceparent = ?session_tp,
+            live_span_valid = live_sc.is_valid(),
+            live_trace_id = %live_sc.trace_id(),
+            "PropagateTraceContext: selecting traceparent"
+        );
+
+        let used_session = session_tp.is_some();
+        let traceparent = if session_tp.is_some() {
+            // A real HTTP request is in scope — the Axum middleware captured the traceparent.
+            // Use it so auth stays in the same trace as the frontend HTTP request span.
+            session_tp
+        } else if live_sc.is_valid() {
+            // No session context (e.g. background task) — best-effort: use current live span.
             let mut carrier = std::collections::HashMap::new();
             opentelemetry::global::get_text_map_propagator(|p| p.inject_context(&cx, &mut carrier));
             carrier.remove("traceparent")
         } else {
-            session::traceparent()
+            None
         };
+
+        tracing::warn!(
+            selected_traceparent = ?traceparent,
+            source = if used_session { "session" } else { "live_span" },
+            "PropagateTraceContext: injecting traceparent"
+        );
 
         if let Some(tp) = traceparent {
             if let Ok(val) = reqwest::header::HeaderValue::from_str(&tp) {
