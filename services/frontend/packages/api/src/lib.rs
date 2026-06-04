@@ -57,12 +57,12 @@ fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
 
 /// Injects the W3C `traceparent` header into every outbound BFF→auth request.
 ///
-/// Client-triggered path: Dioxus instruments the handler task with the current
-/// span, so `Span::current()` has a valid OTel context — extract and inject it.
+/// Session path (both SSR and client-triggered): `capture_traceparent` Axum middleware
+/// serialises the current OTel context into `IncomingTraceparent` before any Dioxus
+/// spawn. This is preferred — auth becomes a child of the same HTTP request span.
 ///
-/// SSR path: Dioxus spawns the render without tracing context, so
-/// `Span::current()` is a no-op span. Fall back to the traceparent captured
-/// synchronously before the spawn by the `capture_traceparent` Axum middleware.
+/// Fallback (background tasks with no active HTTP request): extract context from the
+/// live tracing span when no session traceparent is available.
 #[cfg(feature = "server")]
 struct PropagateTraceContext;
 
@@ -106,7 +106,7 @@ impl reqwest_middleware::Middleware for PropagateTraceContext {
 
         tracing::warn!(
             selected_traceparent = ?traceparent,
-            source = if used_session { "session" } else { "live_span" },
+            source = if used_session { "session" } else if traceparent.is_some() { "live_span" } else { "none" },
             "PropagateTraceContext: injecting traceparent"
         );
 
