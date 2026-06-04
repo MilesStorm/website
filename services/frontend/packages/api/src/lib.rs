@@ -75,7 +75,11 @@ impl reqwest_middleware::Middleware for SsrTraceparentMiddleware {
         extensions: &mut http::Extensions,
         next: reqwest_middleware::Next<'_>,
     ) -> reqwest_middleware::Result<reqwest::Response> {
-        if tracing::Span::current().id().is_none() {
+        // TracingMiddleware runs before us. When no active OTel context exists
+        // (SSR path — Dioxus spawns tasks without tracing context), it injects
+        // nothing. In that case fall back to the traceparent captured before the
+        // spawn by the `capture_traceparent` Axum middleware.
+        if !req.headers().contains_key("traceparent") {
             if let Some(tp) = session::traceparent() {
                 if let Ok(val) = reqwest::header::HeaderValue::from_str(&tp) {
                     req.headers_mut().insert("traceparent", val);

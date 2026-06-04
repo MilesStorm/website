@@ -92,7 +92,7 @@ fn server_launch() -> ! {
                         .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
                         .build();
 
-                    let tracer = provider.tracer("frontend");
+                    let tracer = provider.tracer("web");
                     opentelemetry::global::set_tracer_provider(provider);
 
                     let log_exporter = opentelemetry_otlp::LogExporter::builder()
