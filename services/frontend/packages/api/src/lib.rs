@@ -43,49 +43,56 @@ mod session {
     }
 }
 
-// Shared HTTP client.
-// TracingMiddleware injects the current span's traceparent for direct client calls
-// (where Dioxus preserves the tracing context across spawn_pinned).
-// SsrTraceparentMiddleware runs after and overrides the header when there is no
-// active tracing span (the SSR path, where Dioxus spawns without the tracing context).
-// It reads the traceparent captured before the spawn by `capture_traceparent`.
 #[cfg(feature = "server")]
 fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
     use std::sync::OnceLock;
     use reqwest_middleware::ClientBuilder;
-    use reqwest_tracing::TracingMiddleware;
     static CLIENT: OnceLock<reqwest_middleware::ClientWithMiddleware> = OnceLock::new();
     CLIENT.get_or_init(|| {
         ClientBuilder::new(reqwest::Client::new())
-            .with(TracingMiddleware::default())
-            .with(SsrTraceparentMiddleware)
+            .with(PropagateTraceContext)
             .build()
     })
 }
 
+/// Injects the W3C `traceparent` header into every outbound BFF→auth request.
+///
+/// Client-triggered path: Dioxus instruments the handler task with the current
+/// span, so `Span::current()` has a valid OTel context — extract and inject it.
+///
+/// SSR path: Dioxus spawns the render without tracing context, so
+/// `Span::current()` is a no-op span. Fall back to the traceparent captured
+/// synchronously before the spawn by the `capture_traceparent` Axum middleware.
 #[cfg(feature = "server")]
-struct SsrTraceparentMiddleware;
+struct PropagateTraceContext;
 
 #[cfg(feature = "server")]
 #[async_trait::async_trait]
-impl reqwest_middleware::Middleware for SsrTraceparentMiddleware {
+impl reqwest_middleware::Middleware for PropagateTraceContext {
     async fn handle(
         &self,
         mut req: reqwest::Request,
         extensions: &mut http::Extensions,
         next: reqwest_middleware::Next<'_>,
     ) -> reqwest_middleware::Result<reqwest::Response> {
-        // TracingMiddleware runs before us. When no active OTel context exists
-        // (SSR path — Dioxus spawns tasks without tracing context), it injects
-        // nothing. In that case fall back to the traceparent captured before the
-        // spawn by the `capture_traceparent` Axum middleware.
-        if !req.headers().contains_key("traceparent") {
-            if let Some(tp) = session::traceparent() {
-                if let Ok(val) = reqwest::header::HeaderValue::from_str(&tp) {
-                    req.headers_mut().insert("traceparent", val);
-                }
+        use opentelemetry::trace::TraceContextExt as _;
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+        let cx = tracing::Span::current().context();
+        let traceparent = if cx.span().span_context().is_valid() {
+            let mut carrier = std::collections::HashMap::new();
+            opentelemetry::global::get_text_map_propagator(|p| p.inject_context(&cx, &mut carrier));
+            carrier.remove("traceparent")
+        } else {
+            session::traceparent()
+        };
+
+        if let Some(tp) = traceparent {
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(&tp) {
+                req.headers_mut().insert("traceparent", val);
             }
         }
+
         next.run(req, extensions).await
     }
 }
