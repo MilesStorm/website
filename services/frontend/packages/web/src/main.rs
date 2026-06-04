@@ -71,6 +71,12 @@ fn server_launch() -> ! {
         .build()
         .expect("failed to build OTel runtime");
 
+    // Always register W3C trace-context propagator so OtelAxumLayer and
+    // TracingMiddleware both work even when OTLP export is disabled.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     let (otel_layer, _otel_log_provider): (Option<_>, Option<SdkLoggerProvider>) = _otel_rt
         .block_on(async {
             match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
@@ -88,9 +94,6 @@ fn server_launch() -> ! {
 
                     let tracer = provider.tracer("frontend");
                     opentelemetry::global::set_tracer_provider(provider);
-                    opentelemetry::global::set_text_map_propagator(
-                        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-                    );
 
                     let log_exporter = opentelemetry_otlp::LogExporter::builder()
                         .with_tonic()
@@ -180,6 +183,7 @@ fn server_launch() -> ! {
                     get(move || async move { metric_handle.render() }),
                 )
                 .layer(layer)
+                .layer(axum::middleware::from_fn(capture_traceparent))
                 .layer(OtelInResponseLayer)
                 .layer(OtelAxumLayer::default())
                 .layer(prometheus_layer);
@@ -259,6 +263,31 @@ async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
             }
         } => {}
     }
+}
+
+// ---- Trace context capture middleware ----
+
+/// Runs after `OtelAxumLayer` has created the request span. Reads back the current
+/// span's OTel context and stores the serialised `traceparent` as a request extension.
+/// BFF server functions read this extension to forward the trace context to auth even
+/// when Dioxus's SSR dispatcher spawns them into a new task (dropping thread-local state).
+#[cfg(not(target_arch = "wasm32"))]
+async fn capture_traceparent(
+    mut req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use opentelemetry::propagation::TextMapPropagator as _;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    let cx = tracing::Span::current().context();
+    let propagator = TraceContextPropagator::new();
+    let mut carrier = std::collections::HashMap::new();
+    propagator.inject_context(&cx, &mut carrier);
+    if let Some(tp) = carrier.remove("traceparent") {
+        req.extensions_mut().insert(api::IncomingTraceparent(tp));
+    }
+    next.run(req).await
 }
 
 // ---- OAuth Axum handlers ----

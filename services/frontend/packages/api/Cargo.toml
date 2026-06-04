@@ -17,6 +17,7 @@ tracing = { workspace = true }
 tower-sessions = { workspace = true, optional = true }
 reqwest-middleware = { version = "0.5", features = ["json"], optional = true }
 reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_27"], optional = true }
+async-trait = { version = "0.1", optional = true }
 metrics = { version = "0.24", optional = true }
 
 [features]
@@ -25,5 +26,6 @@ server = [
     "dep:tower-sessions",
     "dep:reqwest-middleware",
     "dep:reqwest-tracing",
+    "dep:async-trait",
     "dep:metrics",
 ]

@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 
 pub use ui::data_dir::{AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus, PagedResult};
 
+/// Request extension that carries the serialised W3C `traceparent` captured
+/// before Dioxus's SSR dispatcher spawns server-function tasks.
+/// Set by the `capture_traceparent` middleware in the `web` crate.
+#[cfg(feature = "server")]
+#[derive(Clone)]
+pub struct IncomingTraceparent(pub String);
+
 // ---- Session helpers (server-only) ----
 
 #[cfg(feature = "server")]
@@ -26,11 +33,22 @@ mod session {
     pub fn service_secret() -> String {
         std::env::var("BFF_SERVICE_SECRET").expect("BFF_SERVICE_SECRET must be set")
     }
+
+    /// Returns the W3C `traceparent` captured before any Dioxus spawn, or `None`
+    /// if not available (in which case `TracingMiddleware` handles propagation).
+    pub fn traceparent() -> Option<String> {
+        let ctx = FullstackContext::current()?;
+        let parts = ctx.parts_mut();
+        parts.extensions.get::<crate::IncomingTraceparent>().map(|t| t.0.clone())
+    }
 }
 
-// Shared HTTP client wrapped with reqwest-tracing middleware so every outbound
-// request to the auth service injects W3C `traceparent` from the current span.
-// Using a process-wide client also reuses the connection pool across calls.
+// Shared HTTP client.
+// TracingMiddleware injects the current span's traceparent for direct client calls
+// (where Dioxus preserves the tracing context across spawn_pinned).
+// SsrTraceparentMiddleware runs after and overrides the header when there is no
+// active tracing span (the SSR path, where Dioxus spawns without the tracing context).
+// It reads the traceparent captured before the spawn by `capture_traceparent`.
 #[cfg(feature = "server")]
 fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
     use std::sync::OnceLock;
@@ -40,8 +58,32 @@ fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
     CLIENT.get_or_init(|| {
         ClientBuilder::new(reqwest::Client::new())
             .with(TracingMiddleware::default())
+            .with(SsrTraceparentMiddleware)
             .build()
     })
+}
+
+#[cfg(feature = "server")]
+struct SsrTraceparentMiddleware;
+
+#[cfg(feature = "server")]
+#[async_trait::async_trait]
+impl reqwest_middleware::Middleware for SsrTraceparentMiddleware {
+    async fn handle(
+        &self,
+        mut req: reqwest::Request,
+        extensions: &mut http::Extensions,
+        next: reqwest_middleware::Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        if tracing::Span::current().id().is_none() {
+            if let Some(tp) = session::traceparent() {
+                if let Ok(val) = reqwest::header::HeaderValue::from_str(&tp) {
+                    req.headers_mut().insert("traceparent", val);
+                }
+            }
+        }
+        next.run(req, extensions).await
+    }
 }
 
 // ---- Plain async helpers for Axum OAuth handlers in the web crate ----

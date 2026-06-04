@@ -15,6 +15,12 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Only init OTLP when the endpoint is explicitly configured. In dev (no env var) the
     // layers are None and tracing-subscriber skips them, so there are no connection errors.
+    // Always register W3C trace-context propagator so OtelAxumLayer can extract
+    // incoming traceparent headers regardless of whether OTLP export is configured.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     let (otel_layer, otel_log_layer, otel_provider, otel_log_provider): (
         Option<_>,
         Option<_>,
@@ -36,9 +42,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // BoxedTracer which doesn't satisfy tracing-opentelemetry's PreSampledTracer bound.
                 let tracer = provider.tracer("auth");
                 opentelemetry::global::set_tracer_provider(provider.clone());
-                opentelemetry::global::set_text_map_propagator(
-                    opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-                );
 
                 let log_exporter = opentelemetry_otlp::LogExporter::builder()
                     .with_tonic()
