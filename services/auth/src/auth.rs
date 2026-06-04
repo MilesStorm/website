@@ -128,11 +128,9 @@ impl Auth {
             .merge(permissions::router())
             .merge(core::router())
             .layer(auth_layer)
-            // OtelInResponseLayer must sit *outside* OtelAxumLayer so the response
-            // header (`traceresponse`) is added after the inner layer has populated
-            // the OTel context for the request span.
             .layer(OtelInResponseLayer)
             .layer(OtelAxumLayer::default())
+            .layer(axum::middleware::from_fn(record_trace_id))
             .layer(prometheus_layer);
 
         let listener = match tokio::net::TcpListener::bind(format!(
@@ -155,6 +153,21 @@ impl Auth {
 
         Ok(())
     }
+}
+
+async fn record_trace_id(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use opentelemetry::trace::TraceContextExt as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    let current_span = tracing::Span::current();
+    let sc = current_span.context().span().span_context().clone();
+    if sc.is_valid() {
+        current_span.record("trace_id", sc.trace_id().to_string());
+    }
+    next.run(req).await
 }
 
 async fn poll_pool_metrics(db: PgPool) {

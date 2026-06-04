@@ -280,12 +280,24 @@ async fn capture_traceparent(
     use opentelemetry_sdk::propagation::TraceContextPropagator;
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
-    let cx = tracing::Span::current().context();
-    let propagator = TraceContextPropagator::new();
-    let mut carrier = std::collections::HashMap::new();
-    propagator.inject_context(&cx, &mut carrier);
-    if let Some(tp) = carrier.remove("traceparent") {
-        req.extensions_mut().insert(api::IncomingTraceparent(tp));
+    use opentelemetry::trace::TraceContextExt as _;
+
+    let current_span = tracing::Span::current();
+    let cx = current_span.context();
+    let otel_span = cx.span();
+    let sc = otel_span.span_context();
+
+    if sc.is_valid() {
+        // Record OTel trace_id on the request span so it appears in every JSON
+        // log line emitted during this request — enabling Loki↔Tempo correlation.
+        current_span.record("trace_id", sc.trace_id().to_string());
+
+        let propagator = TraceContextPropagator::new();
+        let mut carrier = std::collections::HashMap::new();
+        propagator.inject_context(&cx, &mut carrier);
+        if let Some(tp) = carrier.remove("traceparent") {
+            req.extensions_mut().insert(api::IncomingTraceparent(tp));
+        }
     }
     next.run(req).await
 }
