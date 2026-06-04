@@ -26,7 +26,10 @@ opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "logs"] }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "logs"] }
 opentelemetry-appender-tracing = "0.27"
 tracing-opentelemetry = "0.28"
-axum-tracing-opentelemetry = "0.25"
+# `tracing_level_info` raises OtelAxumLayer's per-request span from TRACE to INFO so it
+# survives the `info` EnvFilter (RUST_LOG=info). Without it the span is never recorded, so
+# no OTel SpanContext exists to capture/propagate — breaking cross-service trace linkage.
+axum-tracing-opentelemetry = { version = "0.25", features = ["tracing_level_info"] }
 
 # Metrics (Prometheus exposition format → Alloy → Mimir)
 axum-prometheus = "0.10"
