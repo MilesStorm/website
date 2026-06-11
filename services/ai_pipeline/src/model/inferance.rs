@@ -21,8 +21,19 @@ fn yolo_bpk_path() -> String {
 const YOLO_INPUT: usize = 640;
 /// DiceHead was trained on 128×128 crops.
 const HEAD_INPUT: usize = 128;
-/// Default YOLO confidence threshold.
+/// Default YOLO confidence threshold. Override at runtime with YOLO_CONF
+/// (a fine-tuned single-class model usually wants a different cutoff).
 const DEFAULT_CONF: f32 = 0.25;
+
+fn conf_threshold_from_env() -> f32 {
+    match std::env::var("YOLO_CONF") {
+        Ok(v) => v.parse().unwrap_or_else(|_| {
+            tracing::warn!(value = %v, "YOLO_CONF is not a valid f32, using default");
+            DEFAULT_CONF
+        }),
+        Err(_) => DEFAULT_CONF,
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Detection {
@@ -46,13 +57,14 @@ pub struct DicePipeline<B: Backend> {
     head: DiceHead<B>,
     device: B::Device,
     conf_threshold: f32,
+    first_frame_logged: std::sync::atomic::AtomicBool,
 }
 
 impl<B: Backend> DicePipeline<B> {
     /// Load both models. `head_dir` is an experiment artifact directory
     /// (e.g. `art/experiment_32`) containing `model/model.bpk`.
     pub fn new(device: B::Device, head_dir: &Path) -> Self {
-        Self::with_conf(device, head_dir, DEFAULT_CONF)
+        Self::with_conf(device, head_dir, conf_threshold_from_env())
     }
 
     pub fn with_conf(device: B::Device, head_dir: &Path, conf_threshold: f32) -> Self {
@@ -60,7 +72,13 @@ impl<B: Backend> DicePipeline<B> {
         let mut head = DiceHead::<B>::new(&device);
         let mut store = BurnpackStore::from_file(head_dir.join("model/model"));
         head.load_from(&mut store).expect("DiceHead weights not found");
-        Self { yolo, head, device, conf_threshold }
+        Self {
+            yolo,
+            head,
+            device,
+            conf_threshold,
+            first_frame_logged: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 
     /// Run YOLO bbox detection then DiceHead classification on every detected die.
@@ -91,6 +109,39 @@ impl<B: Backend> DicePipeline<B> {
             .convert::<f32>()
             .to_vec()
             .unwrap();
+
+        // Output-contract check so a model swap that changes the export shape
+        // fails loud instead of being silently misparsed by chunks_exact(6).
+        if raw.len() % 6 != 0 {
+            if !self
+                .first_frame_logged
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                tracing::error!(
+                    raw_len = raw.len(),
+                    "YOLO output length not divisible by 6 — expected [1,300,6] rows of \
+                     [x1,y1,x2,y2,conf,class]; the loaded model does not match the parser. \
+                     Re-export with the end-to-end [1,300,6] contract (see training/README.md)"
+                );
+            }
+            return Vec::new();
+        }
+        if !self
+            .first_frame_logged
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            let rows = raw.len() / 6;
+            let max_conf = raw
+                .chunks_exact(6)
+                .map(|r| r[4])
+                .fold(f32::NEG_INFINITY, f32::max);
+            tracing::info!(
+                rows,
+                max_conf,
+                conf_threshold = self.conf_threshold,
+                "YOLO first-frame output parsed (expected ~300 rows)"
+            );
+        }
 
         let scale = YOLO_INPUT as f32;
         let mut detections = Vec::new();

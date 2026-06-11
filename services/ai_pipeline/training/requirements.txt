@@ -1,0 +1,11 @@
+# Pinned to match the metadata embedded in the original src/model/yolo26n.onnx
+# (producer: pytorch 2.9.1, ultralytics 8.4.7, opset 22). Keeping these exact
+# guarantees the re-export of the fine-tuned model produces the identical
+# [1,300,6] end-to-end graph contract the Burn codegen + Rust parser expect.
+ultralytics==8.4.7
+torch==2.9.1
+torchvision==0.24.1
+onnx>=1.17
+onnxslim          # used by ultralytics when exporting with simplify=True
+onnxruntime       # verify_export.py smoke inference + make_head_crops.py
+                  # (swap for onnxruntime-gpu if crop generation feels slow)
