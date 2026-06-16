@@ -1,2 +1,4 @@
 *.pt
 src/model/yolo*.onnx
+runs/
+data/yolo_det/

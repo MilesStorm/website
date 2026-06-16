@@ -1,18 +1,17 @@
 use std::path::Path;
 
+use burn::module::{Module, ModuleMapper, Param};
 use burn::prelude::Backend;
 use serde::Serialize;
 use burn::tensor::activation::softmax;
-use burn::tensor::module::interpolate;
-use burn::tensor::ops::{InterpolateMode, InterpolateOptions};
-use burn::tensor::{Tensor, TensorData};
+use burn::tensor::{DType, Tensor, TensorData};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 
 use crate::model::{my_model, DiceHead};
 
 /// Compile-time fallback path to the YOLO burnpack produced by build.rs.
 /// Override at runtime with the YOLO_MODEL_PATH env var (required in Docker).
-const YOLO_BPK_DEFAULT: &str = concat!(env!("OUT_DIR"), "/model/yolo26n.bpk");
+const YOLO_BPK_DEFAULT: &str = concat!(env!("OUT_DIR"), "/model/yolo26s.bpk");
 
 fn yolo_bpk_path() -> String {
     std::env::var("YOLO_MODEL_PATH").unwrap_or_else(|_| YOLO_BPK_DEFAULT.to_string())
@@ -48,6 +47,20 @@ pub struct DicePipeline<B: Backend> {
     conf_threshold: f32,
 }
 
+/// Widens every float parameter to f32. The head is trained in bf16
+/// (`Autodiff<Cuda<bf16>>`) so its burnpack stores bf16 weights, but burn 0.21's
+/// padded-conv path builds the zero-pad fill tensor at f32 and slice-assigns the
+/// activation into it — a `DTypeMismatch` panic for any bf16 input. Casting the
+/// loaded weights to f32 (lossless widening) makes the whole head run in f32, so
+/// pad fill, input, and weights agree. Inference-only; training is untouched.
+struct CastToF32;
+
+impl<B: Backend> ModuleMapper<B> for CastToF32 {
+    fn map_float<const D: usize>(&mut self, param: Param<Tensor<B, D>>) -> Param<Tensor<B, D>> {
+        param.map(|tensor| tensor.cast(DType::F32))
+    }
+}
+
 impl<B: Backend> DicePipeline<B> {
     /// Load both models. `head_dir` is an experiment artifact directory
     /// (e.g. `art/experiment_32`) containing `model/model.bpk`.
@@ -60,6 +73,8 @@ impl<B: Backend> DicePipeline<B> {
         let mut head = DiceHead::<B>::new(&device);
         let mut store = BurnpackStore::from_file(head_dir.join("model/model"));
         head.load_from(&mut store).expect("DiceHead weights not found");
+        // Loaded weights keep their stored bf16 dtype; widen to f32 for inference.
+        let head = head.map(&mut CastToF32);
         Self { yolo, head, device, conf_threshold }
     }
 
@@ -74,25 +89,21 @@ impl<B: Backend> DicePipeline<B> {
         let img = image::RgbImage::from_raw(width as u32, height as u32, rgb.to_vec())
             .expect("rgb dimensions inconsistent with width/height");
 
-        // YOLO expects proper CHW input (PyTorch/Ultralytics convention).
-        let yolo_tensor = frame_to_chw_tensor::<B>(rgb, width, height, &self.device);
-        let yolo_resized = interpolate(
-            yolo_tensor,
-            [YOLO_INPUT, YOLO_INPUT],
-            InterpolateOptions::new(InterpolateMode::Bilinear),
-        );
+        // Letterbox to 640×640 (aspect-preserving + 114 pad), matching the
+        // Ultralytics preprocessing the model was trained/exported with. `lb`
+        // carries the scale + padding needed to map boxes back to the frame.
+        let (yolo_input, lb) = letterbox_to_chw::<B>(&img, &self.device);
 
         // Output shape: [1, 300, 6], each row = [x1, y1, x2, y2, conf, class_f32].
-        // Coords are absolute pixels in the YOLO_INPUT × YOLO_INPUT space.
+        // Coords are absolute pixels in the letterboxed YOLO_INPUT × YOLO_INPUT space.
         let raw: Vec<f32> = self
             .yolo
-            .forward(yolo_resized)
+            .forward(yolo_input)
             .into_data()
             .convert::<f32>()
             .to_vec()
             .unwrap();
 
-        let scale = YOLO_INPUT as f32;
         let mut detections = Vec::new();
 
         for row in raw.chunks_exact(6) {
@@ -101,16 +112,18 @@ impl<B: Backend> DicePipeline<B> {
                 continue;
             }
 
-            let x1 = (row[0] / scale).clamp(0.0, 1.0);
-            let y1 = (row[1] / scale).clamp(0.0, 1.0);
-            let x2 = (row[2] / scale).clamp(0.0, 1.0);
-            let y2 = (row[3] / scale).clamp(0.0, 1.0);
+            // Undo letterbox: pixel→original-frame normalized coords, clamped.
+            let x1 = lb.unpad_x(row[0]);
+            let y1 = lb.unpad_y(row[1]);
+            let x2 = lb.unpad_x(row[2]);
+            let y2 = lb.unpad_y(row[3]);
 
             if x2 <= x1 || y2 <= y1 {
                 continue;
             }
 
             // Crop using image crate and resize with Lanczos3, matching dataset.rs.
+            // The head runs in f32 (see CastToF32), so the f32 crop feeds it directly.
             let crop = crop_for_head::<B>(&img, x1, y1, x2, y2, &self.device);
             let probs: Vec<f32> = softmax(self.head.forward(crop), 1)
                 .into_data()
@@ -141,23 +154,71 @@ impl<B: Backend> DicePipeline<B> {
     }
 }
 
-/// HWC bytes → [1, 3, H, W] CHW tensor normalized to [0, 1].
-/// Used for YOLO which was trained with standard PyTorch CHW convention.
-fn frame_to_chw_tensor<B: Backend>(
-    rgb: &[u8],
-    width: usize,
-    height: usize,
+/// Letterbox parameters for mapping YOLO outputs back to original-frame coords.
+/// The model sees a 640×640 image built by scaling the frame by `scale` (uniform,
+/// aspect-preserving) and centering it with `pad_x`/`pad_y` pixels of 114-grey
+/// border. `w`/`h` are the original frame dimensions.
+struct Letterbox {
+    scale: f32,
+    pad_x: f32,
+    pad_y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl Letterbox {
+    /// 640px x-coordinate → original-frame normalized x in [0, 1].
+    fn unpad_x(&self, px: f32) -> f32 {
+        (((px - self.pad_x) / self.scale) / self.w).clamp(0.0, 1.0)
+    }
+    /// 640px y-coordinate → original-frame normalized y in [0, 1].
+    fn unpad_y(&self, py: f32) -> f32 {
+        (((py - self.pad_y) / self.scale) / self.h).clamp(0.0, 1.0)
+    }
+}
+
+/// Aspect-preserving resize of `img` to fit YOLO_INPUT×YOLO_INPUT, centered on a
+/// 114-grey canvas (Ultralytics letterbox), returned as a [1, 3, 640, 640] CHW
+/// tensor normalized to [0, 1] plus the `Letterbox` mapping back to the frame.
+fn letterbox_to_chw<B: Backend>(
+    img: &image::RgbImage,
     device: &B::Device,
-) -> Tensor<B, 4> {
-    let mut data = Vec::with_capacity(3 * height * width);
+) -> (Tensor<B, 4>, Letterbox) {
+    let (w, h) = img.dimensions();
+    let side = YOLO_INPUT as u32;
+    let scale = (YOLO_INPUT as f32 / w as f32).min(YOLO_INPUT as f32 / h as f32);
+    let nw = ((w as f32 * scale).round() as u32).clamp(1, side);
+    let nh = ((h as f32 * scale).round() as u32).clamp(1, side);
+    let pad_x = (side - nw) / 2;
+    let pad_y = (side - nh) / 2;
+
+    let resized =
+        image::imageops::resize(img, nw, nh, image::imageops::FilterType::Triangle);
+    let mut canvas = image::RgbImage::from_pixel(side, side, image::Rgb([114, 114, 114]));
+    image::imageops::overlay(&mut canvas, &resized, pad_x as i64, pad_y as i64);
+
+    // CHW, normalized to [0, 1].
+    let mut data = Vec::with_capacity(3 * YOLO_INPUT * YOLO_INPUT);
     for c in 0..3usize {
-        for h in 0..height {
-            for w in 0..width {
-                data.push(rgb[(h * width + w) * 3 + c] as f32 / 255.0);
+        for y in 0..side {
+            for x in 0..side {
+                data.push(canvas.get_pixel(x, y)[c] as f32 / 255.0);
             }
         }
     }
-    Tensor::<B, 4>::from_data(TensorData::new(data, [1, 3, height, width]), device)
+    let tensor =
+        Tensor::<B, 4>::from_data(TensorData::new(data, [1, 3, YOLO_INPUT, YOLO_INPUT]), device);
+
+    (
+        tensor,
+        Letterbox {
+            scale,
+            pad_x: pad_x as f32,
+            pad_y: pad_y as f32,
+            w: w as f32,
+            h: h as f32,
+        },
+    )
 }
 
 /// Crop a normalized bbox from an RgbImage, resize to 128×128 with Lanczos3, and

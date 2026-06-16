@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use burn::backend::Cuda;
 use burn::backend::cuda::CudaDevice;
-use burn::tensor::bf16;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -13,7 +12,10 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::model::inferance::{Detection, DicePipeline};
 
-type InferBackend = Cuda<bf16>;
+// f32 inference: the ONNX-imported YOLO graph carries f32 constants that clash
+// with bf16 activations (DTypeMismatch at runtime), and yolo26s + DiceHead are
+// small enough that f32 stays comfortably real-time.
+type InferBackend = Cuda<f32>;
 
 /// (jpeg/png frame bytes, channel to send JSON result back on)
 type InferRequest = (Vec<u8>, oneshot::Sender<String>);
