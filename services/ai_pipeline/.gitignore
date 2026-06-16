@@ -1,4 +1,6 @@
 *.pt
-src/model/yolo*.onnx
+# yolo26x is 213 MB (> GitHub's 100 MB limit) and unused; yolo26n/26s ship in-repo.
+src/model/yolo26x.onnx
 runs/
 data/yolo_det/
+data/yolo_det_self/
