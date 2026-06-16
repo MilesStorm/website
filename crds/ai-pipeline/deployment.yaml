@@ -38,7 +38,7 @@ spec:
           - name: RUST_LOG
             value: "info"
           - name: YOLO_MODEL_PATH
-            value: "/app/models/yolo26n.bpk"
+            value: "/app/models/yolo26s.bpk"
           - name: DICE_HEAD_PATH
             value: "/app/weights"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
