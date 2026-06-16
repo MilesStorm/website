@@ -38,7 +38,7 @@ RUN cargo build --release
 RUN find /app/target -name "yolo26s.bpk" -exec cp {} /app/yolo26s.bpk \;
 
 
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS runtime
+FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04 AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -57,6 +57,7 @@ USER appuser
 
 ENV RUST_LOG=info
 ENV YOLO_MODEL_PATH=/app/models/yolo26s.bpk
+ENV DICE_HEAD_PATH=/app/weights
 
 EXPOSE 9000
 CMD ["./dice_detector", "yolo", "0.0.0.0:9000"]
