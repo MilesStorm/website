@@ -25,6 +25,7 @@ The website itself is built using modern web development technologies:
 
 - **Rust Axum Webserver**: High-performance, asynchronous web server framework.
 - **Rust Dioxus Frontend**: Reactive UI library for building dynamic, interactive user interfaces.
+- **Burn**: Custom head, with fine-tuned yolo26 bbox detection of dice cropped for the dicehead
 
 ## Upcoming Features
 
@@ -58,9 +59,6 @@ To run the website locally, follow these steps:
 
 Contributions are welcome! Please fork the repository and submit a pull request for any improvements or new features.
 
-## Contact
-
-For any questions or inquiries, please contact me at milesrstorm@gmail.com.
 
 ---
 
