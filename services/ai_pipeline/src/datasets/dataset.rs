@@ -277,12 +277,7 @@ pub fn load_dataset_folder<B: Backend>(
                 TARGET_SIZE as u32,
                 image::imageops::FilterType::Lanczos3,
             );
-            let mut data = Vec::with_capacity(TARGET_SIZE * TARGET_SIZE * 3);
-            for pixel in img.pixels() {
-                data.push(pixel[0] as f32 / 255.);
-                data.push(pixel[1] as f32 / 255.);
-                data.push(pixel[2] as f32 / 255.);
-            }
+            let data = crate::model::inferance::pack_chw(&img);
 
             let images = Tensor::<B, 4>::from_data(
                 TensorData::new(data, [1, 3, TARGET_SIZE, TARGET_SIZE]),
@@ -434,12 +429,7 @@ pub fn load_dataset<B: Backend>(root: &Path, device: B::Device) -> Result<Vec<Sa
 
             let img_rgb = img.to_rgb8();
             let (w, h) = img_rgb.dimensions();
-            let mut data: Vec<f32> = Vec::with_capacity((w * h * 3) as usize);
-            for pixel in img_rgb.pixels() {
-                data.push(pixel[0] as f32 / 255.);
-                data.push(pixel[1] as f32 / 255.);
-                data.push(pixel[2] as f32 / 255.);
-            }
+            let data = crate::model::inferance::pack_chw(&img_rgb);
 
             // Shape: [1, 3, h, w]
             let tensor = Tensor::<B, 4>::from_data(

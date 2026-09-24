@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import re
@@ -315,6 +316,48 @@ def evaluate(model, x_u8, y, bs=1024):
     return (p == y).float().mean().item(), loss / len(y), p
 
 
+def save_safetensors(tensors: dict[str, torch.Tensor], path: Path) -> None:
+    """Minimal safetensors writer (f32 only): 8-byte LE header length, JSON header,
+    then the raw little-endian data. Avoids a dependency for one file format."""
+    header, blobs, offset = {}, [], 0
+    for name, t in tensors.items():
+        b = t.detach().to("cpu", torch.float32).contiguous().numpy().tobytes()
+        header[name] = {"dtype": "F32", "shape": list(t.shape), "data_offsets": [offset, offset + len(b)]}
+        blobs.append(b)
+        offset += len(b)
+    h = json.dumps(header, separators=(",", ":")).encode()
+    h += b" " * (-len(h) % 8)  # pad so the data section is 8-byte aligned
+    with open(path, "wb") as f:
+        f.write(len(h).to_bytes(8, "little"))
+        f.write(h)
+        for b in blobs:
+            f.write(b)
+
+
+def export_for_burn(model: nn.Module, x_all: torch.Tensor, keys: list[str], out: Path) -> None:
+    """Weights for the burn ResNet18 (src/model/resnet.rs) plus parity data: 256
+    real crops (their keys, so Rust can re-pack the PNGs itself), the exact input
+    tensor PyTorch used, and its logits, as raw LE f32 files. Logits are computed
+    on CPU in fp32 so GPU TF32 noise can't blur the comparison."""
+    import hashlib
+    model = copy.deepcopy(model).float().eval().to("cpu").to(memory_format=torch.contiguous_format)
+    sd = {k: v for k, v in model.state_dict().items()
+          if not k.endswith("num_batches_tracked") and k not in ("mean", "std")}
+    path = out / "dice_head_resnet18.safetensors"
+    save_safetensors(sd, path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    (out / "dice_head_resnet18.sha256").write_text(digest + "\n")
+
+    idx = torch.randperm(len(x_all), generator=torch.Generator().manual_seed(1))[:256]
+    x = x_all[idx].float() / 255
+    with torch.no_grad():
+        logits = model(x).float()
+    (out / "parity_keys.txt").write_text("\n".join(keys[i] for i in idx.tolist()) + "\n")
+    (out / "parity_inputs.f32").write_bytes(x.contiguous().numpy().astype("<f4").tobytes())
+    (out / "parity_logits.f32").write_bytes(logits.contiguous().numpy().astype("<f4").tobytes())
+    print(f"burn export: {path} ({path.stat().st_size / 1e6:.1f} MB, sha256 {digest}), parity data for 256 crops")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="dicehead",
@@ -324,6 +367,9 @@ def main() -> None:
     ap.add_argument("--split", help="dir whose val_files.txt defines the held-out set (e.g. art/experiment_40)")
     ap.add_argument("--folds", type=int, help="instead of --split: own class-stratified group K-fold split")
     ap.add_argument("--fold", type=int, default=0, help="which of --folds is held out")
+    ap.add_argument("--all", action="store_true",
+                    help="final model: train on every crop (no held-out set), keep the last epoch, and export "
+                         "dice_head_resnet18.safetensors + parity data for the burn port")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--lr", type=float, default=None, help="default 1e-3 (dicehead) / 3e-4 (resnet18)")
@@ -334,8 +380,9 @@ def main() -> None:
     torch.manual_seed(args.seed)
     dev = torch.device("cuda")
     lr = args.lr or (1e-3 if args.model == "dicehead" else 3e-4)
-    assert args.split or args.folds, "give --split <dir> or --folds K [--fold i]"
-    name = args.name or f"{args.model}_" + (Path(args.split).name if args.split else f"f{args.fold}of{args.folds}")
+    assert args.split or args.folds or args.all, "give --split <dir>, --folds K [--fold i], or --all"
+    name = args.name or (f"{args.model}_final" if args.all else f"{args.model}_" + (
+        Path(args.split).name if args.split else f"f{args.fold}of{args.folds}"))
     out = OUT / name
     out.mkdir(parents=True, exist_ok=True)
 
@@ -346,9 +393,16 @@ def main() -> None:
         val_list = [k for k in keys if fold_of[k] == args.fold]
         (out / "val_files.txt").write_text("\n".join(val_list))
         args.split = str(out.relative_to(ROOT))
-    val_keys = set((ROOT / args.split / "val_files.txt").read_text().split("\n"))
-    is_val = torch.tensor([k in val_keys for k in keys])
-    tr_idx, va_idx = (~is_val).nonzero().squeeze(1), is_val.nonzero().squeeze(1)
+    if args.all:
+        # No held-out set: the "val" numbers are a fixed 1024-crop sample of the
+        # TRAINING data, only to watch convergence.
+        args.split = "all"
+        tr_idx = torch.arange(len(keys))
+        va_idx = torch.randperm(len(keys), generator=torch.Generator().manual_seed(0))[:1024]
+    else:
+        val_keys = set((ROOT / args.split / "val_files.txt").read_text().split("\n"))
+        is_val = torch.tensor([k in val_keys for k in keys])
+        tr_idx, va_idx = (~is_val).nonzero().squeeze(1), is_val.nonzero().squeeze(1)
     if args.limit:
         tr_idx, va_idx = tr_idx[torch.randperm(len(tr_idx))[:args.limit]], va_idx[:args.limit]
     x_tr, y_tr = x_all[tr_idx].to(dev), y_all[tr_idx].to(dev)
@@ -391,7 +445,7 @@ def main() -> None:
         history.append(dict(epoch=epoch, train_loss=tot / seen, train_acc=correct / seen,
                             val_loss=va_loss, val_acc=va_acc, seconds=dt))
         flag = ""
-        if va_acc > best[0]:
+        if args.all or va_acc > best[0]:  # --all keeps the last epoch
             best = (va_acc, epoch)
             torch.save(model.state_dict(), out / "best.pt")
             flag = " *"
@@ -411,6 +465,9 @@ def main() -> None:
         f.write("true_label," + ",".join(f"pred_{i}" for i in range(NUM_CLASSES)) + "\n")
         for i in range(NUM_CLASSES):
             f.write(f"{i}," + ",".join(str(v) for v in conf[i].tolist()) + "\n")
+
+    if args.all:
+        export_for_burn(model, x_all, keys, out)
 
     # ONNX for burn/ort serving: [1,3,64,64] in [0,1] -> [1,21] logits.
     model.float().eval().to("cpu")

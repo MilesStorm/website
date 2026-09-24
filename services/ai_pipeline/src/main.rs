@@ -1,6 +1,7 @@
 mod datasets;
 mod helper;
 pub mod model;
+mod roll;
 mod serve;
 
 use std::{env, path::Path};
@@ -17,6 +18,10 @@ use crate::{
     model::training::{TrainingConfig, audit, eval, train},
 };
 const ART_ROOT: &str = "./art";
+/// File name of the head weights exported by `tools/train_head_torch.py --all`.
+const HEAD_FILE: &str = "dice_head_resnet18.safetensors";
+/// Local-dev default for DICE_HEAD_PATH (the Docker image sets it explicitly).
+const DEV_HEAD_PATH: &str = "./runs/head_torch/resnet18_final";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -36,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
     let _otel = setup_tracing(is_serve).await;
 
     if args.contains(&String::from("yolo")) {
-        // WebSocket inference server: browser webcam → YOLO bbox → DiceHead → JSON detections.
+        // WebSocket inference server: browser camera → YOLO → ResNet18 head → frame + roll JSON.
         // Default address can be overridden: cargo r --release -- yolo 0.0.0.0:9001
         let addr = args
             .iter()
@@ -45,15 +50,18 @@ async fn main() -> anyhow::Result<()> {
             .map(String::as_str)
             .unwrap_or("0.0.0.0:9000");
 
-        let exp_dir = if let Ok(p) = std::env::var("DICE_HEAD_PATH") {
-            std::path::PathBuf::from(p)
-        } else {
-            latest_experiment_dir(Path::new(ART_ROOT))
-                .unwrap_or_else(|| panic!("No experiment_* dirs found in {}", ART_ROOT))
+        // DICE_HEAD_PATH: the safetensors file, or a directory containing it.
+        let head_path = std::path::PathBuf::from(
+            std::env::var("DICE_HEAD_PATH").unwrap_or_else(|_| DEV_HEAD_PATH.to_string()),
+        );
+        let head_path = if head_path.is_dir() { head_path.join(HEAD_FILE) } else { head_path };
+        let dice_threshold = match std::env::var("DICE_CONF_THRESHOLD") {
+            Ok(v) => v.parse().map_err(|e| anyhow::anyhow!("DICE_CONF_THRESHOLD={v}: {e}"))?,
+            Err(_) => model::inferance::DEFAULT_DICE_THRESHOLD,
         };
-        tracing::info!(path = %exp_dir.display(), "loading model weights");
+        tracing::info!(path = %head_path.display(), dice_threshold, "loading model weights");
 
-        serve::serve(addr, exp_dir).await?;
+        serve::serve(addr, head_path, dice_threshold).await?;
         return Ok(());
     }
 

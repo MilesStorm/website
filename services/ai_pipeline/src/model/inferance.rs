@@ -1,13 +1,12 @@
 use std::path::Path;
 
-use burn::module::{Module, ModuleMapper, Param};
+use burn::module::{ModuleMapper, Param};
 use burn::prelude::Backend;
 use serde::Serialize;
 use burn::tensor::activation::softmax;
 use burn::tensor::{DType, Tensor, TensorData};
-use burn_store::{BurnpackStore, ModuleSnapshot};
 
-use crate::model::{my_model, DiceHead};
+use crate::model::{my_model, resnet::ResNet18Head};
 
 /// Compile-time fallback path to the YOLO burnpack produced by build.rs.
 /// Override at runtime with the YOLO_MODEL_PATH env var (required in Docker).
@@ -30,6 +29,20 @@ pub const HEAD_INPUT: usize = 64;
 pub const HEAD_CROP_MARGIN: f32 = 0.12;
 /// Default YOLO confidence threshold.
 const DEFAULT_CONF: f32 = 0.25;
+/// Default minimum head probability for a value to count as read. Below it the
+/// pipeline reports the die as unreadable instead of guessing. 0.70 was ~97.4%
+/// correct while answering ~93% of crops in the out-of-fold test (ROADMAP.md).
+pub const DEFAULT_DICE_THRESHOLD: f32 = 0.70;
+
+/// Head class index -> printed face value ("1".."20"; "0" is the d10 zero).
+/// Order matches obj.names: 1..9, 0, 10..20.
+pub fn class_value(class: usize) -> &'static str {
+    const VALUES: [&str; 21] = [
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "10", "11", "12", "13", "14", "15",
+        "16", "17", "18", "19", "20",
+    ];
+    VALUES.get(class).copied().unwrap_or("?")
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Detection {
@@ -44,15 +57,24 @@ pub struct Detection {
     pub yolo_class: u32,
     /// DiceHead predicted class index (0..=20, matching obj.names ordering).
     pub dice_class: u32,
-    /// DiceHead softmax probability for the winning class.
+    /// Head softmax probability for the winning class.
     pub dice_conf: f32,
+    /// Printed face value of `dice_class` ("0" is the d10 zero).
+    pub value: &'static str,
+    /// `dice_conf >= threshold`: when false, clients must not treat `value` as read.
+    pub confident: bool,
+    /// Full softmax over the 21 classes, used for multi-frame voting.
+    #[serde(skip)]
+    pub probs: Vec<f32>,
 }
 
 pub struct DicePipeline<B: Backend> {
     yolo: my_model::Model<B>,
-    head: DiceHead<B>,
+    /// None for `yolo_only` (crop export), which never classifies.
+    head: Option<ResNet18Head<B>>,
     device: B::Device,
     conf_threshold: f32,
+    dice_threshold: f32,
 }
 
 /// Widens every float parameter to f32. Heads trained before the switch to f32
@@ -70,60 +92,57 @@ impl<B: Backend> ModuleMapper<B> for CastToF32 {
 }
 
 impl<B: Backend> DicePipeline<B> {
-    /// Load both models. `head_dir` is an experiment artifact directory
-    /// (e.g. `art/experiment_32`) containing `model/model.bpk`.
-    pub fn new(device: B::Device, head_dir: &Path) -> Self {
-        Self::with_conf(device, head_dir, DEFAULT_CONF)
-    }
-
-    pub fn with_conf(device: B::Device, head_dir: &Path, conf_threshold: f32) -> Self {
+    /// Load YOLO and the ResNet18 head (`head_path`: safetensors from
+    /// `tools/train_head_torch.py --all`). Fails if the weights don't load completely.
+    pub fn new(device: B::Device, head_path: &Path, dice_threshold: f32) -> anyhow::Result<Self> {
         let yolo = my_model::Model::<B>::from_file(&yolo_bpk_path(), &device);
-        let mut head = DiceHead::<B>::new(&device);
-        let mut store = BurnpackStore::from_file(head_dir.join("model/model"));
-        head.load_from(&mut store).expect("DiceHead weights not found");
-        // Older burnpacks store bf16; widen to f32 for inference (no-op for f32 ones).
-        let head = head.map(&mut CastToF32);
-        Self { yolo, head, device, conf_threshold }
+        let head = ResNet18Head::<B>::load(head_path, &device)?;
+        Ok(Self { yolo, head: Some(head), device, conf_threshold: DEFAULT_CONF, dice_threshold })
     }
 
-    /// Load only the YOLO detector (with a throwaway, randomly-initialized head)
-    /// for offline crop export, where no classification is performed.
+    /// Load only the YOLO detector for offline crop export, where no classification is performed.
     pub fn yolo_only(device: B::Device, conf_threshold: f32) -> Self {
         let yolo = my_model::Model::<B>::from_file(&yolo_bpk_path(), &device);
-        let head = DiceHead::<B>::new(&device);
-        Self { yolo, head, device, conf_threshold }
+        Self { yolo, head: None, device, conf_threshold, dice_threshold: DEFAULT_DICE_THRESHOLD }
     }
 
-    /// Run YOLO bbox detection then DiceHead classification on every detected die.
+    /// Run YOLO bbox detection then classify every detected die (one batched head pass).
     ///
     /// `rgb` is packed R,G,B bytes in row-major (HWC) order — the format produced
     /// by most webcam APIs and image libraries. Length must equal `width * height * 3`.
     pub fn infer_frame(&self, rgb: &[u8], width: usize, height: usize) -> Vec<Detection> {
         assert_eq!(rgb.len(), width * height * 3, "rgb buffer length mismatch");
+        let head = self.head.as_ref().expect("infer_frame needs a head (not yolo_only)");
 
         // Wrap bytes once for per-detection cropping later.
         let img = image::RgbImage::from_raw(width as u32, height as u32, rgb.to_vec())
             .expect("rgb dimensions inconsistent with width/height");
 
-        self.detect_boxes(&img)
-            .into_iter()
-            .map(|b| {
-                // Crop via the shared margin-aware path, then classify. The head
-                // runs in f32 (see CastToF32), so the f32 crop feeds it directly.
-                let crop = crop_for_head::<B>(&img, b.x1, b.y1, b.x2, b.y2, &self.device);
-                let probs: Vec<f32> = softmax(self.head.forward(crop), 1)
-                    .into_data()
-                    .convert::<f32>()
-                    .to_vec()
-                    .unwrap();
+        let boxes = self.detect_boxes(&img);
+        if boxes.is_empty() {
+            return Vec::new();
+        }
+        // Crop via the shared margin-aware path (train == serve), then classify all at once.
+        let crops: Vec<Tensor<B, 4>> = boxes
+            .iter()
+            .map(|b| crop_for_head::<B>(&img, b.x1, b.y1, b.x2, b.y2, &self.device))
+            .collect();
+        let probs: Vec<f32> = softmax(head.forward(Tensor::cat(crops, 0)), 1)
+            .into_data()
+            .convert::<f32>()
+            .to_vec()
+            .unwrap();
 
-                let (dice_class, dice_conf) = probs
+        boxes
+            .iter()
+            .zip(probs.chunks_exact(crate::model::head::NUM_CLASSES))
+            .map(|(b, p)| {
+                let (class, conf) = p
                     .iter()
                     .enumerate()
-                    .max_by(|a, c| a.1.partial_cmp(c.1).unwrap())
-                    .map(|(i, &p)| (i as u32, p))
+                    .max_by(|a, c| a.1.total_cmp(c.1))
+                    .map(|(i, &p)| (i, p))
                     .unwrap();
-
                 Detection {
                     x1: b.x1,
                     y1: b.y1,
@@ -131,8 +150,11 @@ impl<B: Backend> DicePipeline<B> {
                     y2: b.y2,
                     yolo_conf: b.conf,
                     yolo_class: b.class,
-                    dice_class,
-                    dice_conf,
+                    dice_class: class as u32,
+                    dice_conf: conf,
+                    value: class_value(class),
+                    confident: conf >= self.dice_threshold,
+                    probs: p.to_vec(),
                 }
             })
             .collect()
@@ -173,8 +195,32 @@ impl<B: Backend> DicePipeline<B> {
             }
             boxes.push(BoxDet { x1, y1, x2, y2, conf, class: row[5] as u32 });
         }
-        boxes
+        suppress_duplicates(boxes)
     }
+}
+
+/// Boxes overlapping a more confident box by more than this IoU are the same die.
+const DUPLICATE_IOU: f32 = 0.5;
+
+/// Class-agnostic non-maximum suppression. yolo26 is exported "end-to-end"
+/// (NMS-free), but it still emits near-identical boxes for one die now and then,
+/// which would count that die twice in a roll.
+fn suppress_duplicates(mut boxes: Vec<BoxDet>) -> Vec<BoxDet> {
+    let iou = |a: &BoxDet, b: &BoxDet| {
+        let iw = (a.x2.min(b.x2) - a.x1.max(b.x1)).max(0.0);
+        let ih = (a.y2.min(b.y2) - a.y1.max(b.y1)).max(0.0);
+        let inter = iw * ih;
+        let union = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
+        if union > 0.0 { inter / union } else { 0.0 }
+    };
+    boxes.sort_by(|a, b| b.conf.total_cmp(&a.conf));
+    let mut kept: Vec<BoxDet> = Vec::with_capacity(boxes.len());
+    for b in boxes {
+        if kept.iter().all(|k| iou(k, &b) <= DUPLICATE_IOU) {
+            kept.push(b);
+        }
+    }
+    kept
 }
 
 /// A single accepted YOLO detection in original-frame normalized coords.
@@ -295,9 +341,24 @@ pub fn crop_region_to_image(
     )
 }
 
-/// Crop a normalized bbox from an RgbImage and build the head's input tensor,
-/// using the shared `crop_region_to_image` path plus the same pixel-by-pixel
-/// R,G,B normalization as dataset.rs so the layout matches training.
+/// Pack an RGB image into planar CHW order (all R, then all G, then all B),
+/// scaled to [0, 1]: the layout `Tensor<B, 4>` of shape [N, 3, H, W] expects and
+/// the layout PyTorch trains on. (Interleaved R,G,B pixel order would scramble
+/// the image: the old burn head was trained and served that way.)
+pub fn pack_chw(img: &image::RgbImage) -> Vec<f32> {
+    let (w, h) = img.dimensions();
+    let plane = (w * h) as usize;
+    let mut data = vec![0f32; 3 * plane];
+    for (i, pixel) in img.pixels().enumerate() {
+        for c in 0..3 {
+            data[c * plane + i] = pixel[c] as f32 / 255.0;
+        }
+    }
+    data
+}
+
+/// Crop a normalized bbox from an RgbImage and build the head's input tensor
+/// through the shared `crop_region_to_image` path and planar `pack_chw` packing.
 fn crop_for_head<B: Backend>(
     img: &image::RgbImage,
     x1: f32,
@@ -307,15 +368,8 @@ fn crop_for_head<B: Backend>(
     device: &B::Device,
 ) -> Tensor<B, 4> {
     let resized = crop_region_to_image(img, x1, y1, x2, y2);
-
-    let mut data = Vec::with_capacity(HEAD_INPUT * HEAD_INPUT * 3);
-    for pixel in resized.pixels() {
-        data.push(pixel[0] as f32 / 255.0);
-        data.push(pixel[1] as f32 / 255.0);
-        data.push(pixel[2] as f32 / 255.0);
-    }
     Tensor::<B, 4>::from_data(
-        TensorData::new(data, [1, 3, HEAD_INPUT, HEAD_INPUT]),
+        TensorData::new(pack_chw(&resized), [1, 3, HEAD_INPUT, HEAD_INPUT]),
         device,
     )
 }
@@ -406,4 +460,25 @@ pub fn export_yolo_crops<B: Backend>(
         "\nexport complete: kept {total_kept}, dropped {total_dropped} (no box >= {conf}) -> {}",
         dst_root.display()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BoxDet, suppress_duplicates};
+
+    fn b(x1: f32, conf: f32) -> BoxDet {
+        BoxDet { x1, y1: 0.4, x2: x1 + 0.06, y2: 0.55, conf, class: 0 }
+    }
+
+    #[test]
+    fn duplicate_boxes_for_one_die_collapse_to_the_most_confident() {
+        let kept = suppress_duplicates(vec![b(0.2369, 0.80), b(0.2367, 0.90), b(0.69, 0.95)]);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().any(|k| (k.conf - 0.90).abs() < 1e-6));
+    }
+
+    #[test]
+    fn neighbouring_dice_are_kept() {
+        assert_eq!(suppress_duplicates(vec![b(0.20, 0.9), b(0.27, 0.9)]).len(), 2);
+    }
 }

@@ -18,6 +18,8 @@ burn = { version = "^0.21.0", features = [
 burn-train = "^0.21.0"
 burn-store = { version = "^0.21.0", features = [
   "burnpack",
+  "safetensors",
+  "std",
 ], default-features = false }
 image = "^0.25.10"
 anyhow = "1.0.102"
