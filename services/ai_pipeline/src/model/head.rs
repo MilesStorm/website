@@ -8,7 +8,7 @@ use burn::{
         pool::{AdaptiveAvgPool2d, AdaptiveAvgPool2dConfig},
     },
     prelude::Backend,
-    tensor::activation::gelu,
+    tensor::activation::relu,
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
 
@@ -44,29 +44,52 @@ impl<B: Backend> ResBlock<B> {
     fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
         let residual = x.clone();
         let y = self.bn1.forward(self.conv1.forward(x));
-        let y = gelu(y);
+        let y = relu(y);
         let y = self.bn2.forward(self.conv2.forward(y));
-        gelu(y + residual)
+        relu(y + residual)
     }
 }
 
+/// Spatial size the head's final feature map is pooled to before the FC.
+///
+/// Crucially this is NOT 1x1. The head now classifies a tight crop of the die's
+/// top number (1-2 digits filling the frame) rather than a whole die in context.
+/// Global-average-pooling to 1x1 would wash out digit-count/layout information,
+/// collapsing "1" and the two-digit "11"/"17" family toward the same pooled
+/// vector. Keeping a small 4x4 grid lets the FC see that there are two glyph
+/// blobs side by side, which is exactly what separates single- from double-digit
+/// values.
+const POOL_GRID: usize = 4;
+
+/// Compact SVHN-style digit/glyph recognizer for the die's top number.
+///
+/// Input is a 64x64 RGB crop (see `HEAD_INPUT` in `inferance.rs`) produced by the
+/// YOLO number detector. Colour is kept (3 channels, no desaturation) because
+/// glyph colour and font vary by die type/style and carry signal; the net is
+/// sized to model several font renderings rather than memorising one.
+///
+/// Stem keeps full resolution for thin strokes, then three stride-2 stages with
+/// one residual block each take 64 -> 32 -> 16 -> 8 while widening 32 -> 64 ->
+/// 128 -> 128. The 8x8 map is adaptive-avg-pooled to POOL_GRID and flattened.
+/// ~0.9M params: far lighter and faster than the previous 128-input / 384-channel
+/// design, which was built for full-die context the head no longer receives.
 #[derive(Module, Debug)]
 pub struct DiceHead<B: Backend> {
-    // Stem: 3 -> 48, stride 2. 128 -> 64.
+    // Stem: 3 -> 32, stride 1. 64 -> 64 (preserve stroke detail).
     stem_conv: Conv2d<B>,
     stem_bn: BatchNorm<B>,
 
-    // Stage 1: 48 -> 96, stride 2. 64 -> 32.
+    // Stage 1: 32 -> 64, stride 2. 64 -> 32.
     s1_down: Conv2d<B>,
     s1_bn: BatchNorm<B>,
     s1_block: ResBlock<B>,
 
-    // Stage 2: 96 -> 192, stride 2. 32 -> 16.
+    // Stage 2: 64 -> 128, stride 2. 32 -> 16.
     s2_down: Conv2d<B>,
     s2_bn: BatchNorm<B>,
     s2_block: ResBlock<B>,
 
-    // Stage 3: 192 -> 384, stride 2. 16 -> 8.
+    // Stage 3: 128 -> 128, stride 2. 16 -> 8.
     s3_down: Conv2d<B>,
     s3_bn: BatchNorm<B>,
     s3_block: ResBlock<B>,
@@ -88,24 +111,26 @@ impl<B: Backend> DiceHead<B> {
         };
 
         Self {
-            stem_conv: down(3, 48).init(device),
-            stem_bn: BatchNormConfig::new(48).init(device),
+            stem_conv: Conv2dConfig::new([3, 32], [3, 3])
+                .with_padding(PaddingConfig2d::Same)
+                .init(device),
+            stem_bn: BatchNormConfig::new(32).init(device),
 
-            s1_down: down(48, 96).init(device),
-            s1_bn: BatchNormConfig::new(96).init(device),
-            s1_block: ResBlock::new(96, device),
+            s1_down: down(32, 64).init(device),
+            s1_bn: BatchNormConfig::new(64).init(device),
+            s1_block: ResBlock::new(64, device),
 
-            s2_down: down(96, 192).init(device),
-            s2_bn: BatchNormConfig::new(192).init(device),
-            s2_block: ResBlock::new(192, device),
+            s2_down: down(64, 128).init(device),
+            s2_bn: BatchNormConfig::new(128).init(device),
+            s2_block: ResBlock::new(128, device),
 
-            s3_down: down(192, 384).init(device),
-            s3_bn: BatchNormConfig::new(384).init(device),
-            s3_block: ResBlock::new(384, device),
+            s3_down: down(128, 128).init(device),
+            s3_bn: BatchNormConfig::new(128).init(device),
+            s3_block: ResBlock::new(128, device),
 
-            pool: AdaptiveAvgPool2dConfig::new([1, 1]).init(),
-            dropout: DropoutConfig::new(0.2).init(),
-            fc: LinearConfig::new(384, NUM_CLASSES).init(device),
+            pool: AdaptiveAvgPool2dConfig::new([POOL_GRID, POOL_GRID]).init(),
+            dropout: DropoutConfig::new(0.3).init(),
+            fc: LinearConfig::new(128 * POOL_GRID * POOL_GRID, NUM_CLASSES).init(device),
             class_weights: None,
         }
     }
@@ -121,15 +146,15 @@ impl<B: Backend> DiceHead<B> {
     }
 
     pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
-        let x = gelu(self.stem_bn.forward(self.stem_conv.forward(x)));
+        let x = relu(self.stem_bn.forward(self.stem_conv.forward(x)));
 
-        let x = gelu(self.s1_bn.forward(self.s1_down.forward(x)));
+        let x = relu(self.s1_bn.forward(self.s1_down.forward(x)));
         let x = self.s1_block.forward(x);
 
-        let x = gelu(self.s2_bn.forward(self.s2_down.forward(x)));
+        let x = relu(self.s2_bn.forward(self.s2_down.forward(x)));
         let x = self.s2_block.forward(x);
 
-        let x = gelu(self.s3_bn.forward(self.s3_down.forward(x)));
+        let x = relu(self.s3_bn.forward(self.s3_down.forward(x)));
         let x = self.s3_block.forward(x);
 
         let x = self.pool.forward(x);

@@ -110,7 +110,8 @@ fn decode_and_infer(
 ///   `{"detections":[{x1,y1,x2,y2,yolo_conf,yolo_class,dice_class,dice_conf},...], "frame_ms": N}`
 ///
 /// A single inference thread (owning the GPU pipeline) is shared across all connections.
-/// Frames are processed serially; excess frames are silently dropped so latency stays low.
+/// Each connection reads frames into a newest-wins watch channel and infers only the
+/// latest, so stale frames are dropped and latency stays bounded to one inference.
 pub async fn serve(addr: &str, head_dir: PathBuf) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(addr, "WebSocket server listening");
@@ -135,20 +136,53 @@ async fn handle_connection(
     handle: Arc<InferHandle>,
 ) -> anyhow::Result<()> {
     let ws = accept_async(stream).await?;
-    let (mut sink, mut stream) = ws.split();
+    let (mut sink, stream) = ws.split();
 
-    while let Some(msg) = stream.next().await {
-        match msg? {
-            Message::Binary(frame_bytes) => {
-                if let Some(json) = handle.infer(frame_bytes.to_vec()).await {
-                    sink.send(Message::text(json)).await?;
+    // Decouple socket reading from inference. The previous loop awaited each
+    // frame's full inference before reading the next message, so on a GPU that
+    // can't keep up (e.g. GTX 1660 at ~140ms/frame) frames piled up in the
+    // socket buffer and were drained FIFO — latency grew without bound
+    // ("minutes behind"). Instead, a reader task drains the socket as fast as
+    // frames arrive and keeps only the *newest* one in a watch channel; the
+    // inference loop always grabs that latest frame and lets stale ones fall
+    // away. End-to-end latency is then bounded by a single inference, no matter
+    // how far behind the GPU is.
+    let (frame_tx, mut frame_rx) = tokio::sync::watch::channel::<Option<Vec<u8>>>(None);
+
+    let reader = tokio::spawn(async move {
+        let mut stream = stream;
+        while let Some(msg) = stream.next().await {
+            match msg {
+                // Overwrites any unprocessed frame: only the latest survives.
+                Ok(Message::Binary(frame_bytes)) => {
+                    if frame_tx.send(Some(frame_bytes.to_vec())).is_err() {
+                        break; // inference loop gone
+                    }
                 }
+                Ok(Message::Close(_)) | Err(_) => break,
+                // Ignore ping/pong/text; tungstenite handles pings automatically.
+                _ => {}
             }
-            Message::Close(_) => break,
-            // Ignore ping/pong/text; tungstenite handles pings automatically.
-            _ => {}
+        }
+    });
+
+    loop {
+        // Wait until a newer frame arrives, then take it (marking it seen so we
+        // don't reprocess the same frame on the next iteration).
+        if frame_rx.changed().await.is_err() {
+            break; // reader task ended (client disconnected)
+        }
+        let Some(frame) = frame_rx.borrow_and_update().clone() else {
+            continue;
+        };
+
+        if let Some(json) = handle.infer(frame).await {
+            if sink.send(Message::text(json)).await.is_err() {
+                break; // client disconnected
+            }
         }
     }
 
+    reader.abort();
     Ok(())
 }
