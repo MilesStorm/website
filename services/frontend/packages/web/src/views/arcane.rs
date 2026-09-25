@@ -151,6 +151,11 @@ fn ArcaneIsland() -> Element {
                 }
             }
 
+            p { class: "w-full max-w-2xl text-center text-xs opacity-60",
+                "Your latest roll's picture is kept for 10 minutes so you can flag it as wrong from "
+                "the browser extension. It's only saved for training if you flag it or turn on "
+                "sharing in your profile."
+            }
             div { class: "w-full max-w-2xl text-center text-2xl font-bold tabular-nums",
                 match last_roll() {
                     Some(text) => rsx! { span { class: "text-base-content/50 font-normal", "Last roll: " } "{text}" },

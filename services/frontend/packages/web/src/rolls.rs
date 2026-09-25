@@ -53,7 +53,7 @@ const PUBLISH_QUEUE: usize = 16;
 /// Shared fan-out point for roll events; cheap to clone.
 #[derive(Clone)]
 pub struct RollHub {
-    pool: Pool,
+    pub(crate) pool: Pool,
     sessions: RedisStore<Pool>,
     users: Arc<Mutex<HashMap<String, broadcast::Sender<Arc<str>>>>>,
     // Held so the subscriber connection lives as long as the hub.

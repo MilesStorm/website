@@ -9,6 +9,11 @@ use views::{AdminPanel, Arcane, Ark, AssholeTimer, Landing, Login, NotFound, Pro
 mod views;
 #[cfg(not(target_arch = "wasm32"))]
 mod rolls;
+#[cfg(not(target_arch = "wasm32"))]
+mod capture;
+#[cfg(not(target_arch = "wasm32"))]
+mod dataset;
+mod sharing;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
@@ -134,6 +139,12 @@ fn server_launch() -> ! {
         .with(otel_log_layer)
         .init();
 
+    let store = dataset::Dataset::from_env();
+    if store.is_none() {
+        tracing::warn!("SURREAL_URL/SURREAL_USER/SURREAL_PASS not set: roll sharing and flagging are off");
+    }
+    let _ = dataset::DATASET.set(store);
+
     dioxus::serve(move || {
         let redis_url = redis_url.clone();
         async move {
@@ -187,6 +198,7 @@ fn server_launch() -> ! {
                 .route("/ws/arcane", get(arcane_ws_proxy))
                 .route("/api/arcane/me", get(rolls::arcane_me))
                 .route("/api/arcane/rolls", get(rolls::arcane_rolls))
+                .route("/api/arcane/flag", axum::routing::post(capture::arcane_flag))
                 .route(
                     "/metrics",
                     get(move || async move { metric_handle.render() }),
@@ -236,7 +248,8 @@ async fn arcane_ws_proxy(
 
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
     let session_id = session.id();
-    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user, session_id))
+    let token: String = session.get("opaque_token").await.ok().flatten().unwrap_or_default();
+    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user, token, session_id))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -245,6 +258,7 @@ async fn proxy_ws(
     upstream_url: String,
     hub: rolls::RollHub,
     user: String,
+    token: String,
     session_id: Option<tower_sessions::session::Id>,
 ) {
     use axum::extract::ws::Message as AxMsg;
@@ -263,6 +277,11 @@ async fn proxy_ws(
     // Rolls go to Redis in order through one queue; never awaited here, so Redis
     // latency can't stall the frame stream.
     let rolls_tx = hub.publisher(user.clone());
+    // Separate queue for keeping roll pictures, so the database can't slow rolls.
+    let capture_tx = hub.capturer(user.clone(), token);
+    // Recent frames by number, to find the exact one each roll was read from.
+    let frames = std::sync::Mutex::new(capture::FrameRing::default());
+    let mut last_frame: Option<(u64, String)> = None;
     let (mut client_tx, mut client_rx) = client.split();
 
     tokio::select! {
@@ -271,6 +290,7 @@ async fn proxy_ws(
             while let Some(Ok(msg)) = client_rx.next().await {
                 match msg {
                     AxMsg::Binary(b) => {
+                        frames.lock().unwrap().push(&b);
                         if upstream_tx.send(TngMsg::Binary(b)).await.is_err() { break; }
                     }
                     AxMsg::Close(_) => break,
@@ -283,8 +303,21 @@ async fn proxy_ws(
             while let Some(Ok(msg)) = upstream_rx.next().await {
                 match msg {
                     TngMsg::Text(t) => {
-                        if rolls::is_roll(&t) && rolls_tx.try_send(t.to_string()).is_err() {
-                            tracing::warn!("arcane roll dropped: Redis publish queue full");
+                        let seq = frame_seq(&t);
+                        if rolls::is_roll(&t) {
+                            if rolls_tx.try_send(t.to_string()).is_err() {
+                                tracing::warn!("arcane roll dropped: Redis publish queue full");
+                            }
+                            let job = capture::CaptureJob {
+                                roll: t.to_string(),
+                                frame: last_frame.take().filter(|(s, _)| Some(*s) == seq).map(|(_, f)| f),
+                                jpeg: seq.and_then(|s| frames.lock().unwrap().get(s)),
+                            };
+                            if capture_tx.try_send(job).is_err() {
+                                tracing::debug!("roll capture skipped: queue full");
+                            }
+                        } else if let Some(s) = seq {
+                            last_frame = Some((s, t.to_string()));
                         }
                         if client_tx.send(AxMsg::Text(t.to_string().into())).await.is_err() { break; }
                     }
@@ -305,6 +338,15 @@ async fn proxy_ws(
             tracing::info!("arcane WebSocket closed: session ended or permission removed");
         }
     }
+}
+
+/// ai_pipeline's `frame_seq`: which forwarded frame a result was computed from.
+#[cfg(not(target_arch = "wasm32"))]
+fn frame_seq(text: &str) -> Option<u64> {
+    if !text.contains("\"frame_seq\"") {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(text).ok()?.get("frame_seq")?.as_u64()
 }
 
 // ---- Trace context capture middleware ----

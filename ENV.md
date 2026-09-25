@@ -45,6 +45,11 @@
 | `REDIS_PORT` | `6379` | Redis port. |
 | `REDIS_PASSWORD` | _(empty)_ | Redis AUTH password. Empty/unset disables AUTH (fine for local Docker Compose). In the cluster injected from the `redis` secret (key `redis-password`), mirrored into the `frontend` namespace by Reflector. |
 | `RUST_LOG` | `info,dioxus=warn,tower_sessions=warn` | Log filter string. |
+| `SURREAL_URL` | _(unset)_ | SurrealDB base URL for shared/flagged roll pictures (`services/frontend/surreal/README.md`). In the cluster: `http://surrealdb.surreal.svc.cluster.local:8000`. If this, `SURREAL_USER` or `SURREAL_PASS` is unset, roll sharing and "flag as wrong roll" are switched off. |
+| `SURREAL_USER` / `SURREAL_PASS` | _(unset)_ | The database-level `dice` login (EDITOR on `milesstorm`/`arcane` only), from the `surreal-dice` secret. |
+| `SURREAL_NS` / `SURREAL_DB` | `milesstorm` / `arcane` | Where the roll-sharing tables live. |
+| `DATASET_SAMPLE_EVERY` | `20` | For users who opted in, keep about one in N confident rolls (rolls the model is unsure about are always kept). |
+| `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins allowed to open `/ws/arcane`, comma-separated (e.g. a dev proxy). Same-host origins are always allowed; plain-http ones only in debug builds. |
 
 ---
 
