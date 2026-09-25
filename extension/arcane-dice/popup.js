@@ -1,17 +1,17 @@
-// Side panel: shows the logged-in user's latest dice roll, live.
+// Toolbar popup: the logged-in user's latest dice roll, live while it's open.
 //
-// Login is the website's own session cookie (milesstorm.bff). Chrome sends it on
-// these fetches because the site is in host_permissions; the extension never sees
-// or stores a password or token. The fetches live here, not in the service worker,
-// because service-worker fetches may be sent without the cookie.
+// Login is the website's own session cookie (milesstorm.bff). The browser sends it
+// on these fetches because the extension has host permission for the site; the
+// extension never sees or stores a password or token. `chrome.*` is used
+// throughout: Firefox provides it too, with promises.
 
 import { SseParser } from "./lib/sse.js";
 import { parseRoll, describeRoll, timeAgo } from "./lib/roll.js";
-import { DEFAULT_BASE, isOptional, normalizeBase, originPattern } from "./lib/config.js";
+import { BASE, originPattern } from "./lib/config.js";
 
 const $ = (id) => document.getElementById(id);
 
-let base = DEFAULT_BASE;
+const base = BASE;
 let controller = new AbortController();
 let shown = null;
 
@@ -34,11 +34,12 @@ function clearRoll() {
   chrome.storage.session.remove("lastRoll").catch(console.error);
 }
 
-function setStatus(kind, text, { login = false } = {}) {
+function setStatus(kind, text, { login = false, grant = false } = {}) {
   const el = $("status");
   el.dataset.kind = kind;
   el.textContent = text;
   $("login").hidden = !login;
+  $("grant").hidden = !grant;
 }
 
 function render(roll) {
@@ -76,7 +77,7 @@ async function getMe(signal) {
 
 /**
  * Streams rolls until the connection ends. Resolves to "denied" on 401/403 (the
- * caller re-checks login), "busy" on 429 (too many panels open), or "ended" after a
+ * caller re-checks login), "busy" on 429 (too many popups open), or "ended" after a
  * stream that delivered data. Throws when the site can't be reached or goes silent.
  */
 async function streamRolls(outer) {
@@ -122,6 +123,14 @@ async function run() {
   for (;;) {
     const signal = controller.signal;
     try {
+      // Firefox lets users switch site access off; without it the login cookie
+      // isn't sent and requests fail.
+      if (!(await chrome.permissions.contains({ origins: [originPattern(base)] }))) {
+        if (shown) clearRoll();
+        setStatus("out", `The extension needs permission to reach ${new URL(base).host}.`, { grant: true });
+        await sleep(5000, signal);
+        continue;
+      }
       const me = await getMe(signal);
       if (!me.logged_in) {
         if (shown) clearRoll();
@@ -146,10 +155,10 @@ async function run() {
       } else if (outcome === "denied") {
         setStatus("connecting", "Checking login…");
       } else if (outcome === "busy") {
-        setStatus("retry", "Too many dice panels open for this account. Close one to continue.");
+        setStatus("retry", "Too many dice popups open for this account. Close one to continue.");
       }
     } catch (e) {
-      if (signal.aborted) continue; // the site setting changed; start over at once
+      if (signal.aborted) continue; // access was just granted; start over at once
       console.warn("arcane dice:", e);
       setStatus("retry", `Can't reach ${new URL(base).host}. Retrying…`);
     }
@@ -160,29 +169,17 @@ async function run() {
   }
 }
 
-/** The chosen site, or the default if its optional permission was since removed. */
-async function usableBase(value) {
-  const b = normalizeBase(value);
-  if (isOptional(b) && !(await chrome.permissions.contains({ origins: [originPattern(b)] }))) return DEFAULT_BASE;
-  return b;
-}
-
-async function loadBase() {
-  const { base: saved } = await chrome.storage.sync.get("base");
-  return usableBase(saved);
-}
-
-chrome.storage.onChanged.addListener(async (changes, area) => {
-  if (area !== "sync" || !("base" in changes)) return;
-  base = await usableBase(changes.base.newValue);
-  shown = null;
-  $("roll").hidden = true;
-  setStatus("connecting", "Connecting…");
+/** Drop the current connection and start over at once. */
+function restart() {
   controller.abort();
   controller = new AbortController();
-});
+}
 
 $("login").addEventListener("click", () => chrome.tabs.create({ url: `${base}/login` }));
+// permissions.request needs a user click, so it can only happen here.
+$("grant").addEventListener("click", async () => {
+  if (await chrome.permissions.request({ origins: [originPattern(base)] })) restart();
+});
 
 // Keep "12 s ago" current.
 setInterval(() => {
@@ -190,7 +187,6 @@ setInterval(() => {
 }, 1000);
 
 (async () => {
-  base = await loadBase();
   const { lastRoll } = await chrome.storage.session.get("lastRoll");
   if (lastRoll) render(lastRoll);
   run();

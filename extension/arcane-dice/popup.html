@@ -4,13 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Arcane Dice</title>
-    <link rel="stylesheet" href="sidepanel.css" />
+    <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header>
       <h1>Arcane Dice</h1>
       <p id="status" class="status" data-kind="connecting">Connecting…</p>
       <button id="login" type="button" hidden>Log in on the website</button>
+      <button id="grant" type="button" hidden>Allow access</button>
     </header>
 
     <main id="roll" hidden>
@@ -22,6 +23,6 @@
 
     <p id="empty" class="empty" hidden>No rolls yet. Open the Arcane page on any device and roll.</p>
 
-    <script type="module" src="sidepanel.js"></script>
+    <script type="module" src="popup.js"></script>
   </body>
 </html>

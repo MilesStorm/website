@@ -1,7 +1,7 @@
 // Incremental parser for a text/event-stream body read through fetch().
 //
 // Not EventSource: it hides HTTP status codes (401/403) and retries on its own,
-// and the side panel needs to tell "logged out" from "server down".
+// and the popup needs to tell "logged out" from "server down".
 //
 // Follows the HTML spec's line rules: lines end in CRLF, LF or CR (a CRLF may be
 // split across chunks), ":" lines are comments (keep-alives), `data:` lines of

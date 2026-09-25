@@ -256,16 +256,17 @@ pub async fn arcane_user(session: &tower_sessions::Session) -> Result<String, De
 }
 
 /// Browsers always send `Origin` on WebSocket handshakes; the page and the socket are
-/// served by the same host, so the origin's host must match `Host`. Extra origins
-/// (e.g. the `dx serve` dev proxy) can be listed in `ARCANE_ALLOWED_ORIGINS`,
+/// served by the same host, so the origin's host must match `Host`, over HTTPS.
+/// Plain-http origins are accepted only in debug builds (local `dx serve`). Extra
+/// origins (e.g. the dev proxy) can be listed in `ARCANE_ALLOWED_ORIGINS`,
 /// comma-separated. Clients that send no `Origin` are not browsers and carry no
 /// ambient cookies, so they are let through to the normal session check.
 pub fn origin_allowed(headers: &HeaderMap) -> bool {
     let extra = std::env::var("ARCANE_ALLOWED_ORIGINS").unwrap_or_default();
-    origin_allowed_with(headers, &extra)
+    origin_allowed_with(headers, &extra, cfg!(debug_assertions))
 }
 
-fn origin_allowed_with(headers: &HeaderMap, extra: &str) -> bool {
+fn origin_allowed_with(headers: &HeaderMap, extra: &str, allow_http: bool) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else { return true };
     let Ok(origin) = origin.to_str() else { return false };
     if extra.split(',').map(str::trim).any(|o| !o.is_empty() && o == origin) {
@@ -273,7 +274,7 @@ fn origin_allowed_with(headers: &HeaderMap, extra: &str) -> bool {
     }
     let origin_host = origin
         .strip_prefix("https://")
-        .or_else(|| origin.strip_prefix("http://"));
+        .or_else(|| origin.strip_prefix("http://").filter(|_| allow_http));
     let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
     matches!((origin_host, host), (Some(o), Some(h)) if o.eq_ignore_ascii_case(h))
 }
@@ -393,27 +394,32 @@ mod tests {
 
     #[test]
     fn same_host_origin_is_allowed() {
-        assert!(origin_allowed_with(&headers(Some("https://milesstorm.com"), "milesstorm.com"), ""));
-        assert!(origin_allowed_with(&headers(Some("http://localhost:8080"), "localhost:8080"), ""));
+        assert!(origin_allowed_with(&headers(Some("https://milesstorm.com"), "milesstorm.com"), "", false));
+        assert!(origin_allowed_with(&headers(Some("http://localhost:8080"), "localhost:8080"), "", true));
+    }
+
+    #[test]
+    fn plain_http_origin_is_rejected_in_release() {
+        assert!(!origin_allowed_with(&headers(Some("http://milesstorm.com"), "milesstorm.com"), "", false));
     }
 
     #[test]
     fn foreign_origin_is_rejected() {
-        assert!(!origin_allowed_with(&headers(Some("https://evil.example"), "milesstorm.com"), ""));
-        assert!(!origin_allowed_with(&headers(Some("https://milesstorm.com.evil.example"), "milesstorm.com"), ""));
-        assert!(!origin_allowed_with(&headers(Some("null"), "milesstorm.com"), ""));
+        assert!(!origin_allowed_with(&headers(Some("https://evil.example"), "milesstorm.com"), "", false));
+        assert!(!origin_allowed_with(&headers(Some("https://milesstorm.com.evil.example"), "milesstorm.com"), "", false));
+        assert!(!origin_allowed_with(&headers(Some("null"), "milesstorm.com"), "", false));
     }
 
     #[test]
     fn listed_origin_is_allowed() {
         let h = headers(Some("http://localhost:8080"), "127.0.0.1:43210");
-        assert!(!origin_allowed_with(&h, ""));
-        assert!(origin_allowed_with(&h, "https://x.example, http://localhost:8080"));
+        assert!(!origin_allowed_with(&h, "", false));
+        assert!(origin_allowed_with(&h, "https://x.example, http://localhost:8080", false));
     }
 
     #[test]
     fn missing_origin_is_allowed() {
-        assert!(origin_allowed_with(&headers(None, "milesstorm.com"), ""));
+        assert!(origin_allowed_with(&headers(None, "milesstorm.com"), "", false));
     }
 
     #[test]

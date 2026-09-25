@@ -26,7 +26,7 @@ export function parseRoll(text) {
   };
 }
 
-/** Text for the panel: one label per die ("?" if unreadable), the total, and how many were unreadable. */
+/** Text for the popup: one label per die ("?" if unreadable), the total, and how many were unreadable. */
 export function describeRoll(roll) {
   const dice = roll.dice.map((d) => ({ label: d.value ?? "?", readable: d.value !== null }));
   const unreadable = dice.filter((d) => !d.readable).length;
