@@ -94,6 +94,12 @@ fn decode_and_infer(
     Ok(pipeline.infer_frame(img.as_raw(), w as usize, h as usize))
 }
 
+/// Which dice head is serving (e.g. "dice-head-v1"), stamped on roll events so
+/// saved training samples record the model that read them.
+fn model_id() -> String {
+    std::env::var("DICE_MODEL_ID").unwrap_or_else(|_| "dev".to_string())
+}
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
@@ -104,7 +110,7 @@ fn now_ms() -> u64 {
 /// For every processed frame the server replies with
 ///   `{"type":"frame","detections":[{x1,y1,x2,y2,yolo_conf,yolo_class,dice_class,dice_conf,value,confident},...],"frame_ms":N}`
 /// and, when the dice in view have settled into a new roll (see `roll.rs`),
-///   `{"type":"roll","roll_id":..,"dice":[{"value":"17"|null,"conf":..,"box":[..]}],"total":..,"complete":..,"ts":..}`
+///   `{"type":"roll","roll_id":..,"dice":[{"value":"17"|null,"conf":..,"box":[..]}],"total":..,"complete":..,"ts":..,"model":..}`
 /// Errors are `{"type":"error","error":"..."}`.
 ///
 /// A single inference thread (owning the GPU pipeline) is shared across all connections.
@@ -112,7 +118,8 @@ fn now_ms() -> u64 {
 /// latest, so stale frames are dropped and latency stays bounded to one inference.
 pub async fn serve(addr: &str, head_path: PathBuf, dice_threshold: f32) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!(addr, "WebSocket server listening");
+    let model = model_id();
+    tracing::info!(addr, model = %model, "WebSocket server listening");
 
     let handle = Arc::new(InferHandle::new(head_path, dice_threshold));
 
@@ -120,8 +127,9 @@ pub async fn serve(addr: &str, head_path: PathBuf, dice_threshold: f32) -> anyho
         let (stream, peer) = listener.accept().await?;
         tracing::info!(%peer, "client connected");
         let handle = Arc::clone(&handle);
+        let model = model.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, handle, dice_threshold).await {
+            if let Err(e) = handle_connection(stream, handle, dice_threshold, model).await {
                 tracing::error!(%peer, error = %e, "connection error");
             }
             tracing::info!(%peer, "client disconnected");
@@ -133,6 +141,7 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     handle: Arc<InferHandle>,
     dice_threshold: f32,
+    model: String,
 ) -> anyhow::Result<()> {
     let ws = accept_async(stream).await?;
     let (mut sink, stream) = ws.split();
@@ -191,7 +200,9 @@ async fn handle_connection(
                     .collect();
                 if let Some(roll) = tracker.update(&obs, now_ms()) {
                     tracing::info!(roll_id = %roll.roll_id, dice = roll.dice.len(), complete = roll.complete, "roll settled");
-                    replies.push(serde_json::to_string(&roll).unwrap());
+                    let mut roll = serde_json::to_value(&roll).unwrap();
+                    roll["model"] = model.clone().into();
+                    replies.push(roll.to_string());
                 }
             }
             Err(e) => replies.push(serde_json::json!({"type": "error", "error": e}).to_string()),

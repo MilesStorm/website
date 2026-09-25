@@ -68,6 +68,8 @@ ENV DICE_HEAD_PATH=/app/models/dice_head_resnet18.safetensors
 # Minimum averaged confidence to report a die's value; below it the die is
 # reported as unreadable (null) instead of guessed.
 ENV DICE_CONF_THRESHOLD=0.7
+# Stamped on roll events; keep in step with the release tag in DICE_HEAD_URL.
+ENV DICE_MODEL_ID=dice-head-v1
 
 EXPOSE 9000
 CMD ["./dice_detector", "yolo", "0.0.0.0:9000"]
