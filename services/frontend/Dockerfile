@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # No cargo-chef: `dx bundle` builds with its own profiles and features, so a
 # `cargo chef cook` layer was never reused (it compiled every dependency a second
 # time). Caching comes from building on eta's own Docker, which keeps unchanged
@@ -29,7 +30,13 @@ RUN npm install && \
 
 # Run dx bundle from the package directory so Dioxus.toml is picked up
 WORKDIR /app/packages/web
-RUN dx bundle --platform web --release --debug-symbols=false
+# Cache folders kept on the build machine (eta) between builds: downloaded crates
+# and compiled code, so a code change only recompiles what changed. They are not
+# part of the image; `dist/` (outside target/) is what the next stage copies.
+RUN --mount=type=cache,id=frontend-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=frontend-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=frontend-target,target=/app/target,sharing=locked \
+    dx bundle --platform web --release --debug-symbols=false
 
 FROM debian:trixie-slim AS runtime
 RUN apt-get update && \
