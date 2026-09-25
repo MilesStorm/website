@@ -7,6 +7,8 @@ use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
 use views::{AdminPanel, Arcane, Ark, AssholeTimer, Landing, Login, NotFound, Profile, Register};
 
 mod views;
+#[cfg(not(target_arch = "wasm32"))]
+mod rolls;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
@@ -138,6 +140,7 @@ fn server_launch() -> ! {
             use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
 
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
+            let roll_config = config.clone();
             let con_conf = ConnectionConfig {
                 tcp: TcpConfig {
                     nodelay: Some(true),
@@ -163,6 +166,9 @@ fn server_launch() -> ! {
             pool.wait_for_connect()
                 .await
                 .expect("failed to connect to Redis");
+            let roll_hub = rolls::RollHub::connect(roll_config, pool.clone())
+                .await
+                .expect("failed to start the arcane roll subscriber");
             let session_store = RedisStore::new(pool);
 
             let layer = SessionManagerLayer::new(session_store)
@@ -178,10 +184,13 @@ fn server_launch() -> ! {
                 .route("/oauth/start/{provider}", get(oauth_start))
                 .route("/oauth/callback/{provider}", get(oauth_callback))
                 .route("/ws/arcane", get(arcane_ws_proxy))
+                .route("/api/arcane/me", get(rolls::arcane_me))
+                .route("/api/arcane/rolls", get(rolls::arcane_rolls))
                 .route(
                     "/metrics",
                     get(move || async move { metric_handle.render() }),
                 )
+                .layer(axum::Extension(roll_hub))
                 .layer(layer)
                 .layer(axum::middleware::from_fn(capture_traceparent))
                 .layer(OtelInResponseLayer)
@@ -195,33 +204,46 @@ fn server_launch() -> ! {
 // ---- Arcane WebSocket proxy ----
 
 /// Upgrades to WebSocket and bidirectionally proxies to the ai_pipeline inference service.
-/// Requires a valid session with the `arcane` permission; returns 401/403 otherwise.
+/// Requires a same-host Origin and a valid session with the `arcane` permission;
+/// returns 403/401 otherwise. Settled rolls are published for the user's other
+/// devices (see `rolls`).
 #[cfg(not(target_arch = "wasm32"))]
 async fn arcane_ws_proxy(
     ws: axum::extract::ws::WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+    axum::Extension(hub): axum::Extension<rolls::RollHub>,
     session: tower_sessions::Session,
 ) -> axum::response::Response {
     use axum::{http::StatusCode, response::IntoResponse};
 
-    let token: Option<String> = session.get("opaque_token").await.ok().flatten();
-    let Some(token) = token else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-
-    if !api::has_arcane_permission(&token).await {
-        tracing::warn!("arcane WebSocket rejected: permission denied");
+    if !rolls::origin_allowed(&headers) {
+        tracing::warn!(origin = ?headers.get(axum::http::header::ORIGIN), "arcane WebSocket rejected: foreign origin");
         return StatusCode::FORBIDDEN.into_response();
     }
+
+    let user = match rolls::arcane_user(&session).await {
+        Ok(u) => u,
+        Err(rolls::Denied::LoggedOut) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(rolls::Denied::NoPermission) => {
+            tracing::warn!("arcane WebSocket rejected: permission denied");
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    };
 
     let ai_url = std::env::var("AI_PIPELINE_SERVICE_URL")
         .unwrap_or_else(|_| "ws://localhost:9000".to_string());
 
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
-    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url))
+    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
+async fn proxy_ws(
+    client: axum::extract::ws::WebSocket,
+    upstream_url: String,
+    hub: rolls::RollHub,
+    user: String,
+) {
     use axum::extract::ws::Message as AxMsg;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TngMsg;
@@ -255,6 +277,11 @@ async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
             while let Some(Ok(msg)) = upstream_rx.next().await {
                 match msg {
                     TngMsg::Text(t) => {
+                        if rolls::is_roll(&t) {
+                            // Spawned so Redis latency never stalls the frame stream.
+                            let (hub, user, roll) = (hub.clone(), user.clone(), t.to_string());
+                            tokio::spawn(async move { hub.publish(&user, roll).await });
+                        }
                         if client_tx.send(AxMsg::Text(t.to_string().into())).await.is_err() { break; }
                     }
                     TngMsg::Close(_) => break,

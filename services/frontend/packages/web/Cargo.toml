@@ -33,7 +33,10 @@ axum-tracing-opentelemetry = { version = "0.25", features = ["tracing_level_info
 
 # Metrics (Prometheus exposition format → Alloy → Mimir)
 axum-prometheus = "0.10"
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+# Same fred the session store re-exports; `subscriber-client` adds the
+# auto-resubscribing client used for live arcane rolls (src/rolls.rs).
+fred = { version = "10.1", default-features = false, features = ["subscriber-client"] }
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
