@@ -108,9 +108,10 @@ fn now_ms() -> u64 {
 ///
 /// Clients send binary WebSocket messages containing a JPEG or PNG-encoded frame.
 /// For every processed frame the server replies with
-///   `{"type":"frame","detections":[{x1,y1,x2,y2,yolo_conf,yolo_class,dice_class,dice_conf,value,confident},...],"frame_ms":N}`
+///   `{"type":"frame","detections":[{x1,y1,x2,y2,yolo_conf,yolo_class,dice_class,dice_conf,value,confident},...],"frame_ms":N,"frame_seq":N}`
 /// and, when the dice in view have settled into a new roll (see `roll.rs`),
-///   `{"type":"roll","roll_id":..,"dice":[{"value":"17"|null,"conf":..,"box":[..]}],"total":..,"complete":..,"ts":..,"model":..}`
+///   `{"type":"roll","roll_id":..,"dice":[{"value":"17"|null,"conf":..,"box":[..]}],"total":..,"complete":..,"ts":..,"model":..,"frame_seq":N}`
+/// `frame_seq` is the 1-based count of binary messages received on this connection.
 /// Errors are `{"type":"error","error":"..."}`.
 ///
 /// A single inference thread (owning the GPU pipeline) is shared across all connections.
@@ -155,15 +156,21 @@ async fn handle_connection(
     // inference loop always grabs that latest frame and lets stale ones fall
     // away. End-to-end latency is then bounded by a single inference, no matter
     // how far behind the GPU is.
-    let (frame_tx, mut frame_rx) = tokio::sync::watch::channel::<Option<Vec<u8>>>(None);
+    //
+    // Every binary message is numbered (1, 2, 3, ...) and replies carry the number
+    // of the frame they were computed from (`frame_seq`), so a client that keeps its
+    // recent frames can find the exact picture a roll was read from.
+    let (frame_tx, mut frame_rx) = tokio::sync::watch::channel::<Option<(u64, Vec<u8>)>>(None);
 
     let reader = tokio::spawn(async move {
         let mut stream = stream;
+        let mut seq = 0u64;
         while let Some(msg) = stream.next().await {
             match msg {
                 // Overwrites any unprocessed frame: only the latest survives.
                 Ok(Message::Binary(frame_bytes)) => {
-                    if frame_tx.send(Some(frame_bytes.to_vec())).is_err() {
+                    seq += 1;
+                    if frame_tx.send(Some((seq, frame_bytes.to_vec()))).is_err() {
                         break; // inference loop gone
                     }
                 }
@@ -183,7 +190,7 @@ async fn handle_connection(
         if frame_rx.changed().await.is_err() {
             break; // reader task ended (client disconnected)
         }
-        let Some(frame) = frame_rx.borrow_and_update().clone() else {
+        let Some((seq, frame)) = frame_rx.borrow_and_update().clone() else {
             continue;
         };
 
@@ -193,7 +200,10 @@ async fn handle_connection(
         let mut replies = Vec::with_capacity(2);
         match result {
             Ok((dets, ms)) => {
-                replies.push(serde_json::json!({"type": "frame", "detections": dets, "frame_ms": ms}).to_string());
+                replies.push(
+                    serde_json::json!({"type": "frame", "detections": dets, "frame_ms": ms, "frame_seq": seq})
+                        .to_string(),
+                );
                 let obs: Vec<Observation> = dets
                     .into_iter()
                     .map(|d| Observation { bbox: [d.x1, d.y1, d.x2, d.y2], probs: d.probs })
@@ -202,6 +212,7 @@ async fn handle_connection(
                     tracing::info!(roll_id = %roll.roll_id, dice = roll.dice.len(), complete = roll.complete, "roll settled");
                     let mut roll = serde_json::to_value(&roll).unwrap();
                     roll["model"] = model.clone().into();
+                    roll["frame_seq"] = seq.into();
                     replies.push(roll.to_string());
                 }
             }
