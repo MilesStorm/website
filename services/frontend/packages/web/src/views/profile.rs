@@ -107,7 +107,8 @@ fn ProfileForm() -> Element {
 #[component]
 fn DiceSharing() -> Element {
     let mut state = use_signal(|| Option::<SharingState>::None);
-    let mut message = use_signal(|| Option::<String>::None);
+    // (is_error, text) under the card.
+    let mut message = use_signal(|| Option::<(bool, String)>::None);
     let mut busy = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
     // Bumped when saving fails, to rebuild the switch so it shows the real setting.
@@ -117,14 +118,14 @@ fn DiceSharing() -> Element {
         spawn(async move {
             match get_dataset_sharing().await {
                 Ok(s) => state.set(Some(s)),
-                Err(_) => message.set(Some("Couldn't load your sharing setting.".into())),
+                Err(_) => message.set(Some((true, "Couldn't load your sharing setting.".into()))),
             }
         });
     });
 
     let Some(current) = state() else {
         return rsx! {
-            if let Some(m) = message() { p { class: "mt-10 text-error", "{m}" } }
+            if let Some((_, m)) = message() { p { class: "mt-10 text-error", "{m}" } }
         };
     };
     if !current.available {
@@ -132,86 +133,115 @@ fn DiceSharing() -> Element {
     }
 
     rsx! {
-        div { class: "mt-10",
-            h2 { class: "text-xl font-bold mb-2", "Help improve dice recognition" }
-            p { class: "mb-2 max-w-2xl",
-                "Share pictures of your rolls so the dice reader can learn from them. When this is on, "
-                "the camera picture and what the model read are saved for rolls it was unsure about, "
-                "and for about 1 in 20 other rolls. Pictures are only used to train the dice model and "
-                "are only looked at by the site owner when checking the right numbers. You can switch "
-                "this off at any time; nothing new is saved after that."
-            }
-            p { class: "mb-4 max-w-2xl text-sm opacity-70",
-                "Whatever you choose, the picture of your latest roll is kept for 10 minutes so you "
-                "can send it with \"Flag as wrong roll\" in the browser extension; rolls you flag "
-                "are saved even when this is off."
-            }
-            label { class: "label cursor-pointer justify-start gap-3",
-                input {
-                    key: "{switch_key}",
-                    r#type: "checkbox",
-                    class: "toggle toggle-primary",
-                    checked: current.share,
-                    disabled: busy(),
-                    onchange: move |evt: Event<FormData>| {
-                        let share = evt.checked();
-                        spawn(async move {
-                            busy.set(true);
-                            match set_dataset_sharing(share).await {
-                                Ok(s) => {
-                                    state.set(Some(s));
-                                    message.set(None);
-                                }
-                                Err(_) => {
-                                    message.set(Some("Couldn't save your choice. Try again.".into()));
-                                    switch_key += 1;
-                                }
-                            }
-                            busy.set(false);
-                        });
-                    },
-                }
-                span { "Share pictures of my rolls" }
-            }
-            div { class: "mt-4",
-                if confirm_delete() {
-                    p { class: "mb-2",
-                        "This deletes every roll picture you've shared or flagged, and turns sharing off."
+        section { class: "mt-10 rounded-box border border-base-300 bg-base-100 overflow-hidden",
+            div { class: "flex flex-col gap-4 p-6 sm:flex-row sm:items-start sm:justify-between sm:gap-6",
+                div {
+                    h2 { class: "text-lg font-bold", "Help improve dice recognition" }
+                    p { class: "mt-1 text-sm opacity-70",
+                        "Share pictures of your rolls so the dice reader gets better at reading them."
                     }
-                    button {
-                        class: "btn bg-red-500 hover:bg-red-700 text-white mr-2",
+                }
+                label { class: "flex shrink-0 cursor-pointer items-center gap-3",
+                    span { class: "text-sm font-medium opacity-70",
+                        if current.share { "On" } else { "Off" }
+                    }
+                    input {
+                        key: "{switch_key}",
+                        r#type: "checkbox",
+                        class: "toggle toggle-primary",
+                        aria_label: "Share pictures of my rolls",
+                        checked: current.share,
                         disabled: busy(),
-                        onclick: move |_| {
+                        onchange: move |evt: Event<FormData>| {
+                            let share = evt.checked();
                             spawn(async move {
                                 busy.set(true);
-                                match delete_my_dataset().await {
-                                    Ok(n) => {
-                                        state.set(Some(SharingState { available: true, share: false }));
-                                        message.set(Some(match n {
-                                            0 => "Done. There was nothing to delete.".to_string(),
-                                            1 => "Deleted 1 roll.".to_string(),
-                                            n => format!("Deleted {n} rolls."),
-                                        }));
+                                match set_dataset_sharing(share).await {
+                                    Ok(s) => {
+                                        state.set(Some(s));
+                                        message.set(None);
                                     }
-                                    Err(_) => message.set(Some("Couldn't delete right now. Try again.".into())),
+                                    Err(_) => {
+                                        message.set(Some((true, "Couldn't save your choice. Try again.".into())));
+                                        switch_key += 1;
+                                    }
                                 }
-                                confirm_delete.set(false);
                                 busy.set(false);
                             });
                         },
-                        "Yes, delete everything"
-                    }
-                    button { class: "btn", onclick: move |_| confirm_delete.set(false), "Cancel" }
-                } else {
-                    button {
-                        class: "btn btn-outline",
-                        onclick: move |_| confirm_delete.set(true),
-                        "Delete all pictures I've shared"
                     }
                 }
             }
-            if let Some(m) = message() {
-                p { class: "mt-2", "{m}" }
+            dl { class: "grid gap-5 border-t border-base-300 px-6 py-5 sm:grid-cols-3",
+                div {
+                    dt { class: "text-xs font-semibold uppercase tracking-wide opacity-60", "What's saved" }
+                    dd { class: "mt-1 text-sm", "The camera picture and what the model read." }
+                }
+                div {
+                    dt { class: "text-xs font-semibold uppercase tracking-wide opacity-60", "Which rolls" }
+                    dd { class: "mt-1 text-sm", "Rolls the model was unsure about, and about 1 in 20 others." }
+                }
+                div {
+                    dt { class: "text-xs font-semibold uppercase tracking-wide opacity-60", "Who sees them" }
+                    dd { class: "mt-1 text-sm",
+                        "Only the site owner, to check the numbers. Used only to train the dice reader."
+                    }
+                }
+            }
+            if confirm_delete() {
+                div { class: "flex flex-wrap items-center justify-between gap-3 border-t border-error/40 bg-error/10 px-6 py-4",
+                    p { class: "text-sm",
+                        "Delete every roll picture you've shared or flagged? This also turns sharing off."
+                    }
+                    div { class: "flex gap-2",
+                        button {
+                            class: "btn btn-ghost btn-sm",
+                            onclick: move |_| confirm_delete.set(false),
+                            "Cancel"
+                        }
+                        button {
+                            class: "btn btn-error btn-sm",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                spawn(async move {
+                                    busy.set(true);
+                                    match delete_my_dataset().await {
+                                        Ok(n) => {
+                                            state.set(Some(SharingState { available: true, share: false }));
+                                            message.set(Some((false, match n {
+                                                0 => "Done. There was nothing to delete.".to_string(),
+                                                1 => "Deleted 1 roll.".to_string(),
+                                                n => format!("Deleted {n} rolls."),
+                                            })));
+                                        }
+                                        Err(_) => message.set(Some((true, "Couldn't delete right now. Try again.".into()))),
+                                    }
+                                    confirm_delete.set(false);
+                                    busy.set(false);
+                                });
+                            },
+                            "Delete everything"
+                        }
+                    }
+                }
+            } else {
+                div { class: "flex flex-wrap items-center justify-between gap-3 border-t border-base-300 bg-base-200/50 px-6 py-4",
+                    p { class: "max-w-lg text-xs opacity-60",
+                        "Turning this off stops new saves. Rolls you flag as wrong in the browser extension "
+                        "are saved either way; your latest roll's picture is kept for 10 minutes so it can be flagged."
+                    }
+                    button {
+                        class: "btn btn-ghost btn-sm text-error",
+                        onclick: move |_| confirm_delete.set(true),
+                        "Delete my shared pictures"
+                    }
+                }
+            }
+            if let Some((is_error, m)) = message() {
+                p {
+                    class: if is_error { "border-t border-base-300 px-6 py-3 text-sm text-error" } else { "border-t border-base-300 px-6 py-3 text-sm text-success" },
+                    "{m}"
+                }
             }
         }
     }
