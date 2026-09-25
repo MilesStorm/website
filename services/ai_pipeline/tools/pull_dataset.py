@@ -24,9 +24,12 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,7 +39,7 @@ SAMPLES = """
 SELECT username, roll_id, auto_reason, flagged, flagged_at, user_values, roll, frame,
        model, review_status, created_at, updated_at,
        encoding::base64::encode(image.jpeg) AS jpeg
-FROM roll_sample WHERE updated_at > <datetime> $since
+FROM roll_sample WHERE updated_at >= <datetime> $since
 ORDER BY updated_at ASC LIMIT $page
 """
 DELETIONS = "SELECT username, at FROM dataset_deletion WHERE at > <datetime> $since ORDER BY at ASC"
@@ -74,6 +77,24 @@ class Surreal:
         return results[-1]
 
 
+def when(stamp: str) -> datetime:
+    """SurrealDB datetimes ("...T08:36:52.8993Z", nanoseconds, trailing zeros
+    trimmed) as comparable values; text comparison would get them wrong."""
+    m = re.fullmatch(r"(.*T\d\d:\d\d:\d\d)(?:\.(\d+))?Z", stamp)
+    if not m:
+        raise ValueError(f"unexpected datetime {stamp!r}")
+    frac = (m.group(2) or "").ljust(6, "0")[:6]
+    return datetime.fromisoformat(f"{m.group(1)}.{frac}+00:00")
+
+
+def check_url(url: str) -> None:
+    """Basic auth over plain http is only OK to this PC (e.g. a kubectl port-forward)."""
+    u = urllib.parse.urlparse(url)
+    if u.scheme == "https" or (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1", "::1")):
+        return
+    sys.exit("Use an https:// URL (plain http is only allowed to localhost, e.g. a port-forward).")
+
+
 def safe(name: str) -> str:
     """File-name-safe version of a username or roll id."""
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
@@ -83,7 +104,7 @@ def load_state(state_file: Path) -> dict:
     if state_file.exists():
         return json.loads(state_file.read_text())
     epoch = "1970-01-01T00:00:00Z"
-    return {"samples_since": epoch, "deletions_since": epoch, "files": {}}
+    return {"samples_since": epoch, "seen_at_since": [], "deletions_since": epoch}
 
 
 def main() -> None:
@@ -99,56 +120,67 @@ def main() -> None:
         sys.exit("Refusing to write into data/: pick another --out.")
     STATE = OUT / ".pull_state.json"
 
+    check_url(args.url)
     user, password = os.environ.get("SURREAL_USER"), os.environ.get("SURREAL_PASS")
     if not user or not password:
         sys.exit("Set SURREAL_USER and SURREAL_PASS (a read-only user) in the environment.")
     db = Surreal(args.url, args.ns, args.db, user, password)
     state = load_state(STATE)
-    files: dict = state["files"]  # "<user>__<roll_id>" -> {"dir", "username", "created_at"}
+    state.setdefault("seen_at_since", [])
+
+    def save_state() -> None:
+        if not args.dry_run:
+            OUT.mkdir(parents=True, exist_ok=True)
+            STATE.write_text(json.dumps(state, indent=1))
 
     new = updated = removed = 0
 
-    # 1. Remove local copies for users who deleted what they shared.
-    for d in db.query(DELETIONS, since=state["deletions_since"]):
-        for key, f in list(files.items()):
-            if f["username"] == d["username"] and f["created_at"] <= d["at"]:
-                print(f"remove {key} (user deleted their pictures)")
-                if not args.dry_run:
-                    for ext in (".jpg", ".json"):
-                        (OUT / f["dir"] / f"{key}{ext}").unlink(missing_ok=True)
-                    del files[key]
-                removed += 1
-        state["deletions_since"] = d["at"]
+    # 1. Remove local copies for users who deleted what they shared. Files on disk
+    #    are scanned (not a list), so nothing is missed after an interrupted run.
+    deletions = db.query(DELETIONS, since=state["deletions_since"])
+    for d in deletions:
+        cutoff = when(d["at"])
+        for meta in sorted(OUT.glob(f"*/{safe(d['username'])}__*.json")):
+            info = json.loads(meta.read_text())
+            if info.get("username") != d["username"] or when(info["created_at"]) > cutoff:
+                continue
+            print(f"remove {meta.parent.name}/{meta.stem} (user deleted their pictures)")
+            if not args.dry_run:
+                meta.with_suffix(".jpg").unlink(missing_ok=True)
+                meta.unlink()
+            removed += 1
+    if deletions:
+        state["deletions_since"] = deletions[-1]["at"]
+    save_state()
 
-    # 2. Download new and changed samples, oldest change first.
-    since = state["samples_since"]
+    # 2. Download new and changed samples, oldest change first. Paging uses
+    #    updated_at >= cursor and skips what was already taken at exactly the
+    #    cursor, so samples sharing a timestamp are never skipped.
     while True:
-        page = db.query(SAMPLES, since=since, page=PAGE)
-        if not page:
-            break
-        for s in page:
+        page = db.query(SAMPLES, since=state["samples_since"], page=PAGE)
+        fresh = [s for s in page if not (s["updated_at"] == state["samples_since"]
+                                         and f"{s['username']}/{s['roll_id']}" in state["seen_at_since"])]
+        for s in fresh:
             key = f"{safe(s['username'])}__{safe(s['roll_id'])}"
             day = s["created_at"][:10]
-            is_new = key not in files
+            folder = OUT / day
+            is_new = not (folder / f"{key}.json").exists()
             tags = ["flagged" if s["flagged"] else "", s.get("auto_reason") or ""]
             print(f"{'new ' if is_new else 'update'} {day}/{key} {' '.join(t for t in tags if t)}")
             if not args.dry_run:
-                folder = OUT / day
                 folder.mkdir(parents=True, exist_ok=True)
                 jpeg = s.pop("jpeg") or ""
                 (folder / f"{key}.jpg").write_bytes(base64.b64decode(jpeg + "=" * (-len(jpeg) % 4)))
                 (folder / f"{key}.json").write_text(json.dumps(s, indent=1))
-                files[key] = {"dir": day, "username": s["username"], "created_at": s["created_at"]}
             new += is_new
             updated += not is_new
-            since = s["updated_at"]
-        if len(page) < PAGE:
+            if s["updated_at"] != state["samples_since"]:
+                state["samples_since"], state["seen_at_since"] = s["updated_at"], []
+            state["seen_at_since"].append(f"{s['username']}/{s['roll_id']}")
+        save_state()
+        if len(page) < PAGE or not fresh:
             break
-    state["samples_since"] = since
 
-    if not args.dry_run:
-        OUT.mkdir(exist_ok=True)
-        STATE.write_text(json.dumps(state, indent=1))
     print(f"\n{new} new, {updated} updated, {removed} removed{' (dry run: nothing written)' if args.dry_run else ''}")
 
 

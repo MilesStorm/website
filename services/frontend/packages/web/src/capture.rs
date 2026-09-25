@@ -33,8 +33,9 @@ use crate::rolls::{arcane_user, origin_allowed, Denied, RollHub};
 pub const HOLD_SECS: i64 = 600;
 /// Frames larger than this are never held or stored.
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
-/// Recent frames kept per camera connection to match `frame_seq` (~2 s at 15 fps).
-const FRAME_RING: usize = 32;
+/// Recent frames kept per camera connection to match `frame_seq` (~1 s at 15 fps;
+/// replies lag one or two frames).
+const FRAME_RING: usize = 16;
 const FLAGS_PER_HOUR: i64 = 30;
 const AUTO_SAMPLES_PER_DAY: i64 = 300;
 /// Captures waiting per connection; more are dropped (rolls are seconds apart).
@@ -47,6 +48,11 @@ fn held_meta_key(user: &str) -> String {
 }
 fn held_jpeg_key(user: &str) -> String {
     format!("arcane:held_jpeg:{user}")
+}
+
+/// Only real pictures are kept: JPEG or PNG, by their first bytes.
+pub fn is_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xFF, 0xD8, 0xFF]) || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
 }
 
 /// The last `FRAME_RING` frames forwarded upstream, by 1-based sequence number.
@@ -98,8 +104,10 @@ impl RollHub {
                 else {
                     continue;
                 };
-                let Some(jpeg) = job.jpeg else {
-                    tracing::debug!(roll_id, "roll frame no longer buffered; not kept");
+                // Nothing is kept unless the store is configured.
+                let Some(ds) = dataset() else { continue };
+                let Some(jpeg) = job.jpeg.filter(|j| is_image(j)) else {
+                    tracing::debug!(roll_id, "roll picture missing or not an image; not kept");
                     continue;
                 };
                 let capture = Capture {
@@ -110,7 +118,6 @@ impl RollHub {
                 };
                 hub.hold(&user, &capture).await;
 
-                let Some(ds) = dataset() else { continue };
                 if paused_until.is_some_and(|t| Instant::now() < t) {
                     continue;
                 }
@@ -128,7 +135,7 @@ impl RollHub {
                 // Re-emissions of the same roll refresh it without counting again.
                 if last_counted != roll_id {
                     let n = hub.count_in_window(&format!("arcane:auto_count:{user}"), 86_400).await;
-                    if n > AUTO_SAMPLES_PER_DAY {
+                    if n.is_none_or(|n| n > AUTO_SAMPLES_PER_DAY) {
                         continue;
                     }
                     last_counted = roll_id.to_string();
@@ -142,29 +149,38 @@ impl RollHub {
         tx
     }
 
-    /// Keep `user`'s latest roll and picture for `HOLD_SECS`, replacing any earlier one.
+    /// Keep `user`'s latest roll and picture for `HOLD_SECS`, replacing any earlier
+    /// one. Both keys are written in one transaction so they always belong together.
     async fn hold(&self, user: &str, c: &Capture) {
-        let client = self.pool.next();
         let meta = json!({"roll_id": c.roll_id, "roll": c.roll, "frame": c.frame}).to_string();
         let expire = Some(Expiration::EX(HOLD_SECS));
-        let jpeg: Result<(), _> = client
-            .set(held_jpeg_key(user), Bytes::from(c.jpeg.clone()), expire.clone(), None, false)
-            .await;
-        let meta: Result<(), _> = client.set(held_meta_key(user), meta, expire, None, false).await;
-        if let Err(e) = jpeg.and(meta) {
+        let tx = self.pool.next().multi();
+        let queued: Result<(), _> = async {
+            tx.set::<(), _, _>(held_jpeg_key(user), Bytes::from(c.jpeg.clone()), expire.clone(), None, false)
+                .await?;
+            tx.set::<(), _, _>(held_meta_key(user), meta, expire, None, false).await?;
+            tx.exec::<tower_sessions_redis_store::fred::types::Value>(true).await.map(|_| ())
+        }
+        .await;
+        if let Err(e) = queued {
             tracing::warn!(error = %e, "holding roll picture failed");
         }
     }
 
-    /// The held roll, if it is still there and is `roll_id`.
+    /// The held roll, if it is still there and is `roll_id`. Both keys are read in
+    /// one command, so the picture always matches the roll.
     pub async fn held(&self, user: &str, roll_id: &str) -> Option<Capture> {
-        let client = self.pool.next();
-        let meta: Option<String> = client.get(held_meta_key(user)).await.ok().flatten();
-        let meta: Value = serde_json::from_str(&meta?).ok()?;
+        let both: Vec<Option<Bytes>> = self
+            .pool
+            .next()
+            .mget(vec![held_meta_key(user), held_jpeg_key(user)])
+            .await
+            .ok()?;
+        let [meta, jpeg]: [Option<Bytes>; 2] = both.try_into().ok()?;
+        let meta: Value = serde_json::from_slice(&meta?).ok()?;
         if meta.get("roll_id").and_then(Value::as_str) != Some(roll_id) {
             return None;
         }
-        let jpeg: Option<Bytes> = client.get(held_jpeg_key(user)).await.ok().flatten();
         Some(Capture {
             roll_id: roll_id.to_string(),
             roll: meta.get("roll").cloned().unwrap_or(Value::Null),
@@ -180,15 +196,19 @@ impl RollHub {
         }
     }
 
-    /// Increment a counter that resets `secs` after its first use; returns the new
-    /// value. Counts as 0 (allow) if Redis fails.
-    async fn count_in_window(&self, key: &str, secs: i64) -> i64 {
+    /// Increment a counter that resets `secs` after it was created; returns the new
+    /// value, or None if Redis failed (callers refuse). The counter is created with
+    /// its expiry in one command, so it can never be left without one.
+    async fn count_in_window(&self, key: &str, secs: i64) -> Option<i64> {
         let client = self.pool.next();
-        let n: i64 = client.incr(key).await.unwrap_or(0);
-        if n == 1 {
-            let _: Result<(), _> = client.expire(key, secs, None).await;
+        let created: Result<Option<String>, _> = client
+            .set(key, 0, Some(Expiration::EX(secs)), Some(SetOptions::NX), false)
+            .await;
+        if let Err(e) = created {
+            tracing::warn!(error = %e, "rate counter failed");
+            return None;
         }
-        n
+        client.incr(key).await.inspect_err(|e| tracing::warn!(error = %e, "rate counter failed")).ok()
     }
 }
 
@@ -235,9 +255,6 @@ pub async fn arcane_flag(
     if !is_roll_id(&req.roll_id) {
         return error(StatusCode::BAD_REQUEST, "roll_id");
     }
-    if hub.count_in_window(&format!("arcane:flag_count:{user}"), 3600).await > FLAGS_PER_HOUR {
-        return error(StatusCode::TOO_MANY_REQUESTS, "rate");
-    }
     let Some(capture) = hub.held(&user, &req.roll_id).await else {
         return error(StatusCode::GONE, "expired");
     };
@@ -245,6 +262,12 @@ pub async fn arcane_flag(
     let Some(values) = clean_values(&req.values, dice) else {
         return error(StatusCode::BAD_REQUEST, "values");
     };
+    // Counted only for flags that would be saved; refused if Redis can't count.
+    match hub.count_in_window(&format!("arcane:flag_count:{user}"), 3600).await {
+        Some(n) if n <= FLAGS_PER_HOUR => {}
+        Some(_) => return error(StatusCode::TOO_MANY_REQUESTS, "rate"),
+        None => return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+    }
     match ds.save(&user, &capture, None, Some(&values)).await {
         Ok(()) => {
             tracing::info!(roll_id = %req.roll_id, "roll flagged as wrong");
@@ -268,8 +291,8 @@ mod tests {
             ring.push(&Bytes::from(vec![i]));
         }
         assert_eq!(ring.get(40).as_deref(), Some(&[39u8][..]));
-        assert_eq!(ring.get(9).as_deref(), Some(&[8u8][..]));
-        assert!(ring.get(8).is_none(), "older than the ring");
+        assert_eq!(ring.get(25).as_deref(), Some(&[24u8][..]), "oldest kept");
+        assert!(ring.get(24).is_none(), "older than the ring");
     }
 
     #[test]
@@ -279,6 +302,15 @@ mod tests {
         ring.push(&Bytes::from_static(b"ok"));
         assert!(ring.get(1).is_none());
         assert_eq!(ring.get(2).as_deref(), Some(&b"ok"[..]), "numbering stays in step");
+    }
+
+    #[test]
+    fn only_jpeg_and_png_are_images() {
+        assert!(is_image(b"\xff\xd8\xff\xe0rest"));
+        assert!(is_image(b"\x89PNG\r\n\x1a\nrest"));
+        assert!(!is_image(b"GIF89a"));
+        assert!(!is_image(b"<svg"));
+        assert!(!is_image(b""));
     }
 
     #[test]

@@ -249,7 +249,9 @@ async fn arcane_ws_proxy(
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
     let session_id = session.id();
     let token: String = session.get("opaque_token").await.ok().flatten().unwrap_or_default();
-    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user, token, session_id))
+    // Camera frames are a few hundred KB; anything much larger isn't a frame.
+    ws.max_message_size(4 * 1024 * 1024)
+        .on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user, token, session_id))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -303,8 +305,8 @@ async fn proxy_ws(
             while let Some(Ok(msg)) = upstream_rx.next().await {
                 match msg {
                     TngMsg::Text(t) => {
-                        let seq = frame_seq(&t);
-                        if rolls::is_roll(&t) {
+                        let (is_roll, seq) = reply_info(&t);
+                        if is_roll {
                             if rolls_tx.try_send(t.to_string()).is_err() {
                                 tracing::warn!("arcane roll dropped: Redis publish queue full");
                             }
@@ -340,13 +342,16 @@ async fn proxy_ws(
     }
 }
 
-/// ai_pipeline's `frame_seq`: which forwarded frame a result was computed from.
+/// From an ai_pipeline reply (parsed once): whether it is a roll event, and its
+/// `frame_seq`, the number of the forwarded frame it was computed from.
 #[cfg(not(target_arch = "wasm32"))]
-fn frame_seq(text: &str) -> Option<u64> {
+fn reply_info(text: &str) -> (bool, Option<u64>) {
     if !text.contains("\"frame_seq\"") {
-        return None;
+        return (rolls::is_roll(text), None);
     }
-    serde_json::from_str::<serde_json::Value>(text).ok()?.get("frame_seq")?.as_u64()
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return (false, None) };
+    let is_roll = v.get("type").and_then(|t| t.as_str()) == Some("roll");
+    (is_roll, v.get("frame_seq").and_then(|s| s.as_u64()))
 }
 
 // ---- Trace context capture middleware ----

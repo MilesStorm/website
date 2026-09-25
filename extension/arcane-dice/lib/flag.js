@@ -4,9 +4,13 @@
 
 export const FLAG_WINDOW_MS = 10 * 60 * 1000;
 
-/** Whether the roll can still be flagged (the server's copy lasts 10 minutes). */
+/**
+ * Whether the roll can still be flagged (the server's copy lasts 10 minutes).
+ * Timed from when this browser received it (`receivedAt`), not the server's `ts`,
+ * so a wrong computer clock doesn't shift the window.
+ */
 export function canFlag(roll, now = Date.now()) {
-  return roll !== null && now - roll.ts < FLAG_WINDOW_MS;
+  return roll !== null && now - (roll.receivedAt ?? roll.ts) < FLAG_WINDOW_MS;
 }
 
 /** A correction as typed: "" means "left empty"; otherwise must be a die face 0–20. */
@@ -33,7 +37,9 @@ export function flagPayload(roll, typed) {
 /** Plain-language result for the server's reply. */
 export function flagResult(status) {
   if (status === 200) return { ok: true, text: "Thanks! Sent for review." };
-  if (status === 410) return { ok: false, text: "That roll is too old to flag (10 minutes)." };
+  if (status === 410) {
+    return { ok: false, text: "That roll can't be flagged any more. Only your latest roll can be, for 10 minutes." };
+  }
   if (status === 429) return { ok: false, text: "You've flagged a lot of rolls this hour. Try again later." };
   if (status === 401 || status === 403) return { ok: false, text: "Log in on the website to flag rolls." };
   if (status === 503) return { ok: false, text: "Flagging isn't available right now." };

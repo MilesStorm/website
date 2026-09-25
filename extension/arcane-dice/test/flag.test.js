@@ -4,6 +4,12 @@ import { canFlag, flagPayload, flagResult, isFace } from "../lib/flag.js";
 
 const roll = { rollId: "18f3a-0badf00d", dice: [{ value: "5" }, { value: null }], ts: 1_000_000 };
 
+test("the window runs from when the roll arrived, not the server's clock", () => {
+  const skewed = { ...roll, ts: 0, receivedAt: 5_000_000 };
+  assert.equal(canFlag(skewed, 5_000_000 + 60_000), true);
+  assert.equal(canFlag(skewed, 5_000_000 + 11 * 60_000), false);
+});
+
 test("rolls can be flagged for 10 minutes", () => {
   assert.equal(canFlag(roll, 1_000_000 + 9 * 60_000), true);
   assert.equal(canFlag(roll, 1_000_000 + 10 * 60_000), false);
@@ -27,7 +33,7 @@ test("payload refused for bad input", () => {
 
 test("server replies become plain messages", () => {
   assert.equal(flagResult(200).ok, true);
-  assert.match(flagResult(410).text, /too old/);
+  assert.match(flagResult(410).text, /latest roll/);
   assert.match(flagResult(429).text, /this hour/);
   assert.match(flagResult(500).text, /Try again/);
 });

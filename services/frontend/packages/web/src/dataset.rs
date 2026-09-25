@@ -133,6 +133,10 @@ impl Dataset {
 
     /// Store (or refresh) the roll and its picture. `auto_reason` marks an automatic
     /// sample; `flag` marks an explicit "wrong roll" with the user's corrections.
+    ///
+    /// Rules, enforced in the query: an automatic re-send of a roll never replaces a
+    /// flagged or already reviewed sample, and nothing replaces the picture of a
+    /// reviewed one (the owner's labels belong to that picture).
     pub async fn save(
         &self,
         user: &str,
@@ -140,40 +144,45 @@ impl Dataset {
         auto_reason: Option<&str>,
         flag: Option<&[Option<String>]>,
     ) -> anyhow::Result<()> {
-        let mut sql = String::from(
-            "UPSERT type::record('roll_image', [$user, $roll_id]) \
-                 MERGE { username: $user, jpeg: encoding::base64::decode($jpeg) } RETURN NONE; \
-             UPSERT type::record('roll_sample', [$user, $roll_id]) MERGE { \
-                 username: $user, roll_id: $roll_id, roll: $roll, frame: $frame, model: $model, \
-                 image: type::record('roll_image', [$user, $roll_id]) } RETURN NONE;",
-        );
-        if auto_reason.is_some() {
-            sql.push_str(
-                "UPDATE type::record('roll_sample', [$user, $roll_id]) SET auto_reason = $reason RETURN NONE;",
-            );
-        }
-        if flag.is_some() {
-            sql.push_str(
-                "UPDATE type::record('roll_sample', [$user, $roll_id]) \
-                 SET flagged = true, flagged_at = time::now(), user_values = $values RETURN NONE;",
-            );
-        }
+        const SAVE: &str = "
+            LET $rec = type::record('roll_sample', [$user, $roll_id]);
+            LET $reason_ = $reason ?? NONE;
+            LET $values_ = $values ?? NONE;
+            LET $existing = (SELECT flagged, review_status FROM ONLY $rec);
+            LET $locked = $existing != NONE
+                AND ($existing.review_status != 'new' OR ($reason_ != NONE AND $existing.flagged));
+            IF !$locked {
+                UPSERT type::record('roll_image', [$user, $roll_id])
+                    MERGE { username: $user, jpeg: encoding::base64::decode($jpeg) } RETURN NONE;
+                UPSERT $rec MERGE {
+                    username: $user, roll_id: $roll_id, roll: $roll, model: $model,
+                    image: type::record('roll_image', [$user, $roll_id]) } RETURN NONE;
+                IF ($frame ?? NONE) != NONE { UPDATE $rec SET frame = $frame RETURN NONE; };
+                IF $reason_ != NONE { UPDATE $rec SET auto_reason = $reason_ RETURN NONE; };
+            };
+            IF $values_ != NONE {
+                UPDATE $rec SET flagged = true, flagged_at = time::now(), user_values = $values_ RETURN NONE;
+            };";
         let model = c.roll.get("model").and_then(Value::as_str).unwrap_or("unknown");
-        self.query(
-            &sql,
-            json!({
-                "user": user,
-                "roll_id": c.roll_id,
-                "jpeg": base64::engine::general_purpose::STANDARD.encode(&c.jpeg),
-                "roll": c.roll,
-                // NONE rather than null: the field is option<object>.
-                "frame": c.frame.clone().unwrap_or(Value::Null),
-                "model": model,
-                "reason": auto_reason,
-                "values": flag,
-            }),
-        )
-        .await?;
+        // Absent keys arrive as NONE; JSON null would be NULL, which the typed
+        // fields reject, so only present values are sent.
+        let mut vars = json!({
+            "user": user,
+            "roll_id": c.roll_id,
+            "jpeg": base64::engine::general_purpose::STANDARD.encode(&c.jpeg),
+            "roll": c.roll,
+            "model": model,
+        });
+        if let Some(frame) = &c.frame {
+            vars["frame"] = frame.clone();
+        }
+        if let Some(reason) = auto_reason {
+            vars["reason"] = reason.into();
+        }
+        if let Some(values) = flag {
+            vars["values"] = json!(values);
+        }
+        self.query(SAVE, vars).await?;
         Ok(())
     }
 }

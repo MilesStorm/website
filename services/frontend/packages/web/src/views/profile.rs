@@ -110,6 +110,8 @@ fn DiceSharing() -> Element {
     let mut message = use_signal(|| Option::<String>::None);
     let mut busy = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
+    // Bumped when saving fails, to rebuild the switch so it shows the real setting.
+    let mut switch_key = use_signal(|| 0u32);
 
     use_effect(move || {
         spawn(async move {
@@ -140,10 +142,13 @@ fn DiceSharing() -> Element {
                 "this off at any time; nothing new is saved after that."
             }
             p { class: "mb-4 max-w-2xl text-sm opacity-70",
-                "Rolls you send with \"Flag as wrong roll\" in the browser extension are saved even when this is off."
+                "Whatever you choose, the picture of your latest roll is kept for 10 minutes so you "
+                "can send it with \"Flag as wrong roll\" in the browser extension; rolls you flag "
+                "are saved even when this is off."
             }
             label { class: "label cursor-pointer justify-start gap-3",
                 input {
+                    key: "{switch_key}",
                     r#type: "checkbox",
                     class: "toggle toggle-primary",
                     checked: current.share,
@@ -157,7 +162,10 @@ fn DiceSharing() -> Element {
                                     state.set(Some(s));
                                     message.set(None);
                                 }
-                                Err(_) => message.set(Some("Couldn't save your choice. Try again.".into())),
+                                Err(_) => {
+                                    message.set(Some("Couldn't save your choice. Try again.".into()));
+                                    switch_key += 1;
+                                }
                             }
                             busy.set(false);
                         });

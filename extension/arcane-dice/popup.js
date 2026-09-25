@@ -121,6 +121,7 @@ $("flag-form").addEventListener("submit", async (e) => {
   const roll = shown;
   const typed = [...$("flag-inputs").querySelectorAll("input")].map((i) => i.value);
   const body = flagPayload(roll, typed);
+  const formFor = flagFor;
   $("flag-invalid").hidden = body !== null;
   if (!body) return;
 
@@ -141,10 +142,10 @@ $("flag-form").addEventListener("submit", async (e) => {
   $("flag-send").disabled = false;
 
   const result = flagResult(status);
-  if (result.ok) {
-    flagged.add(roll.rollId);
-    $("flag-form").hidden = true;
-  }
+  if (result.ok) flagged.add(roll.rollId);
+  // A newer roll arrived while sending: its form is fresh, don't mark it.
+  if (flagFor !== formFor) return;
+  if (result.ok) $("flag-form").hidden = true;
   $("flag-status").textContent = result.text;
   $("flag-status").hidden = false;
   if (shown) renderFlag(shown);
@@ -189,6 +190,7 @@ async function streamRolls(outer) {
         if (ev.event !== "roll") continue;
         const roll = parseRoll(ev.data);
         if (!roll) continue;
+        roll.receivedAt = Date.now();
         render(roll);
         chrome.storage.session.set({ lastRoll: roll }).catch(console.error);
       }
