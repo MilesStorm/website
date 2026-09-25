@@ -1,5 +1,5 @@
 //! Training-data capture (server only): opted-in users' rolls are sampled, and any
-//! user can flag a wrong roll, into SurrealDB (schema: `surreal/dataset.surql`).
+//! user can flag a wrong roll, into SurrealDB (schema: `surreal/database/schema/`, managed with surrealkit).
 //! Storage split: the opt-in choice lives with the account in auth's PostgreSQL
 //! (`api::dataset_consent`); the picture held for flagging and rate counters live in
 //! Redis (`capture.rs`); saved rolls, pictures and the deletion log live here.
