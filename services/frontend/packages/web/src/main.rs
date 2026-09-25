@@ -14,9 +14,12 @@ mod capture;
 #[cfg(not(target_arch = "wasm32"))]
 mod dataset;
 mod sharing;
+mod account;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
+/// The logged-in user's name and picture (navbar, profile page); `None` until loaded.
+pub static ACCOUNT: GlobalSignal<Option<account::AccountInfo>> = Signal::global(|| None);
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 
@@ -204,6 +207,13 @@ fn server_launch() -> ! {
                 .route("/api/arcane/me", get(rolls::arcane_me))
                 .route("/api/arcane/rolls", get(rolls::arcane_rolls))
                 .route("/api/arcane/flag", axum::routing::post(capture::arcane_flag))
+                .route(
+                    "/api/profile/picture",
+                    get(account::get_picture).post(account::upload_picture).layer(
+                        // Room for the largest accepted upload; bigger bodies get 413.
+                        axum::extract::DefaultBodyLimit::max(account::PICTURE_MAX_UPLOAD),
+                    ),
+                )
                 .route(
                     "/metrics",
                     get(move || async move { metric_handle.render() }),
@@ -523,6 +533,18 @@ fn App() -> Element {
         }
     });
 
+    // Load the account (display name, picture) whenever someone logs in.
+    use_effect(move || match LOGIN_STATUS() {
+        LoginStatus::LoggedIn(_) => {
+            spawn(async move {
+                if let Ok(a) = account::get_account().await {
+                    *ACCOUNT.write() = Some(a);
+                }
+            });
+        }
+        LoginStatus::LoggedOut => *ACCOUNT.write() = None,
+    });
+
     setup_mode();
 
     rsx! {
@@ -542,13 +564,17 @@ fn WebNavbar() -> Element {
             let _ = logout().await;
             *LOGIN_STATUS.write() = LoginStatus::LoggedOut;
             *PERMISSIONS.write() = HashMap::new();
+            *ACCOUNT.write() = None;
         });
     };
 
     let perms = PERMISSIONS.read();
+    let account = ACCOUNT();
     rsx! {
         Navbar {
             user: LOGIN_STATUS(),
+            name: account.as_ref().map(|a| a.shown_name().to_string()),
+            picture: account.as_ref().and_then(|a| a.picture_url()),
             on_logout: logout_handler,
             has_ark: perms.contains_key("llama"),
             has_arcane: perms.contains_key("arcane"),

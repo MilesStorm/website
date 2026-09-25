@@ -43,6 +43,8 @@ reqwest = { workspace = true }
 # Applies the roll-sharing tables (surreal/database/schema) at startup.
 surrealkit = "=0.7.0"
 base64 = "0.22" 
+# Profile pictures: decode uploads and re-encode them as small JPEGs (src/account.rs).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
@@ -64,6 +66,8 @@ web-sys = { version = "0.3", features = [
     "WebSocket",
     "MessageEvent",
     "BinaryType",
+    "RequestInit",
+    "Response",
 ] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

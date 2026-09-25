@@ -46,6 +46,8 @@ pub fn router(state: InternalState) -> Router<()> {
         .route("/internal/ark/command", post(ark_command))
         .route("/internal/dataset/consent", post(dataset_consent_get))
         .route("/internal/dataset/consent/set", post(dataset_consent_set))
+        .route("/internal/profile", post(profile_get))
+        .route("/internal/profile/display_name", post(profile_set_display_name))
         // Admin RBAC management
         .route("/internal/admin/users", get(admin_list_users))
         .route("/internal/admin/users/{user_id}/roles/{role_id}", post(admin_assign_user_role).delete(admin_revoke_user_role))
@@ -460,6 +462,106 @@ async fn resolve_ark_user(db: &PgPool, token: &str) -> Option<i64> {
     .unwrap_or(None);
 
     row.map(|(id,)| id)
+}
+
+// ---- Profile ----
+//
+// What a logged-in user can see and change about their own account on the website's
+// profile page. The username can't be changed: GitHub logins find their account by it.
+
+#[derive(Serialize)]
+struct ProfileResp {
+    user_id: i64,
+    username: String,
+    display_name: Option<String>,
+}
+
+/// The token's user (id, username, display name), for any valid token.
+async fn resolve_profile(db: &PgPool, token: &str) -> Result<Option<ProfileResp>, sqlx::Error> {
+    let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.username, u.display_name FROM bff_tokens t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.token = $1 AND t.expires_at > NOW()
+        "#,
+    )
+    .bind(token)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(user_id, username, display_name)| ProfileResp { user_id, username, display_name }))
+}
+
+#[tracing::instrument(name = "profile.get", skip_all)]
+async fn profile_get(
+    State(state): State<InternalState>,
+    Json(req): Json<ArkTokenReq>,
+) -> impl IntoResponse {
+    match resolve_profile(&state.db, &req.token).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "reading profile failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Longest display name, in characters.
+const DISPLAY_NAME_MAX: usize = 40;
+
+/// The name as it will be stored: trimmed, `None` when empty. `Err` when it is too
+/// long or holds control or text-direction characters (which could disguise it).
+fn clean_display_name(raw: Option<&str>) -> Result<Option<String>, ()> {
+    let Some(name) = raw.map(str::trim).filter(|n| !n.is_empty()) else {
+        return Ok(None);
+    };
+    let bad = |c: char| {
+        c.is_control() || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+    };
+    if name.chars().count() > DISPLAY_NAME_MAX || name.chars().any(bad) {
+        return Err(());
+    }
+    Ok(Some(name.to_string()))
+}
+
+#[derive(Deserialize)]
+struct DisplayNameReq {
+    token: String,
+    /// `None` or blank clears it.
+    display_name: Option<String>,
+}
+
+#[tracing::instrument(name = "profile.set_display_name", skip_all)]
+async fn profile_set_display_name(
+    State(state): State<InternalState>,
+    Json(req): Json<DisplayNameReq>,
+) -> impl IntoResponse {
+    let Ok(name) = clean_display_name(req.display_name.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "Invalid display name").into_response();
+    };
+    let row: Result<Option<(i64, String, Option<String>)>, _> = sqlx::query_as(
+        r#"
+        UPDATE users u SET display_name = $2
+        FROM bff_tokens t
+        WHERE t.token = $1 AND t.expires_at > NOW() AND u.id = t.user_id
+        RETURNING u.id, u.username, u.display_name
+        "#,
+    )
+    .bind(&req.token)
+    .bind(&name)
+    .fetch_optional(&state.db)
+    .await;
+    match row {
+        Ok(Some((user_id, username, display_name))) => {
+            tracing::info!(user_id, "display name changed");
+            Json(ProfileResp { user_id, username, display_name }).into_response()
+        }
+        Ok(None) => (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "saving display name failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 // ---- Dice training-data consent ----
@@ -1009,5 +1111,26 @@ async fn admin_revoke_role_permission(
             tracing::error!(error = %e, role_id, permission_id, "admin_revoke_role_permission: db error");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_display_name;
+
+    #[test]
+    fn display_name_is_trimmed_and_blank_clears_it() {
+        assert_eq!(clean_display_name(Some("  Miles  ")), Ok(Some("Miles".into())));
+        assert_eq!(clean_display_name(Some("   ")), Ok(None));
+        assert_eq!(clean_display_name(None), Ok(None));
+    }
+
+    #[test]
+    fn display_name_limits() {
+        assert_eq!(clean_display_name(Some(&"é".repeat(40))), Ok(Some("é".repeat(40))));
+        assert!(clean_display_name(Some(&"a".repeat(41))).is_err());
+        assert!(clean_display_name(Some("a\nb")).is_err());
+        assert!(clean_display_name(Some("admin\u{202E}nimda")).is_err());
+        assert!(clean_display_name(Some("zero\u{200B}width")).is_err());
     }
 }

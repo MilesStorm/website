@@ -49,7 +49,7 @@
 | `SURREAL_USER` / `SURREAL_PASS` | _(unset)_ | The database-level `dice` login (EDITOR on `milesstorm`/`arcane` only; created by the infrastructure). `SURREAL_USER` is `dice` (set in the deployment); `SURREAL_PASS` comes from key `SURREAL_PASS` in `website-secrets`. The website creates its tables with this login at startup. |
 | `SURREAL_NS` / `SURREAL_DB` | `milesstorm` / `arcane` | Where the roll-sharing tables live. |
 | `DATASET_SAMPLE_EVERY` | `20` | For users who opted in, keep about one in N confident rolls (rolls the model is unsure about are always kept). |
-| `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins allowed to open `/ws/arcane`, comma-separated (e.g. a dev proxy). Same-host origins are always allowed; plain-http ones only in debug builds. |
+| `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins the website accepts requests from, comma-separated: `/ws/arcane`, the profile page (name, picture, sharing) and `/api/profile/picture`. Same-host origins are always allowed; plain-http ones only in debug builds. Needed for local `dx serve`, whose proxy changes the host the server sees: `http://localhost:8080,http://127.0.0.1:8080`. |
 
 ---
 

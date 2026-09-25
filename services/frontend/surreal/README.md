@@ -1,4 +1,4 @@
-# SurrealDB: dice training data
+# SurrealDB: dice training data and profile pictures
 
 Storage is split across three stores:
 
@@ -6,7 +6,7 @@ Storage is split across three stores:
 |---|---|---|
 | **PostgreSQL** (auth) | The opt-in choice (`dataset_consent`, deleted with the account) | `services/auth/migrations`, applied by auth at startup |
 | **Redis** | The picture of each user's latest roll, held 10 minutes for "flag as wrong roll"; rate counters | `packages/web/src/capture.rs` |
-| **SurrealDB** | Saved rolls, their pictures, and the deletion log | `database/schema/`, applied by the website at startup |
+| **SurrealDB** | Saved rolls, their pictures, and the deletion log; each account's profile picture | `database/schema/`, applied by the website at startup |
 
 ## How the tables get there
 The website applies `database/schema/` itself every time it starts, the same way auth
@@ -74,9 +74,17 @@ env SURREALDB_HOST=http://127.0.0.1:8000 SURREALDB_USER=root SURREALDB_PASSWORD=
 ```
 Expected: `cases: 6 total, 6 passed, 0 failed`.
 
+## Profile pictures
+`profile_picture:<user id>` holds one 256x256 JPEG per account (`packages/web/src/account.rs`).
+The website re-encodes every upload, so no hidden data such as location is kept.
+It's keyed by auth's permanent user id, not the username. The training tool's
+read-only login (`dice_reader`) can read this table too: a SurrealDB database user can
+read every table in its database.
+
 ## Known limits / follow-ups
 - **Account deletion.** The consent row goes with the account, but saved rolls are
-  keyed by username. When accounts can be deleted, that path must also delete the
+  keyed by username, and the profile picture by user id: delete
+  `profile_picture:<id>` too. When accounts can be deleted, that path must also delete the
   user's SurrealDB rows and write a `dataset_deletion` entry. Otherwise a reused
   username would inherit them.
 - **Pictures already moved into training data.** `pull_dataset.py` removes deleted
