@@ -52,7 +52,7 @@ The website only uses SurrealDB; everything below comes from the infrastructure 
 | What | Value the website expects |
 |---|---|
 | Namespace / database | `milesstorm` / `arcane` |
-| The website's login | database-level user `dice` in `milesstorm`/`arcane`, role `EDITOR` (the website creates its own tables) |
+| The website's login | database-level user `dice` in `milesstorm`/`arcane`, role `EDITOR` (the website creates its own tables). Token duration must not be `NONE`: with `DURATION FOR TOKEN NONE`, SurrealDB 3.2.4 refuses the login with `401 Unauthorized` on `/rpc`. Leave it at the default or use `1h`. |
 | The training tool's login | database-level user `dice_reader` in `milesstorm`/`arcane`, role `VIEWER` (`services/ai_pipeline/tools/pull_dataset.py`) |
 | The website's password | key `SURREAL_PASS` in the Kubernetes secret `website-secrets`, namespace `frontend` (username, address and database are set in `crds/frontend/deployment.yaml`) |
 | Network | pods in namespace `frontend` reach `surrealdb.surreal.svc.cluster.local:8000` |
