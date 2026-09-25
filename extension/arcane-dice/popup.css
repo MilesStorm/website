@@ -104,6 +104,43 @@ button {
   color: var(--warn);
 }
 
+.link {
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+.hint {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.flag-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.flag-inputs input {
+  width: 44px;
+  padding: 4px;
+  text-align: center;
+  font: inherit;
+  border: 1px solid var(--chip-border);
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--fg);
+}
+
+.flag-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .empty {
   color: var(--muted);
 }

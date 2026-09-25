@@ -6,6 +6,7 @@
 // throughout: Firefox provides it too, with promises.
 
 import { SseParser } from "./lib/sse.js";
+import { canFlag, flagPayload, flagResult } from "./lib/flag.js";
 import { parseRoll, describeRoll, timeAgo } from "./lib/roll.js";
 import { BASE, originPattern } from "./lib/config.js";
 
@@ -67,7 +68,87 @@ function render(roll) {
       ? "1 die couldn't be read. Nudge it or adjust the camera."
       : `${unreadable} dice couldn't be read. Nudge them or adjust the camera.`;
   $("when").textContent = `(${timeAgo(roll.ts)})`;
+  renderFlag(roll);
 }
+
+// ── Flag as wrong roll ────────────────────────────────────────────────────────
+
+/** The roll the flag form belongs to; the form is rebuilt only when this changes,
+ * so a re-sent update of the same roll doesn't wipe what the user typed. */
+let flagFor = null;
+const flagged = new Set();
+
+function renderFlag(roll) {
+  const key = `${roll.rollId}/${roll.dice.length}`;
+  if (key !== flagFor) {
+    flagFor = key;
+    $("flag-form").hidden = true;
+    $("flag-invalid").hidden = true;
+    $("flag-status").hidden = true;
+    $("flag-inputs").replaceChildren(
+      ...roll.dice.map((d, i) => {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.inputMode = "numeric";
+        input.maxLength = 2;
+        input.placeholder = d.value ?? "?";
+        input.setAttribute("aria-label", `Die ${i + 1}, read as ${d.value ?? "unreadable"}`);
+        return input;
+      }),
+    );
+  }
+  const done = flagged.has(roll.rollId);
+  $("flag").hidden = !canFlag(roll) && !done;
+  $("flag-open").hidden = done || !$("flag-form").hidden;
+}
+
+$("flag-open").addEventListener("click", () => {
+  $("flag-form").hidden = false;
+  $("flag-open").hidden = true;
+  $("flag-status").hidden = true;
+  $("flag-inputs").querySelector("input")?.focus();
+});
+
+$("flag-cancel").addEventListener("click", () => {
+  $("flag-form").hidden = true;
+  $("flag-invalid").hidden = true;
+  if (shown) renderFlag(shown);
+});
+
+$("flag-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!shown) return;
+  const roll = shown;
+  const typed = [...$("flag-inputs").querySelectorAll("input")].map((i) => i.value);
+  const body = flagPayload(roll, typed);
+  $("flag-invalid").hidden = body !== null;
+  if (!body) return;
+
+  $("flag-send").disabled = true;
+  let status = 0;
+  try {
+    const resp = await fetch(`${base}/api/arcane/flag`, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    status = resp.status;
+  } catch (err) {
+    console.warn("arcane dice flag:", err);
+  }
+  $("flag-send").disabled = false;
+
+  const result = flagResult(status);
+  if (result.ok) {
+    flagged.add(roll.rollId);
+    $("flag-form").hidden = true;
+  }
+  $("flag-status").textContent = result.text;
+  $("flag-status").hidden = false;
+  if (shown) renderFlag(shown);
+});
 
 async function getMe(signal) {
   const resp = await fetch(`${base}/api/arcane/me`, { credentials: "include", cache: "no-store", signal });
@@ -181,9 +262,11 @@ $("grant").addEventListener("click", async () => {
   if (await chrome.permissions.request({ origins: [originPattern(base)] })) restart();
 });
 
-// Keep "12 s ago" current.
+// Keep "12 s ago" current, and hide the flag link once the roll is too old.
 setInterval(() => {
-  if (shown) $("when").textContent = `(${timeAgo(shown.ts)})`;
+  if (!shown) return;
+  $("when").textContent = `(${timeAgo(shown.ts)})`;
+  renderFlag(shown);
 }, 1000);
 
 (async () => {

@@ -19,6 +19,23 @@
       <ul id="dice" class="dice"></ul>
       <p id="total" class="total"></p>
       <p id="unreadable" class="warning" hidden></p>
+
+      <section id="flag" hidden>
+        <button id="flag-open" type="button" class="link">Flag as wrong roll</button>
+        <form id="flag-form" hidden>
+          <p class="hint">
+            This saves the picture of this roll so the dice reader can learn from it. If you like,
+            type what each die really shows (leave a box empty if unsure):
+          </p>
+          <div id="flag-inputs" class="flag-inputs"></div>
+          <p id="flag-invalid" class="warning" hidden>Use numbers from 0 to 20.</p>
+          <div class="flag-actions">
+            <button type="submit" id="flag-send">Send</button>
+            <button type="button" id="flag-cancel">Cancel</button>
+          </div>
+        </form>
+        <p id="flag-status" class="hint" hidden></p>
+      </section>
     </main>
 
     <p id="empty" class="empty" hidden>No rolls yet. Open the Arcane page on any device and roll.</p>
