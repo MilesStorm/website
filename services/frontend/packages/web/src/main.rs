@@ -154,6 +154,7 @@ fn server_launch() -> ! {
                 },
                 ..Default::default()
             };
+            let roll_con_conf = con_conf.clone();
             let pool = Pool::new(
                 config,
                 None,
@@ -166,7 +167,7 @@ fn server_launch() -> ! {
             pool.wait_for_connect()
                 .await
                 .expect("failed to connect to Redis");
-            let roll_hub = rolls::RollHub::connect(roll_config, pool.clone())
+            let roll_hub = rolls::RollHub::connect(roll_config, roll_con_conf, pool.clone())
                 .await
                 .expect("failed to start the arcane roll subscriber");
             let session_store = RedisStore::new(pool);
@@ -234,7 +235,8 @@ async fn arcane_ws_proxy(
         .unwrap_or_else(|_| "ws://localhost:9000".to_string());
 
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
-    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user))
+    let session_id = session.id();
+    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user, session_id))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -243,6 +245,7 @@ async fn proxy_ws(
     upstream_url: String,
     hub: rolls::RollHub,
     user: String,
+    session_id: Option<tower_sessions::session::Id>,
 ) {
     use axum::extract::ws::Message as AxMsg;
     use futures_util::{SinkExt, StreamExt};
@@ -257,6 +260,9 @@ async fn proxy_ws(
     };
 
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    // Rolls go to Redis in order through one queue; never awaited here, so Redis
+    // latency can't stall the frame stream.
+    let rolls_tx = hub.publisher(user.clone());
     let (mut client_tx, mut client_rx) = client.split();
 
     tokio::select! {
@@ -277,10 +283,8 @@ async fn proxy_ws(
             while let Some(Ok(msg)) = upstream_rx.next().await {
                 match msg {
                     TngMsg::Text(t) => {
-                        if rolls::is_roll(&t) {
-                            // Spawned so Redis latency never stalls the frame stream.
-                            let (hub, user, roll) = (hub.clone(), user.clone(), t.to_string());
-                            tokio::spawn(async move { hub.publish(&user, roll).await });
+                        if rolls::is_roll(&t) && rolls_tx.try_send(t.to_string()).is_err() {
+                            tracing::warn!("arcane roll dropped: Redis publish queue full");
                         }
                         if client_tx.send(AxMsg::Text(t.to_string().into())).await.is_err() { break; }
                     }
@@ -289,6 +293,17 @@ async fn proxy_ws(
                 }
             }
         } => {}
+        // Logging out or losing the permission ends the camera session too.
+        _ = async {
+            let start = tokio::time::Instant::now() + rolls::RECHECK;
+            let mut recheck = tokio::time::interval_at(start, rolls::RECHECK);
+            loop {
+                recheck.tick().await;
+                if !hub.still_allowed(session_id, &user).await { break; }
+            }
+        } => {
+            tracing::info!("arcane WebSocket closed: session ended or permission removed");
+        }
     }
 }
 

@@ -17,6 +17,7 @@ export class SseParser {
   /** Feed decoded text; returns the events completed by it as {event, data}. */
   push(chunk) {
     const out = [];
+    if (chunk === "") return out; // keep a pending CR waiting for its LF
     if (this.#pendingCR && chunk.startsWith("\n")) chunk = chunk.slice(1);
     this.#pendingCR = false;
     this.#buf += chunk;

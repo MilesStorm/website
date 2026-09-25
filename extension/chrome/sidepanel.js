@@ -7,7 +7,7 @@
 
 import { SseParser } from "./lib/sse.js";
 import { parseRoll, describeRoll, timeAgo } from "./lib/roll.js";
-import { DEFAULT_BASE, normalizeBase } from "./lib/config.js";
+import { DEFAULT_BASE, isOptional, normalizeBase, originPattern } from "./lib/config.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,12 +15,23 @@ let base = DEFAULT_BASE;
 let controller = new AbortController();
 let shown = null;
 
+/** The server sends a keep-alive every 20 s; this long without a byte means the link is dead. */
+const STALL_MS = 50_000;
+
 /** Resolves after `ms`, or as soon as `signal` aborts. */
 function sleep(ms, signal) {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+    const onAbort = () => (clearTimeout(t), resolve());
+    const t = setTimeout(() => (signal.removeEventListener("abort", onAbort), resolve()), ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** Forget the shown roll (logged out, no access, or another site). */
+function clearRoll() {
+  render(null);
+  $("empty").hidden = true;
+  chrome.storage.session.remove("lastRoll").catch(console.error);
 }
 
 function setStatus(kind, text, { login = false } = {}) {
@@ -63,29 +74,46 @@ async function getMe(signal) {
   return resp.json();
 }
 
-/** Streams rolls until the connection ends. Returns normally on 401/403 so the caller re-checks login. */
-async function streamRolls(signal) {
-  const resp = await fetch(`${base}/api/arcane/rolls`, {
-    credentials: "include",
-    cache: "no-store",
-    headers: { Accept: "text/event-stream" },
-    signal,
-  });
-  if (resp.status === 401 || resp.status === 403) return;
-  if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+/**
+ * Streams rolls until the connection ends. Resolves to "denied" on 401/403 (the
+ * caller re-checks login), "busy" on 429 (too many panels open), or "ended" after a
+ * stream that delivered data. Throws when the site can't be reached or goes silent.
+ */
+async function streamRolls(outer) {
+  // Aborted by the caller (site changed) or by the stall watchdog.
+  const ctl = new AbortController();
+  const stop = () => ctl.abort();
+  outer.addEventListener("abort", stop, { once: true });
+  let stall = setTimeout(stop, STALL_MS);
+  try {
+    const resp = await fetch(`${base}/api/arcane/rolls`, {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "text/event-stream" },
+      signal: ctl.signal,
+    });
+    if (resp.status === 401 || resp.status === 403) return "denied";
+    if (resp.status === 429) return "busy";
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
 
-  const reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();
-  const parser = new SseParser();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) return;
-    for (const ev of parser.push(value)) {
-      if (ev.event !== "roll") continue;
-      const roll = parseRoll(ev.data);
-      if (!roll) continue;
-      render(roll);
-      chrome.storage.session.set({ lastRoll: roll }).catch(console.error);
+    const reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();
+    const parser = new SseParser();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return "ended";
+      clearTimeout(stall);
+      stall = setTimeout(stop, STALL_MS);
+      for (const ev of parser.push(value)) {
+        if (ev.event !== "roll") continue;
+        const roll = parseRoll(ev.data);
+        if (!roll) continue;
+        render(roll);
+        chrome.storage.session.set({ lastRoll: roll }).catch(console.error);
+      }
     }
+  } finally {
+    clearTimeout(stall);
+    outer.removeEventListener("abort", stop);
   }
 }
 
@@ -96,38 +124,57 @@ async function run() {
     try {
       const me = await getMe(signal);
       if (!me.logged_in) {
+        if (shown) clearRoll();
         setStatus("out", "You're not logged in.", { login: true });
         await sleep(5000, signal); // notice a login in another tab
         continue;
       }
       if (!me.has_arcane) {
+        if (shown) clearRoll();
         setStatus("denied", `Logged in as ${me.username}, but this account doesn't have dice access.`);
         await sleep(30000, signal);
         continue;
       }
       setStatus("live", `Live, as ${me.username}`);
       if (!shown) render(null);
-      await streamRolls(signal);
-      backoff = 1000;
+      const outcome = await streamRolls(signal);
+      if (outcome === "ended") {
+        // A stream that worked: reconnect promptly. (The server also ends streams
+        // after a logout, and the next /me check then shows that.)
+        backoff = 1000;
+        setStatus("connecting", "Reconnecting…");
+      } else if (outcome === "denied") {
+        setStatus("connecting", "Checking login…");
+      } else if (outcome === "busy") {
+        setStatus("retry", "Too many dice panels open for this account. Close one to continue.");
+      }
     } catch (e) {
       if (signal.aborted) continue; // the site setting changed; start over at once
       console.warn("arcane dice:", e);
+      setStatus("retry", `Can't reach ${new URL(base).host}. Retrying…`);
     }
     if (signal.aborted) continue;
-    setStatus("retry", `Can't reach ${new URL(base).host}. Retrying…`);
+    // Every path waits, so a server that keeps disagreeing with itself can't spin.
     await sleep(backoff, signal);
     backoff = Math.min(backoff * 2, 30000);
   }
 }
 
-async function loadBase() {
-  const { base: saved } = await chrome.storage.sync.get("base");
-  return normalizeBase(saved);
+/** The chosen site, or the default if its optional permission was since removed. */
+async function usableBase(value) {
+  const b = normalizeBase(value);
+  if (isOptional(b) && !(await chrome.permissions.contains({ origins: [originPattern(b)] }))) return DEFAULT_BASE;
+  return b;
 }
 
-chrome.storage.onChanged.addListener((changes, area) => {
+async function loadBase() {
+  const { base: saved } = await chrome.storage.sync.get("base");
+  return usableBase(saved);
+}
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "sync" || !("base" in changes)) return;
-  base = normalizeBase(changes.base.newValue);
+  base = await usableBase(changes.base.newValue);
   shown = null;
   $("roll").hidden = true;
   setStatus("connecting", "Connecting…");

@@ -29,8 +29,10 @@ side panel ◀──SSE── website (/api/arcane/rolls)
 
 ## Settings
 Right-click the toolbar button → **Options** to switch between milesstorm.com and a local
-dev server (`http://localhost:8080`). Only sites in `manifest.json`'s `host_permissions`
-can be chosen. The list lives in `lib/config.js`, and a test keeps the two in sync.
+dev server (`http://localhost:8080`). Chrome asks for permission the first time the dev
+server is chosen; it's an optional permission, so normal installs never talk to
+localhost. Only the sites in `lib/config.js` can be chosen, and a test keeps that list in
+sync with `manifest.json`.
 
 ## How login works
 There is no separate login. The panel calls the website with `credentials: "include"`,
@@ -46,10 +48,12 @@ so Chrome sends the site's normal session cookie. That works because the site is
 The roll JSON is ai_pipeline's `RollEvent` (`services/ai_pipeline/src/roll.rs`).
 
 ## Later: typing rolls into another website
-The latest roll is mirrored into `chrome.storage.session` under `lastRoll`, readable by
-this extension's content scripts (`background.js` sets that access level). A future
-content script can watch it with `chrome.storage.onChanged` and fill the target text box.
-It will need that site added to the manifest.
+The latest roll is mirrored into `chrome.storage.session` under `lastRoll`. Only the
+extension's own pages can read that storage; content scripts can't. A future content script
+that fills the target site's text box should ask the service worker with
+`chrome.runtime.sendMessage`. The worker answers from storage after checking
+`sender.tab.url`, so a compromised web page can't read or plant rolls. The target site will
+also need adding to the manifest.
 
 ## Tests
 ```

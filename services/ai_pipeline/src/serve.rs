@@ -105,7 +105,7 @@ fn now_ms() -> u64 {
 ///   `{"type":"frame","detections":[{x1,y1,x2,y2,yolo_conf,yolo_class,dice_class,dice_conf,value,confident},...],"frame_ms":N}`
 /// and, when the dice in view have settled into a new roll (see `roll.rs`),
 ///   `{"type":"roll","roll_id":..,"dice":[{"value":"17"|null,"conf":..,"box":[..]}],"total":..,"complete":..,"ts":..}`
-/// Errors are `{"error":"..."}`.
+/// Errors are `{"type":"error","error":"..."}`.
 ///
 /// A single inference thread (owning the GPU pipeline) is shared across all connections.
 /// Each connection reads frames into a newest-wins watch channel and infers only the

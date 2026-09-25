@@ -1,14 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { ALLOWED_BASES, DEFAULT_BASE, normalizeBase } from "../lib/config.js";
+import { ALLOWED_BASES, DEFAULT_BASE, isOptional, normalizeBase, originPattern } from "../lib/config.js";
 
 const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url)));
 
-test("every allowed site has a host permission, and vice versa", () => {
+test("only the default site is a granted host permission", () => {
+  assert.deepEqual(manifest.host_permissions, [originPattern(DEFAULT_BASE)]);
+});
+
+test("every other allowed site is an optional permission, and vice versa", () => {
   assert.deepEqual(
-    ALLOWED_BASES.map((b) => `${b}/*`).sort(),
-    [...manifest.host_permissions].sort(),
+    ALLOWED_BASES.filter(isOptional).map(originPattern).sort(),
+    [...manifest.optional_host_permissions].sort(),
   );
 });
 

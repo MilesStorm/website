@@ -49,3 +49,7 @@ test("an event without a closing blank line is not emitted yet", () => {
   assert.deepEqual(p.push("data: waiting\n"), []);
   assert.deepEqual(p.push("\n"), [{ event: "message", data: "waiting" }]);
 });
+
+test("an empty chunk between CR and LF doesn't split the CRLF", () => {
+  assert.deepEqual(feed(["data: a\r", "", "\n\r\n"]), [{ event: "message", data: "a" }]);
+});

@@ -8,6 +8,10 @@
 //! connected to a different replica, or a different device, than the camera.
 //!
 //! Keyed by username: usernames are unique in auth and never renamed.
+//!
+//! Long-lived connections (the SSE stream and the camera WebSocket) re-check every
+//! minute that their session still exists and still holds `arcane`, so logging out
+//! or losing the permission ends them.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -20,8 +24,13 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::mpsc;
+use tokio::time::{interval_at, timeout, Instant, Interval};
+use tower_sessions::session::Id;
+use tower_sessions::SessionStore;
 use tower_sessions_redis_store::fred::clients::SubscriberClient;
 use tower_sessions_redis_store::fred::prelude::*;
+use tower_sessions_redis_store::RedisStore;
 
 const CHANNEL_PREFIX: &str = "arcane:rolls:";
 const LAST_ROLL_PREFIX: &str = "arcane:last_roll:";
@@ -30,11 +39,22 @@ const LAST_ROLL_TTL_SECS: i64 = 3600;
 const PER_USER_BUFFER: usize = 16;
 /// Proxies (and Chrome) drop idle streams; a comment every 20s keeps them open.
 const KEEP_ALIVE: Duration = Duration::from_secs(20);
+/// How often long-lived connections re-check the session and permission.
+pub const RECHECK: Duration = Duration::from_secs(60);
+/// Open roll streams allowed per user (side panels, tabs, devices).
+const MAX_STREAMS_PER_USER: usize = 8;
+/// A subscriber connection only reads, so a silently dead socket would go
+/// unnoticed; a PING this often surfaces it and triggers a reconnect.
+const SUBSCRIBER_PING: Duration = Duration::from_secs(30);
+const PING_TIMEOUT: Duration = Duration::from_secs(10);
+/// Rolls waiting to be written to Redis per camera connection.
+const PUBLISH_QUEUE: usize = 16;
 
 /// Shared fan-out point for roll events; cheap to clone.
 #[derive(Clone)]
 pub struct RollHub {
     pool: Pool,
+    sessions: RedisStore<Pool>,
     users: Arc<Mutex<HashMap<String, broadcast::Sender<Arc<str>>>>>,
     // Held so the subscriber connection lives as long as the hub.
     _subscriber: SubscriberClient,
@@ -42,21 +62,58 @@ pub struct RollHub {
 
 impl RollHub {
     /// Connect this replica's single Redis subscriber and start fanning messages out.
-    /// `pool` is the shared session pool, used for PUBLISH/SET/GET.
-    pub async fn connect(config: Config, pool: Pool) -> anyhow::Result<Self> {
-        let subscriber = Builder::from_config(config)
+    /// `pool` is the shared session pool, used for PUBLISH/SET/GET and session reads;
+    /// `connection` should carry the same TCP keepalive settings as the pool.
+    pub async fn connect(config: Config, connection: ConnectionConfig, pool: Pool) -> anyhow::Result<Self> {
+        let mut builder = Builder::from_config(config);
+        builder
             .set_policy(ReconnectPolicy::new_exponential(0, 100, 30_000, 2))
-            .build_subscriber_client()?;
+            .with_connection_config(|c| *c = connection);
+        let subscriber = builder.build_subscriber_client()?;
         subscriber.init().await?;
         // Re-issues the PSUBSCRIBE after every reconnect.
         subscriber.manage_subscriptions();
         subscriber.psubscribe(format!("{CHANNEL_PREFIX}*")).await?;
 
         let hub = Self {
+            sessions: RedisStore::new(pool.clone()),
             pool,
             users: Arc::new(Mutex::new(HashMap::new())),
             _subscriber: subscriber.clone(),
         };
+
+        // Liveness: a PING that fails or hangs forces a reconnect.
+        let pinger = subscriber.clone();
+        tokio::spawn(async move {
+            let mut every = interval_at(Instant::now() + SUBSCRIBER_PING, SUBSCRIBER_PING);
+            loop {
+                every.tick().await;
+                let ok = matches!(timeout(PING_TIMEOUT, pinger.ping::<Value>(None)).await, Ok(Ok(_)));
+                if !ok {
+                    tracing::warn!("arcane roll subscriber ping failed; reconnecting");
+                    if let Err(e) = pinger.force_reconnection().await {
+                        tracing::error!(error = %e, "arcane roll subscriber reconnect failed");
+                    }
+                }
+            }
+        });
+
+        // Pub/sub drops messages sent while disconnected: after a reconnect, replay
+        // each watched user's stored last roll (viewers drop exact repeats).
+        let mut reconnects = subscriber.reconnect_rx();
+        let replay = hub.clone();
+        tokio::spawn(async move {
+            while reconnects.recv().await.is_ok() {
+                let watched: Vec<String> = replay.users.lock().unwrap().keys().cloned().collect();
+                for user in watched {
+                    if let Some(roll) = replay.last_roll(&user).await {
+                        if let Some(tx) = replay.users.lock().unwrap().get(&user) {
+                            let _ = tx.send(Arc::from(roll));
+                        }
+                    }
+                }
+            }
+        });
 
         let mut messages = subscriber.message_rx();
         let users = hub.users.clone();
@@ -80,41 +137,82 @@ impl RollHub {
                     }
                 }
             }
-            tracing::error!("arcane roll subscriber stopped");
+            // Only happens if the client is torn down; live rolls would silently stop
+            // on this replica, so let the orchestrator restart it.
+            tracing::error!("arcane roll subscriber stopped; exiting");
+            std::process::exit(1);
         });
 
         Ok(hub)
     }
 
-    /// Record `payload` as `user`'s latest roll and notify every replica. Errors are
-    /// logged, never returned: a lost roll must not break the camera stream.
-    pub async fn publish(&self, user: &str, payload: String) {
-        let client = self.pool.next();
-        let set: Result<(), _> = client
-            .set(
-                format!("{LAST_ROLL_PREFIX}{user}"),
-                payload.as_str(),
-                Some(Expiration::EX(LAST_ROLL_TTL_SECS)),
-                None,
-                false,
-            )
-            .await;
-        if let Err(e) = set {
-            tracing::error!(error = %e, "storing last arcane roll failed");
-        }
-        let published: Result<i64, _> = client.publish(format!("{CHANNEL_PREFIX}{user}"), payload).await;
-        if let Err(e) = published {
-            tracing::error!(error = %e, "publishing arcane roll failed");
-        }
+    /// A queue for one camera connection's rolls. They are written to Redis in order
+    /// on a single connection, so a roll's later, more readable update can never be
+    /// overtaken by the earlier one. The writer ends when the sender is dropped.
+    pub fn publisher(&self, user: String) -> mpsc::Sender<String> {
+        let (tx, mut rx) = mpsc::channel::<String>(PUBLISH_QUEUE);
+        let client = self.pool.next().clone();
+        tokio::spawn(async move {
+            while let Some(roll) = rx.recv().await {
+                publish(&client, &user, roll).await;
+            }
+        });
+        tx
     }
 
-    fn subscribe(&self, user: &str) -> broadcast::Receiver<Arc<str>> {
+    /// Whether the session behind a long-lived connection still exists (not logged
+    /// out), still belongs to `user`, and still holds `arcane`.
+    pub async fn still_allowed(&self, session_id: Option<Id>, user: &str) -> bool {
+        let Some(id) = session_id else { return false };
+        match self.sessions.load(&id).await {
+            Ok(Some(record)) => {
+                let token = record.data.get("opaque_token").and_then(|v| v.as_str());
+                let name = record.data.get("username").and_then(|v| v.as_str());
+                match (token, name) {
+                    (Some(token), Some(name)) if name == user => api::has_arcane_permission(token).await,
+                    _ => false,
+                }
+            }
+            Ok(None) => false,
+            Err(e) => {
+                // A Redis hiccup shouldn't drop everyone; the next check decides.
+                tracing::warn!(error = %e, "arcane session re-check failed");
+                true
+            }
+        }
+    }
+}
+
+/// Record `payload` as `user`'s latest roll and notify every replica. Errors are
+/// logged, never returned: a lost roll must not break the camera stream.
+async fn publish(client: &Client, user: &str, payload: String) {
+    let set: Result<(), _> = client
+        .set(
+            format!("{LAST_ROLL_PREFIX}{user}"),
+            payload.as_str(),
+            Some(Expiration::EX(LAST_ROLL_TTL_SECS)),
+            None,
+            false,
+        )
+        .await;
+    if let Err(e) = set {
+        tracing::error!(error = %e, "storing last arcane roll failed");
+    }
+    let published: Result<i64, _> = client.publish(format!("{CHANNEL_PREFIX}{user}"), payload).await;
+    if let Err(e) = published {
+        tracing::error!(error = %e, "publishing arcane roll failed");
+    }
+}
+
+impl RollHub {
+    /// None when the user already has `MAX_STREAMS_PER_USER` streams open.
+    fn subscribe(&self, user: &str) -> Option<broadcast::Receiver<Arc<str>>> {
         let mut users = self.users.lock().unwrap();
         users.retain(|_, tx| tx.receiver_count() > 0);
-        users
+        let tx = users
             .entry(user.to_string())
-            .or_insert_with(|| broadcast::channel(PER_USER_BUFFER).0)
-            .subscribe()
+            .or_insert_with(|| broadcast::channel(PER_USER_BUFFER).0);
+        (tx.receiver_count() < MAX_STREAMS_PER_USER).then(|| tx.subscribe())
     }
 
     async fn last_roll(&self, user: &str) -> Option<String> {
@@ -202,8 +300,21 @@ pub async fn arcane_me(session: tower_sessions::Session) -> Response {
     no_store(axum::Json(body).into_response())
 }
 
+struct RollStream {
+    /// The stored last roll, sent first.
+    pending: Option<Arc<str>>,
+    rx: broadcast::Receiver<Arc<str>>,
+    /// Last roll sent, to drop exact repeats.
+    sent: Option<Arc<str>>,
+    recheck: Interval,
+    session_id: Option<Id>,
+    user: String,
+    hub: RollHub,
+}
+
 /// `GET /api/arcane/rolls`: server-sent events, one `roll` event per settled roll,
-/// starting with the user's last roll from the past hour (if any).
+/// starting with the user's last roll from the past hour (if any). 401/403 when not
+/// allowed, 429 above `MAX_STREAMS_PER_USER` open streams.
 pub async fn arcane_rolls(
     Extension(hub): Extension<RollHub>,
     session: tower_sessions::Session,
@@ -216,25 +327,45 @@ pub async fn arcane_rolls(
 
     // Subscribe before reading the stored roll so nothing published in between is
     // lost; the duplicate this can cause is dropped below.
-    let rx = hub.subscribe(&user);
-    let last = hub.last_roll(&user).await.map(Arc::<str>::from);
+    let Some(rx) = hub.subscribe(&user) else {
+        return no_store(StatusCode::TOO_MANY_REQUESTS.into_response());
+    };
+    let state = RollStream {
+        pending: hub.last_roll(&user).await.map(Arc::<str>::from),
+        rx,
+        sent: None,
+        recheck: interval_at(Instant::now() + RECHECK, RECHECK),
+        session_id: session.id(),
+        user,
+        hub,
+    };
 
-    let events = stream::unfold((last, rx, None::<Arc<str>>), |(mut pending, mut rx, mut sent)| async move {
+    let events = stream::unfold(state, |mut st| async move {
         loop {
-            let next = match pending.take() {
+            let next = match st.pending.take() {
                 Some(p) => p,
-                None => match rx.recv().await {
-                    Ok(p) => p,
-                    Err(RecvError::Lagged(_)) => continue,
-                    Err(RecvError::Closed) => return None,
+                None => tokio::select! {
+                    got = st.rx.recv() => match got {
+                        Ok(p) => p,
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => return None,
+                    },
+                    _ = st.recheck.tick() => {
+                        if st.hub.still_allowed(st.session_id, &st.user).await {
+                            continue;
+                        }
+                        // Logged out or permission removed: end the stream; the
+                        // client reconnects and gets 401/403.
+                        return None;
+                    }
                 },
             };
-            if sent.as_deref() == Some(&*next) {
+            if st.sent.as_deref() == Some(&*next) {
                 continue;
             }
-            sent = Some(next.clone());
+            st.sent = Some(next.clone());
             let event = Event::default().event("roll").data(&*next);
-            return Some((Ok::<_, Infallible>(event), (pending, rx, sent)));
+            return Some((Ok::<_, Infallible>(event), st));
         }
     });
 
