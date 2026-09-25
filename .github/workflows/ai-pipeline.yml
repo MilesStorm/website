@@ -40,8 +40,12 @@ jobs:
             type=sha
             type=semver,pattern={{version}},value=${{ steps.crate-version.outputs.version }}
 
+      # Build with eta's own Docker instead of a fresh, empty builder per run, so
+      # unchanged layers are reused from the previous build.
       - name: set up docker buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Log in to container registry
         uses: docker/login-action@v3
