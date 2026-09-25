@@ -80,19 +80,30 @@ pub fn Landing() -> Element {
 #[component]
 fn Welcome() -> Element {
     rsx! {
-        section { class: "relative overflow-hidden rounded-box border border-base-300 bg-base-200 px-6 py-16 sm:px-12 sm:py-20",
-            Glow {}
+        section { class: "relative overflow-hidden rounded-xl border border-base-300 bg-base-100 px-6 py-16 shadow-sm sm:px-12 sm:py-20",
+            Storm {}
             div { class: "relative max-w-2xl",
-                p { class: "text-sm font-semibold uppercase tracking-widest text-primary", "MilesStorm" }
+                p { class: "flex items-center gap-1.5 text-sm font-semibold uppercase tracking-widest text-accent",
+                    svg {
+                        xmlns: "http://www.w3.org/2000/svg",
+                        view_box: "0 0 24 24",
+                        fill: "currentColor",
+                        class: "h-4 w-4",
+                        path { d: "M13 2 4 14h7l-1 8 9-12h-7z" }
+                    }
+                    "MilesStorm"
+                }
                 h1 { class: "mt-3 text-4xl font-extrabold leading-tight sm:text-5xl",
-                    "Tools for game nights with friends."
+                    "Tools for "
+                    span { class: "bg-linear-to-r from-accent via-base-content to-primary bg-clip-text text-transparent", "game nights" }
+                    " with friends."
                 }
                 p { class: "mt-4 text-lg opacity-70",
                     "A dice reader that follows your real rolls, and more for invited accounts."
                 }
                 div { class: "mt-8 flex flex-wrap gap-3",
-                    Link { class: "btn btn-primary", to: "/login", "Log in" }
-                    Link { class: "btn btn-ghost", to: "/register", "Create an account" }
+                    Link { class: "{BTN_SOLID}", to: "/login", "Log in" }
+                    Link { class: "{BTN_OUTLINE}", to: "/register", "Create an account" }
                 }
                 p { class: "mt-6 text-sm opacity-60",
                     "Early access: features are unlocked for invited accounts."
@@ -128,10 +139,10 @@ fn Home(username: String) -> Element {
     cards.sort_by_key(|(_, open)| !open);
 
     rsx! {
-        section { class: "relative overflow-hidden rounded-box border border-base-300 bg-base-200 px-6 py-10 sm:px-10",
-            Glow {}
+        section { class: "relative overflow-hidden rounded-xl border border-base-300 bg-base-100 px-6 py-10 shadow-sm sm:px-10",
+            Storm {}
             div { class: "relative flex items-center gap-5",
-                div { class: "w-16 h-16 shrink-0 rounded-full overflow-hidden ring ring-primary ring-offset-base-200 ring-offset-2",
+                div { class: "w-16 h-16 shrink-0 rounded-full overflow-hidden ring-2 ring-primary/70 ring-offset-2 ring-offset-base-100",
                     if let Some(src) = picture {
                         img { src: "{src}", alt: "", width: 64, height: 64 }
                     } else {
@@ -170,7 +181,7 @@ enum CardState {
 fn FeatureCard(title: &'static str, text: &'static str, to: &'static str, icon: &'static str, state: CardState) -> Element {
     let body = rsx! {
         div { class: "flex items-start gap-4",
-            div { class: "grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary",
+            div { class: "grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-base-300 bg-base-200",
                 svg {
                     xmlns: "http://www.w3.org/2000/svg",
                     view_box: "0 0 24 24",
@@ -184,10 +195,10 @@ fn FeatureCard(title: &'static str, text: &'static str, to: &'static str, icon: 
                 }
             }
             div { class: "min-w-0",
-                h2 { class: "font-bold", "{title}" }
+                h2 { class: "font-semibold tracking-tight", "{title}" }
                 p { class: "mt-1 text-sm opacity-70", "{text}" }
                 match state {
-                    CardState::Open => rsx! { p { class: "mt-3 text-sm font-semibold text-primary", "Open →" } },
+                    CardState::Open => rsx! { p { class: "mt-3 text-sm font-medium text-primary", "Open →" } },
                     CardState::Locked => rsx! { p { class: "mt-3 text-xs opacity-60", "Ask the site owner for access." } },
                     CardState::Preview => rsx! { p { class: "mt-3 text-xs opacity-60", "For invited accounts." } },
                 }
@@ -197,24 +208,37 @@ fn FeatureCard(title: &'static str, text: &'static str, to: &'static str, icon: 
     match state {
         CardState::Open => rsx! {
             Link {
-                class: "rounded-box border border-base-300 bg-base-100 p-5 transition hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-lg",
+                class: "group rounded-xl border border-base-300 bg-base-100 p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md",
                 to: to,
                 {body}
             }
         },
         _ => rsx! {
-            div { class: if state == CardState::Locked { "rounded-box border border-dashed border-base-300 bg-base-100/60 p-5 opacity-70" } else { "rounded-box border border-base-300 bg-base-100 p-5" },
+            div { class: if state == CardState::Locked { "rounded-xl border border-dashed border-base-300 bg-base-100/60 p-5 opacity-70" } else { "rounded-xl border border-base-300 bg-base-100 p-5 shadow-sm" },
                 {body}
             }
         },
     }
 }
 
-/// Soft coloured light behind a hero, in the theme's own colours.
+/// Buttons with shadcn proportions: medium weight, lg corners, no heavy shadow.
+const BTN_SOLID: &str = "btn btn-primary rounded-lg font-medium shadow-none";
+const BTN_OUTLINE: &str = "btn btn-outline rounded-lg font-medium border-base-300 hover:border-base-content/30 hover:bg-base-200 hover:text-base-content";
+
+/// The storm behind a hero: a storm-blue sky, a cyan glow, a gold flash of
+/// lightning, and a faint rain of dots fading towards the bottom.
 #[component]
-fn Glow() -> Element {
+fn Storm() -> Element {
     rsx! {
-        div { class: "pointer-events-none absolute -top-24 -right-24 h-72 w-72 rounded-full bg-primary/25 blur-3xl" }
-        div { class: "pointer-events-none absolute -bottom-32 left-1/3 h-72 w-72 rounded-full bg-secondary/20 blur-3xl" }
+        div { class: "pointer-events-none absolute inset-0 bg-linear-to-br from-secondary/15 via-transparent to-primary/5" }
+        div { class: "pointer-events-none absolute -top-28 -right-20 h-80 w-80 rounded-full bg-primary/25 blur-3xl" }
+        div { class: "pointer-events-none absolute top-6 left-1/3 h-40 w-56 rounded-full bg-accent/15 blur-3xl" }
+        div {
+            class: "pointer-events-none absolute inset-0 opacity-60",
+            style: "background-image: radial-gradient(color-mix(in oklab, var(--color-base-content) 18%, transparent) 1px, transparent 1px); \
+                    background-size: 18px 18px; \
+                    mask-image: linear-gradient(to bottom, black, transparent 85%); \
+                    -webkit-mask-image: linear-gradient(to bottom, black, transparent 85%);",
+        }
     }
 }
