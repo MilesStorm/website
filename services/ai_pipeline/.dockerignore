@@ -2,6 +2,7 @@
 # committed YOLO ONNX. Everything else here is local data, runs or build output.
 target/
 data/
+data_incoming/
 art/
 art_bk/
 runs/

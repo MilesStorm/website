@@ -16,3 +16,4 @@ crop_overrides.tsv.bak
 # Model weights ship as GitHub Release assets, never in git (no LFS).
 *.safetensors
 *.npy
+data_incoming/
