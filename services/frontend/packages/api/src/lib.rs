@@ -445,6 +445,61 @@ pub async fn has_arcane_permission(token: &str) -> bool {
     }
 }
 
+/// Whether the token's user shares roll pictures for training the dice reader
+/// (stored by auth; see `dataset_consent` there). Err when the user lacks
+/// `arcane` or auth can't be reached.
+#[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.dataset_consent", skip_all)]
+pub async fn dataset_consent(token: &str) -> Result<bool, String> {
+    use session::{auth_url, service_secret};
+
+    #[derive(Serialize)]
+    struct Req<'a> {
+        token: &'a str,
+    }
+    #[derive(Deserialize)]
+    struct Resp {
+        share: bool,
+    }
+    let resp = http_client()
+        .post(format!("{}/internal/dataset/consent", auth_url()))
+        .header("x-service-token", service_secret())
+        .json(&Req { token })
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("auth returned {}", resp.status()));
+    }
+    resp.json::<Resp>().await.map(|r| r.share).map_err(|e| e.to_string())
+}
+
+/// Record the token's user's choice to share roll pictures, with the version of
+/// the consent wording they saw.
+#[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.set_dataset_consent", skip_all, fields(share))]
+pub async fn set_dataset_consent(token: &str, share: bool, consent_version: &str) -> Result<(), String> {
+    use session::{auth_url, service_secret};
+
+    #[derive(Serialize)]
+    struct Req<'a> {
+        token: &'a str,
+        share: bool,
+        consent_version: &'a str,
+    }
+    let resp = http_client()
+        .post(format!("{}/internal/dataset/consent/set", auth_url()))
+        .header("x-service-token", service_secret())
+        .json(&Req { token, share, consent_version })
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("auth returned {}", resp.status()));
+    }
+    Ok(())
+}
+
 /// Check whether the current user holds a specific permission.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.check_permission", skip_all, fields(permission = %name))]

@@ -44,6 +44,8 @@ pub fn router(state: InternalState) -> Router<()> {
         .route("/internal/oauth/exchange", post(oauth_exchange))
         .route("/internal/ark/num_players", post(ark_num_players))
         .route("/internal/ark/command", post(ark_command))
+        .route("/internal/dataset/consent", post(dataset_consent_get))
+        .route("/internal/dataset/consent/set", post(dataset_consent_set))
         // Admin RBAC management
         .route("/internal/admin/users", get(admin_list_users))
         .route("/internal/admin/users/{user_id}/roles/{role_id}", post(admin_assign_user_role).delete(admin_revoke_user_role))
@@ -458,6 +460,102 @@ async fn resolve_ark_user(db: &PgPool, token: &str) -> Option<i64> {
     .unwrap_or(None);
 
     row.map(|(id,)| id)
+}
+
+// ---- Dice training-data consent ----
+//
+// Whether the user shares roll pictures to train the dice reader (the website's
+// profile switch). Only users with the `arcane` permission (the dice roller) have
+// a choice; the pictures themselves are stored by the website in SurrealDB.
+
+/// The token's user, if the token is valid and the user holds `arcane`.
+async fn resolve_arcane_user(db: &PgPool, token: &str) -> Option<i64> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT t.user_id FROM bff_tokens t
+        JOIN user_roles ur ON ur.user_id = t.user_id
+        JOIN role_permissions rp ON rp.role_id = ur.role_id
+        JOIN permissions p ON p.id = rp.permission_id
+        WHERE t.token = $1 AND t.expires_at > NOW() AND p.name = 'arcane'
+        LIMIT 1
+        "#,
+    )
+    .bind(token)
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
+
+    row.map(|(id,)| id)
+}
+
+#[derive(Serialize)]
+struct DatasetConsentResp {
+    share: bool,
+}
+
+#[tracing::instrument(name = "dataset.consent_get", skip_all)]
+async fn dataset_consent_get(
+    State(state): State<InternalState>,
+    Json(req): Json<ArkTokenReq>,
+) -> impl IntoResponse {
+    let Some(user_id) = resolve_arcane_user(&state.db, &req.token).await else {
+        return (StatusCode::FORBIDDEN, "No arcane permission").into_response();
+    };
+    let share: Result<Option<(bool,)>, _> =
+        sqlx::query_as("SELECT share FROM dataset_consent WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await;
+    match share {
+        // Never asked means not sharing.
+        Ok(row) => Json(DatasetConsentResp { share: row.is_some_and(|(s,)| s) }).into_response(),
+        Err(e) => {
+            tracing::error!(user_id, error = %e, "reading dataset consent failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct DatasetConsentSetReq {
+    token: String,
+    share: bool,
+    consent_version: String,
+}
+
+#[tracing::instrument(name = "dataset.consent_set", skip_all, fields(share = req.share))]
+async fn dataset_consent_set(
+    State(state): State<InternalState>,
+    Json(req): Json<DatasetConsentSetReq>,
+) -> impl IntoResponse {
+    let Some(user_id) = resolve_arcane_user(&state.db, &req.token).await else {
+        return (StatusCode::FORBIDDEN, "No arcane permission").into_response();
+    };
+    if req.consent_version.is_empty() || req.consent_version.len() > 32 {
+        return (StatusCode::BAD_REQUEST, "Invalid consent_version").into_response();
+    }
+    let res = sqlx::query(
+        r#"
+        INSERT INTO dataset_consent (user_id, share, consent_version) VALUES ($1, $2, $3)
+        ON CONFLICT (user_id) DO UPDATE
+            SET share = EXCLUDED.share, consent_version = EXCLUDED.consent_version, updated_at = NOW()
+        "#,
+    )
+    .bind(user_id)
+    .bind(req.share)
+    .bind(&req.consent_version)
+    .execute(&state.db)
+    .await;
+    match res {
+        Ok(_) => {
+            tracing::info!(user_id, share = req.share, "dataset consent changed");
+            Json(DatasetConsentResp { share: req.share }).into_response()
+        }
+        Err(e) => {
+            tracing::error!(user_id, error = %e, "saving dataset consent failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 #[tracing::instrument(name = "ark.num_players", skip_all)]

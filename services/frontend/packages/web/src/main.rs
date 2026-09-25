@@ -7,6 +7,13 @@ use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
 use views::{AdminPanel, Arcane, Ark, AssholeTimer, Landing, Login, NotFound, Profile, Register};
 
 mod views;
+#[cfg(not(target_arch = "wasm32"))]
+mod rolls;
+#[cfg(not(target_arch = "wasm32"))]
+mod capture;
+#[cfg(not(target_arch = "wasm32"))]
+mod dataset;
+mod sharing;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
@@ -132,12 +139,21 @@ fn server_launch() -> ! {
         .with(otel_log_layer)
         .init();
 
+    let store = dataset::Dataset::from_env();
+    if store.is_none() {
+        tracing::warn!("SURREAL_URL/SURREAL_USER/SURREAL_PASS not set: roll sharing and flagging are off");
+    }
+    // Taken by the first server start only (the schema is applied once per process).
+    let store = std::sync::Mutex::new(store);
+
     dioxus::serve(move || {
         let redis_url = redis_url.clone();
+        let store = store.lock().ok().and_then(|mut s| s.take());
         async move {
             use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
 
             let config = Config::from_url(&redis_url).expect("invalid Redis URL");
+            let roll_config = config.clone();
             let con_conf = ConnectionConfig {
                 tcp: TcpConfig {
                     nodelay: Some(true),
@@ -151,6 +167,7 @@ fn server_launch() -> ! {
                 },
                 ..Default::default()
             };
+            let roll_con_conf = con_conf.clone();
             let pool = Pool::new(
                 config,
                 None,
@@ -163,6 +180,12 @@ fn server_launch() -> ! {
             pool.wait_for_connect()
                 .await
                 .expect("failed to connect to Redis");
+            if let Some(store) = store {
+                tokio::spawn(dataset::start(store, pool.clone()));
+            }
+            let roll_hub = rolls::RollHub::connect(roll_config, roll_con_conf, pool.clone())
+                .await
+                .expect("failed to start the arcane roll subscriber");
             let session_store = RedisStore::new(pool);
 
             let layer = SessionManagerLayer::new(session_store)
@@ -178,10 +201,14 @@ fn server_launch() -> ! {
                 .route("/oauth/start/{provider}", get(oauth_start))
                 .route("/oauth/callback/{provider}", get(oauth_callback))
                 .route("/ws/arcane", get(arcane_ws_proxy))
+                .route("/api/arcane/me", get(rolls::arcane_me))
+                .route("/api/arcane/rolls", get(rolls::arcane_rolls))
+                .route("/api/arcane/flag", axum::routing::post(capture::arcane_flag))
                 .route(
                     "/metrics",
                     get(move || async move { metric_handle.render() }),
                 )
+                .layer(axum::Extension(roll_hub))
                 .layer(layer)
                 .layer(axum::middleware::from_fn(capture_traceparent))
                 .layer(OtelInResponseLayer)
@@ -195,33 +222,52 @@ fn server_launch() -> ! {
 // ---- Arcane WebSocket proxy ----
 
 /// Upgrades to WebSocket and bidirectionally proxies to the ai_pipeline inference service.
-/// Requires a valid session with the `arcane` permission; returns 401/403 otherwise.
+/// Requires a same-host Origin and a valid session with the `arcane` permission;
+/// returns 403/401 otherwise. Settled rolls are published for the user's other
+/// devices (see `rolls`).
 #[cfg(not(target_arch = "wasm32"))]
 async fn arcane_ws_proxy(
     ws: axum::extract::ws::WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+    axum::Extension(hub): axum::Extension<rolls::RollHub>,
     session: tower_sessions::Session,
 ) -> axum::response::Response {
     use axum::{http::StatusCode, response::IntoResponse};
 
-    let token: Option<String> = session.get("opaque_token").await.ok().flatten();
-    let Some(token) = token else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-
-    if !api::has_arcane_permission(&token).await {
-        tracing::warn!("arcane WebSocket rejected: permission denied");
+    if !rolls::origin_allowed(&headers) {
+        tracing::warn!(origin = ?headers.get(axum::http::header::ORIGIN), "arcane WebSocket rejected: foreign origin");
         return StatusCode::FORBIDDEN.into_response();
     }
+
+    let user = match rolls::arcane_user(&session).await {
+        Ok(u) => u,
+        Err(rolls::Denied::LoggedOut) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(rolls::Denied::NoPermission) => {
+            tracing::warn!("arcane WebSocket rejected: permission denied");
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    };
 
     let ai_url = std::env::var("AI_PIPELINE_SERVICE_URL")
         .unwrap_or_else(|_| "ws://localhost:9000".to_string());
 
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
-    ws.on_upgrade(move |socket| proxy_ws(socket, ai_url))
+    let session_id = session.id();
+    let token: String = session.get("opaque_token").await.ok().flatten().unwrap_or_default();
+    // Camera frames are a few hundred KB; anything much larger isn't a frame.
+    ws.max_message_size(4 * 1024 * 1024)
+        .on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user, token, session_id))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
+async fn proxy_ws(
+    client: axum::extract::ws::WebSocket,
+    upstream_url: String,
+    hub: rolls::RollHub,
+    user: String,
+    token: String,
+    session_id: Option<tower_sessions::session::Id>,
+) {
     use axum::extract::ws::Message as AxMsg;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TngMsg;
@@ -235,6 +281,14 @@ async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
     };
 
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
+    // Rolls go to Redis in order through one queue; never awaited here, so Redis
+    // latency can't stall the frame stream.
+    let rolls_tx = hub.publisher(user.clone());
+    // Separate queue for keeping roll pictures, so the database can't slow rolls.
+    let capture_tx = hub.capturer(user.clone(), token);
+    // Recent frames by number, to find the exact one each roll was read from.
+    let frames = std::sync::Mutex::new(capture::FrameRing::default());
+    let mut last_frame: Option<(u64, String)> = None;
     let (mut client_tx, mut client_rx) = client.split();
 
     tokio::select! {
@@ -243,6 +297,7 @@ async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
             while let Some(Ok(msg)) = client_rx.next().await {
                 match msg {
                     AxMsg::Binary(b) => {
+                        frames.lock().unwrap().push(&b);
                         if upstream_tx.send(TngMsg::Binary(b)).await.is_err() { break; }
                     }
                     AxMsg::Close(_) => break,
@@ -255,6 +310,22 @@ async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
             while let Some(Ok(msg)) = upstream_rx.next().await {
                 match msg {
                     TngMsg::Text(t) => {
+                        let (is_roll, seq) = reply_info(&t);
+                        if is_roll {
+                            if rolls_tx.try_send(t.to_string()).is_err() {
+                                tracing::warn!("arcane roll dropped: Redis publish queue full");
+                            }
+                            let job = capture::CaptureJob {
+                                roll: t.to_string(),
+                                frame: last_frame.take().filter(|(s, _)| Some(*s) == seq).map(|(_, f)| f),
+                                jpeg: seq.and_then(|s| frames.lock().unwrap().get(s)),
+                            };
+                            if capture_tx.try_send(job).is_err() {
+                                tracing::debug!("roll capture skipped: queue full");
+                            }
+                        } else if let Some(s) = seq {
+                            last_frame = Some((s, t.to_string()));
+                        }
                         if client_tx.send(AxMsg::Text(t.to_string().into())).await.is_err() { break; }
                     }
                     TngMsg::Close(_) => break,
@@ -262,7 +333,30 @@ async fn proxy_ws(client: axum::extract::ws::WebSocket, upstream_url: String) {
                 }
             }
         } => {}
+        // Logging out or losing the permission ends the camera session too.
+        _ = async {
+            let start = tokio::time::Instant::now() + rolls::RECHECK;
+            let mut recheck = tokio::time::interval_at(start, rolls::RECHECK);
+            loop {
+                recheck.tick().await;
+                if !hub.still_allowed(session_id, &user).await { break; }
+            }
+        } => {
+            tracing::info!("arcane WebSocket closed: session ended or permission removed");
+        }
     }
+}
+
+/// From an ai_pipeline reply (parsed once): whether it is a roll event, and its
+/// `frame_seq`, the number of the forwarded frame it was computed from.
+#[cfg(not(target_arch = "wasm32"))]
+fn reply_info(text: &str) -> (bool, Option<u64>) {
+    if !text.contains("\"frame_seq\"") {
+        return (rolls::is_roll(text), None);
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return (false, None) };
+    let is_roll = v.get("type").and_then(|t| t.as_str()) == Some("roll");
+    (is_roll, v.get("frame_seq").and_then(|s| s.as_u64()))
 }
 
 // ---- Trace context capture middleware ----

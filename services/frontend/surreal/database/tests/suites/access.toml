@@ -1,0 +1,83 @@
+# What each kind of login may do with these tables, in a throwaway database.
+# The real logins are created by the infrastructure repo; the fixture below makes
+# stand-ins with the same roles: dice = the website (EDITOR), dice_reader = the
+# training tool (VIEWER).
+# Run: see ../../../README.md
+name = "access"
+tags = ["access"]
+
+[[fixtures]]
+name = "test_logins"
+actor = "root"
+sql = """
+DEFINE USER dice ON DATABASE PASSWORD 'test-dice' ROLES EDITOR;
+DEFINE USER dice_reader ON DATABASE PASSWORD 'test-reader' ROLES VIEWER;
+"""
+
+[actors.dice]
+kind = "database"
+username = "dice"
+password = "test-dice"
+
+[actors.reader]
+kind = "database"
+username = "dice_reader"
+password = "test-reader"
+
+[[cases]]
+name = "website_saves_a_sample"
+kind = "sql_expect"
+actor = "dice"
+allow = true
+sql = """
+UPSERT roll_image:['ann', 'abc-00000001'] CONTENT { username: 'ann', jpeg: encoding::base64::decode('/9j/') };
+UPSERT roll_sample:['ann', 'abc-00000001'] CONTENT {
+    username: 'ann', roll_id: 'abc-00000001', roll: { dice: [] }, model: 'dice-head-v1',
+    image: roll_image:['ann', 'abc-00000001'], auto_reason: 'sampled'
+};
+"""
+
+[[cases]]
+name = "website_deletes_a_users_samples"
+kind = "sql_expect"
+actor = "dice"
+allow = true
+sql = "DELETE roll_sample WHERE username = 'ann'; DELETE roll_image WHERE username = 'ann'; CREATE dataset_deletion CONTENT { username: 'ann' };"
+
+[[cases]]
+name = "website_cannot_create_logins"
+kind = "sql_expect"
+actor = "dice"
+allow = false
+sql = "DEFINE USER sneaky ON DATABASE PASSWORD 'x' ROLES OWNER;"
+
+[[cases]]
+name = "pull_tool_reads"
+kind = "sql_expect"
+actor = "reader"
+allow = true
+sql = "SELECT * FROM roll_sample; SELECT * FROM dataset_deletion;"
+
+# A VIEWER's write is dropped without an error: CREATE just returns no record.
+# (Only the first statement's result is checked, so this is one statement.)
+[[cases]]
+name = "pull_tool_cannot_write"
+kind = "sql_expect"
+actor = "reader"
+allow = true
+sql = "CREATE roll_image CONTENT { username: 'ann', jpeg: encoding::base64::decode('/9j/') };"
+
+[[cases.assertions]]
+path = "0"
+exists = false
+
+[[cases]]
+name = "unknown_review_status_rejected"
+kind = "schema_behavior"
+action_sql = """
+CREATE roll_sample:['bob', 'abc-00000002'] CONTENT {
+    username: 'bob', roll_id: 'abc-00000002', roll: {}, model: 'x',
+    image: roll_image:['bob', 'abc-00000002'], review_status: 'maybe'
+};
+"""
+expect_success = false

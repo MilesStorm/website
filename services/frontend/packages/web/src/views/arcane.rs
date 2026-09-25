@@ -44,8 +44,11 @@ struct Detection {
     y2: f32,
     yolo_conf: f32,
     yolo_class: u32,
-    dice_class: u32,
     dice_conf: f32,
+    /// Face label ("1".."20", "0" for the d10 zero).
+    value: String,
+    /// False when the head is below the server's confidence threshold.
+    confident: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -55,12 +58,38 @@ struct InferResult {
     frame_ms: u64,
 }
 
+/// One die in a settled roll; `value` is None when it could not be read confidently.
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+struct RolledDie {
+    value: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, Deserialize)]
+struct RollEvent {
+    dice: Vec<RolledDie>,
+    total: Option<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 enum ServerMsg {
-    Result(InferResult),
+    Frame(InferResult),
+    Roll(RollEvent),
     Error { error: String },
+}
+
+/// "5 + 12 = 17", or "5 + ?" when a die could not be read (no total then).
+#[cfg(target_arch = "wasm32")]
+fn roll_text(roll: &RollEvent) -> String {
+    let dice: Vec<&str> = roll.dice.iter().map(|d| d.value.as_deref().unwrap_or("?")).collect();
+    let mut text = dice.join(" + ");
+    if let (Some(total), true) = (roll.total, dice.len() > 1) {
+        text.push_str(&format!(" = {total}"));
+    }
+    text
 }
 
 // ── component ─────────────────────────────────────────────────────────────────
@@ -73,10 +102,11 @@ fn ArcaneIsland() -> Element {
     let mut detect_count = use_signal(|| 0usize);
     let mut server_error = use_signal(|| Option::<String>::None);
     let mut debug_text = use_signal(|| String::new());
+    let mut last_roll = use_signal(|| Option::<String>::None);
 
     use_coroutine(move |_: UnboundedReceiver<()>| async move {
         #[cfg(target_arch = "wasm32")]
-        run_arcane(ws_state, frame_ms, debug_mode, detect_count, server_error, debug_text).await;
+        run_arcane(ws_state, frame_ms, debug_mode, detect_count, server_error, debug_text, last_roll).await;
     });
 
     rsx! {
@@ -118,6 +148,18 @@ fn ArcaneIsland() -> Element {
                     class: "absolute top-2 right-2 btn btn-xs btn-ghost bg-base-300/60 hover:bg-base-300",
                     onclick: move |_| debug_mode.set(!debug_mode()),
                     if debug_mode() { "✕ debug" } else { "debug" }
+                }
+            }
+
+            p { class: "w-full max-w-2xl text-center text-xs opacity-60",
+                "Your latest roll's picture is kept for 10 minutes so you can flag it as wrong from "
+                "the browser extension. It's only saved for training if you flag it or turn on "
+                "sharing in your profile."
+            }
+            div { class: "w-full max-w-2xl text-center text-2xl font-bold tabular-nums",
+                match last_roll() {
+                    Some(text) => rsx! { span { class: "text-base-content/50 font-normal", "Last roll: " } "{text}" },
+                    None => rsx! { span { class: "text-base-content/40 text-base font-normal italic", "Roll some dice" } },
                 }
             }
 
@@ -170,6 +212,7 @@ async fn run_arcane(
     mut detect_count: Signal<usize>,
     mut server_error: Signal<Option<String>>,
     mut debug_text: Signal<String>,
+    mut last_roll: Signal<Option<String>>,
 ) {
     use std::{cell::RefCell, rc::Rc};
     use wasm_bindgen::{closure::Closure, JsCast, JsValue};
@@ -178,6 +221,11 @@ async fn run_arcane(
         CanvasRenderingContext2d, HtmlCanvasElement, HtmlMediaElement, HtmlVideoElement,
         MediaStreamConstraints, WebSocket,
     };
+
+    // Turns the camera off and closes the connection however this ends: the page is
+    // left (Dioxus drops this future when the component unmounts), an error, or a
+    // closed connection. Declared first so it outlives everything below.
+    let mut session = CameraSession::default();
 
     macro_rules! bail {
         ($msg:expr) => {{
@@ -201,13 +249,27 @@ async fn run_arcane(
     let mut constraints = MediaStreamConstraints::new();
     constraints.video(&JsValue::TRUE);
 
-    let stream_js = match JsFuture::from(
-        media_devices
-            .get_user_media_with_constraints(&constraints)
-            .unwrap(),
-    )
-    .await
+    let request = match media_devices.get_user_media_with_constraints(&constraints) {
+        Ok(p) => p,
+        Err(_) => bail!("camera unavailable"),
+    };
+    // If the page is left while the browser is still asking for permission or starting
+    // the camera, nothing awaits the result any more: stop that stream as it arrives.
+    // (A separate browser task, so it still runs after this future is dropped.)
     {
+        let left = session.left.clone();
+        let request = request.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(s) = JsFuture::from(request).await {
+                if left.get() {
+                    if let Ok(s) = s.dyn_into::<web_sys::MediaStream>() {
+                        stop_tracks(&s);
+                    }
+                }
+            }
+        });
+    }
+    let stream_js = match JsFuture::from(request).await {
         Ok(s) => s,
         Err(_) => bail!("camera permission denied"),
     };
@@ -226,6 +288,10 @@ async fn run_arcane(
     video
         .unchecked_ref::<HtmlMediaElement>()
         .set_src_object(Some(&stream));
+    // Moved, not `.clone()`d: web-sys's MediaStream::clone is the browser's
+    // MediaStream.clone(), which opens a second stream on the camera.
+    session.stream = Some(stream);
+    session.video = Some(video.clone());
 
     // Wait until the browser knows the video dimensions.
     JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
@@ -284,6 +350,7 @@ async fn run_arcane(
         Err(e) => bail!(format!("ws: {e:?}")),
     };
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
+    session.ws = Some(ws.clone());
 
     // Wait for the WS handshake.
     JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
@@ -308,7 +375,7 @@ async fn run_arcane(
         let cb = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MessageEvent| {
             if let Some(text) = e.data().as_string() {
                 match serde_json::from_str::<ServerMsg>(&text) {
-                    Ok(ServerMsg::Result(result)) => {
+                    Ok(ServerMsg::Frame(result)) => {
                         frame_ms.set(result.frame_ms);
                         detect_count.set(result.detections.len());
                         server_error.set(None);
@@ -318,7 +385,7 @@ async fn run_arcane(
                         for (i, d) in result.detections.iter().enumerate() {
                             dbg.push_str(&format!(
                                 "det[{i}] dice={} ({:.1}%)  yolo_cls={} yolo_conf={:.1}%  bbox=[{:.3},{:.3} → {:.3},{:.3}]\n",
-                                dice_value(d.dice_class),
+                                d.value,
                                 d.dice_conf * 100.0,
                                 d.yolo_class,
                                 d.yolo_conf * 100.0,
@@ -328,6 +395,7 @@ async fn run_arcane(
                         debug_text.set(dbg);
                         *latest.borrow_mut() = Some(result);
                     }
+                    Ok(ServerMsg::Roll(roll)) => last_roll.set(Some(roll_text(&roll))),
                     Ok(ServerMsg::Error { error }) => {
                         server_error.set(Some(error));
                         detect_count.set(0);
@@ -379,6 +447,49 @@ async fn run_arcane(
     }
 }
 
+/// What the Arcane page holds open while it runs. Dropping it (page left, error, or
+/// connection closed) stops the camera, so the browser's camera indicator goes off,
+/// and closes the connection to the dice server.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct CameraSession {
+    /// Set once the page is gone; read by a camera start-up still in flight.
+    left: std::rc::Rc<std::cell::Cell<bool>>,
+    stream: Option<web_sys::MediaStream>,
+    video: Option<web_sys::HtmlVideoElement>,
+    ws: Option<std::rc::Rc<web_sys::WebSocket>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for CameraSession {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        self.left.set(true);
+        if let Some(stream) = self.stream.take() {
+            stop_tracks(&stream);
+        }
+        if let Some(video) = self.video.take() {
+            video.unchecked_ref::<web_sys::HtmlMediaElement>().set_src_object(None);
+        }
+        if let Some(ws) = self.ws.take() {
+            ws.set_onopen(None);
+            ws.set_onmessage(None);
+            let _ = ws.close();
+        }
+    }
+}
+
+/// Stops every track of a camera stream (releases the camera).
+#[cfg(target_arch = "wasm32")]
+fn stop_tracks(stream: &web_sys::MediaStream) {
+    use wasm_bindgen::JsCast;
+    for track in stream.get_tracks().iter() {
+        if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
+            track.stop();
+        }
+    }
+}
+
 /// Tick the async event loop for `ms` milliseconds using a JS setTimeout.
 #[cfg(target_arch = "wasm32")]
 async fn sleep_ms(ms: i32) {
@@ -408,7 +519,9 @@ fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: 
         let bw = (det.x2 - det.x1) as f64 * w;
         let bh = (det.y2 - det.y1) as f64 * h;
 
-        let color = if debug {
+        let color = if !det.confident {
+            "rgba(156,163,175,0.95)"
+        } else if debug {
             if det.dice_conf >= 0.8 {
                 "rgba(52,211,153,0.95)"
             } else if det.dice_conf >= 0.5 {
@@ -425,16 +538,18 @@ fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: 
         ctx.set_line_width(2.5);
         ctx.stroke_rect(x, y, bw, bh);
 
-        // Label
+        // Label: below the confidence threshold the value is not shown as a guess.
         let label = if debug {
             format!(
                 "{} {:.0}% | y:{:.0}%",
-                dice_value(det.dice_class),
+                det.value,
                 det.dice_conf * 100.0,
                 det.yolo_conf * 100.0,
             )
+        } else if det.confident {
+            format!("{} {:.0}%", det.value, det.dice_conf * 100.0)
         } else {
-            format!("{} {:.0}%", dice_value(det.dice_class), det.dice_conf * 100.0)
+            "?".to_string()
         };
 
         ctx.set_font("bold 13px monospace");
@@ -444,17 +559,5 @@ fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: 
         ctx.fill_rect(x, y - 18.0, pill_w, 17.0);
         ctx.set_fill_style(&JsValue::from_str(color));
         ctx.fill_text(&label, x + 3.0, y - 4.0).ok();
-    }
-}
-
-/// Map the model's class index back to the die face label.
-/// Training used: class 0-8 → faces "1"-"9", class 9 → "0", class 10-20 → "10"-"20"
-#[cfg(target_arch = "wasm32")]
-fn dice_value(class: u32) -> String {
-    match class {
-        0..=8 => (class + 1).to_string(),
-        9 => "0".to_string(),
-        10..=20 => class.to_string(),
-        _ => "?".to_string(),
     }
 }
