@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arcane Dice</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Arcane Dice</h1>
+      <p id="status" class="status" data-kind="connecting">Connecting…</p>
+      <button id="login" type="button" hidden>Log in on the website</button>
+    </header>
+
+    <main id="roll" hidden>
+      <p class="label">Last roll <span id="when"></span></p>
+      <ul id="dice" class="dice"></ul>
+      <p id="total" class="total"></p>
+      <p id="unreadable" class="warning" hidden></p>
+    </main>
+
+    <p id="empty" class="empty" hidden>No rolls yet. Open the Arcane page on any device and roll.</p>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

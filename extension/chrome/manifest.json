@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Arcane Dice",
+  "version": "0.1.0",
+  "description": "Shows your latest dice roll from the Arcane dice tray on milesstorm.com.",
+  "minimum_chrome_version": "116",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["https://milesstorm.com/*", "http://localhost:8080/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "action": { "default_title": "Show dice rolls" },
+  "options_ui": { "page": "options.html", "open_in_tab": false }
+}
