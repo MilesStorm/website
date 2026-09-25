@@ -27,8 +27,10 @@ Started 2026-09-24. This file is the durable record: decisions, results, tools a
 | YOLO26s number detector (Python-trained, ONNX → burn) | **Good** | mAP50 0.98, P 0.96, R 0.97 (`runs/dice_det/train_self`) |
 | Head labels | **Cleaned by the owner** | `crop_overrides.tsv`: 682 relabelled, 45 dropped (unreadable) of 733 wrong-face crops |
 | Best head: ImageNet ResNet18, PyTorch | **~94% always-answer; ~97–98% when abstaining** | see results below |
-| Shipped weights | **Broken** | `weights/model/model.bpk` is the old 128px burn head; it does not load into the current code |
-| Rust serving of a PyTorch-trained head | **Not built yet** | ONNX exports exist per run (`runs/head_torch/*/model.onnx`), verified vs PyTorch with onnxruntime only |
+| Shipped weights (updated 2026-09-25) | **ResNet18, from a GitHub release** | `dice_head_resnet18.safetensors` (release `dice-head-v1`), SHA-256 pinned in the Dockerfile. The old `weights/model/model.bpk` is unused |
+| Rust serving of the PyTorch head (updated 2026-09-25) | **Done** | `src/model/resnet.rs`; parity test: max prob diff 4.4e-5, 256/256 same answer |
+| Roll detection + abstain (updated 2026-09-25) | **Done** | `src/roll.rs`: waits for dice to settle, votes over frames, reports unsure dice as unreadable (threshold 0.7) |
+| End to end: camera page → website → Chrome extension (updated 2026-09-25) | **Built, tested locally** | website `/api/arcane/rolls` (live stream) and `extension/chrome/`; see `.omc/handoffs/e2e-dice-rolls.md` |
 
 ### How the head is measured
 Out-of-fold over all 17,597 crops: every crop is scored by a model trained without it, held out by
