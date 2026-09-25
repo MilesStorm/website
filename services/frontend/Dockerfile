@@ -1,11 +1,9 @@
-FROM lukemathwalker/cargo-chef:latest AS chef
-
-FROM chef AS planner
-WORKDIR /app
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef AS builder
+# syntax=docker/dockerfile:1.7
+# No cargo-chef: `dx bundle` builds with its own profiles and features, so a
+# `cargo chef cook` layer was never reused (it compiled every dependency a second
+# time). Caching comes from building on eta's own Docker, which keeps unchanged
+# layers between CI runs.
+FROM rust:1-trixie AS builder
 # clang: required by ring (via jsonwebtoken) for wasm32
 # nodejs: required to run tailwindcss + daisyui to generate CSS before dx bundle
 RUN apt-get update && \
@@ -14,9 +12,6 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=planner /app/recipe.json recipe.json
-# Cook native server deps; dx bundle manages the WASM dep compilation internally
-RUN cargo chef cook --release --recipe-path recipe.json
 
 # Install dioxus-cli
 RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
@@ -35,7 +30,13 @@ RUN npm install && \
 
 # Run dx bundle from the package directory so Dioxus.toml is picked up
 WORKDIR /app/packages/web
-RUN dx bundle --platform web --release --debug-symbols=false
+# Cache folders kept on the build machine (eta) between builds: downloaded crates
+# and compiled code, so a code change only recompiles what changed. They are not
+# part of the image; `dist/` (outside target/) is what the next stage copies.
+RUN --mount=type=cache,id=frontend-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=frontend-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=frontend-target,target=/app/target,sharing=locked \
+    dx bundle --platform web --release --debug-symbols=false
 
 FROM debian:trixie-slim AS runtime
 RUN apt-get update && \
