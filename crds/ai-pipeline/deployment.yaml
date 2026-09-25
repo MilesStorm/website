@@ -40,7 +40,10 @@ spec:
           - name: YOLO_MODEL_PATH
             value: "/app/models/yolo26s.bpk"
           - name: DICE_HEAD_PATH
-            value: "/app/weights"
+            value: "/app/models/dice_head_resnet18.safetensors"
+          # Below this averaged confidence a die is reported as unreadable, never guessed.
+          - name: DICE_CONF_THRESHOLD
+            value: "0.7"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: "http://alloy.monitoring.svc.cluster.local:4317"
       imagePullSecrets:

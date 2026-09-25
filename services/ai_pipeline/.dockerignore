@@ -1,0 +1,20 @@
+# Keep the build context to what the image needs: sources, Cargo files, the
+# committed YOLO ONNX. Everything else here is local data, runs or build output.
+target/
+data/
+art/
+art_bk/
+runs/
+weights/
+.omc/
+.cargo/
+.venv/
+tools/
+*.pt
+*.safetensors
+*.f32
+*.npy
+ai-pipeline.txt
+test.html
+crop_overrides.tsv*
+src/model/yolo26x.onnx

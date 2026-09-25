@@ -8,7 +8,8 @@ Started 2026-09-24. This file is the durable record: decisions, results, tools a
 ## Decisions (owner's calls, 2026-09-24)
 - **Train in Python, serve in burn.** Same DiceHead, same split: 0.5 min in PyTorch vs ~36 min in burn, and
   79.9% vs 51.5% held-out. The burn trainer's LR-schedule bug was real (fixed in `src/model/training.rs`) but did not
-  close that gap (experiment_42); cause unknown, not worth chasing. Burn is the production inference runtime only.
+  close that gap (experiment_42). **Found 2026-09-24:** the burn loaders and the serving crop packed interleaved RGB into an
+  [N,3,H,W] tensor, scrambling every image; almost certainly the cause. Fixed with `pack_chw` (commit 32d78070); not re-measured in burn. Burn is the production inference runtime only.
   The burn training code is kept but unused.
 - **Labels are reviewed by a human, never by a model's judgement of images.** Tools: `tools/review_server.py` (mark
   wrong crops) → `tools/relabel_server.py` (give them their real number). Results live in `crop_overrides.tsv`.
