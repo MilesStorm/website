@@ -246,8 +246,14 @@ async fn run_arcane(
         Err(_) => bail!("camera unavailable"),
     };
 
-    let mut constraints = MediaStreamConstraints::new();
-    constraints.video(&JsValue::TRUE);
+    // Prefer the back camera: on a phone it's the one pointing at the dice tray.
+    // `ideal` (not `exact`) so devices with a single camera still use theirs.
+    let video_constraints = js_sys::Object::new();
+    let facing = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&facing, &"ideal".into(), &"environment".into());
+    let _ = js_sys::Reflect::set(&video_constraints, &"facingMode".into(), &facing);
+    let constraints = MediaStreamConstraints::new();
+    constraints.set_video(&video_constraints);
 
     let request = match media_devices.get_user_media_with_constraints(&constraints) {
         Ok(p) => p,
