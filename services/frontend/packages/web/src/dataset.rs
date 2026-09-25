@@ -358,6 +358,67 @@ impl Dataset {
         self.query(SAVE, vars).await?;
         Ok(())
     }
+
+    /// The account's profile picture (JPEG) and when it was last changed (ms since
+    /// 1970, used to tell browsers a new one exists), if it has one.
+    pub async fn profile_picture(&self, user_id: i64) -> anyhow::Result<Option<(Vec<u8>, i64)>> {
+        let r = self
+            .query(
+                "SELECT encoding::base64::encode(jpeg) AS jpeg, time::millis(updated_at) AS version \
+                 FROM ONLY type::record('profile_picture', $id);",
+                json!({"id": user_id}),
+            )
+            .await?;
+        let Some(row) = r.first().filter(|v| v.is_object()) else { return Ok(None) };
+        let jpeg = row.get("jpeg").and_then(Value::as_str).unwrap_or_default();
+        // SurrealDB's `encoding::base64::encode` leaves out the `=` padding.
+        const ANY_PADDING: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new()
+                .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+        );
+        let jpeg = ANY_PADDING.decode(jpeg)?;
+        let version = row.get("version").and_then(Value::as_i64).unwrap_or(0);
+        Ok(Some((jpeg, version)))
+    }
+
+    /// When the account's profile picture was last changed (see `profile_picture`),
+    /// without loading it. `None` when it has none.
+    pub async fn profile_picture_version(&self, user_id: i64) -> anyhow::Result<Option<i64>> {
+        let r = self
+            .query(
+                "SELECT VALUE time::millis(updated_at) FROM ONLY type::record('profile_picture', $id);",
+                json!({"id": user_id}),
+            )
+            .await?;
+        Ok(r.first().and_then(Value::as_i64))
+    }
+
+    /// Replace the account's profile picture; returns its new version.
+    pub async fn set_profile_picture(&self, user_id: i64, jpeg: &[u8]) -> anyhow::Result<i64> {
+        let r = self
+            .query(
+                "UPSERT type::record('profile_picture', $id) \
+                 CONTENT { jpeg: encoding::base64::decode($jpeg) } \
+                 RETURN VALUE time::millis(updated_at);",
+                json!({"id": user_id, "jpeg": base64::engine::general_purpose::STANDARD.encode(jpeg)}),
+            )
+            .await?;
+        r.first()
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("surrealdb: no version returned"))
+    }
+
+    pub async fn delete_profile_picture(&self, user_id: i64) -> anyhow::Result<()> {
+        self.query(
+            "DELETE type::record('profile_picture', $id) RETURN NONE;",
+            json!({"id": user_id}),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 /// Whether the session's user shares roll pictures (asked fresh each time, so

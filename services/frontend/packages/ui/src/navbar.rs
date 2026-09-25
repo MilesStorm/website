@@ -19,9 +19,13 @@ pub fn Navbarr(children: Element) -> Element {
 /// Full DaisyUI navbar. `user` drives the profile dropdown.
 /// `on_logout` is called when the user clicks Logout.
 /// `has_ark` / `has_arcane` / `has_admin` gate the permission-protected nav items.
+/// `name` (display name) and `picture` (image URL) replace the username and the
+/// default avatar when set.
 #[component]
 pub fn Navbar(
     user: LoginStatus,
+    name: Option<String>,
+    picture: Option<String>,
     on_logout: EventHandler<()>,
     has_ark: bool,
     has_arcane: bool,
@@ -91,7 +95,11 @@ pub fn Navbar(
                     div { class: "dropdown dropdown-end",
                         label { tabindex: "0", class: "btn btn-ghost btn-circle avatar",
                             div { class: "w-10 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2",
-                                default_profile_picture { width: 40, height: 40 }
+                                if let Some(src) = picture {
+                                    img { src: "{src}", alt: "Profile picture", width: 40, height: 40 }
+                                } else {
+                                    default_profile_picture { width: 40, height: 40 }
+                                }
                             }
                         }
                         ul { tabindex: "0",
@@ -102,7 +110,7 @@ pub fn Navbar(
                                     li { Link { class: "underline font-bold", to: "/register", "Register" } }
                                 },
                                 LoginStatus::LoggedIn(username) => rsx! {
-                                    li { Link { to: "/profile", "Profile: {username}" } }
+                                    li { Link { to: "/profile", "Profile: {name.as_deref().unwrap_or(username)}" } }
                                     li {
                                         button {
                                             onclick: move |_| on_logout.call(()),

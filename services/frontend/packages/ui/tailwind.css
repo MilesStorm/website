@@ -5,3 +5,27 @@
 }
 @source "./src/**/*.{rs,html,css}";
 @source "../web/src/**/*.rs";
+/* Watch this file too: `dx serve` runs Tailwind from packages/web, and Tailwind's
+   watcher only notices edits to the input file when it is also a source. */
+@source "./tailwind.css";
+
+/* Site colours ("storm"): cyan-blue primary, storm-blue secondary and a
+   lightning-gold accent for small highlights, replacing
+   daisyUI's default purple/pink in the dark and light themes (the "system" theme
+   uses dark). Other themes keep their own colours. */
+[data-theme="dark"] {
+  --color-primary: oklch(77% 0.125 222);
+  --color-primary-content: oklch(21% 0.04 230);
+  --color-secondary: oklch(60% 0.2 264);
+  --color-secondary-content: oklch(97% 0.02 264);
+  --color-accent: oklch(84% 0.15 85);
+  --color-accent-content: oklch(24% 0.05 70);
+}
+[data-theme="light"] {
+  --color-primary: oklch(55% 0.13 230);
+  --color-primary-content: oklch(98.5% 0.01 230);
+  --color-secondary: oklch(46% 0.21 266);
+  --color-secondary-content: oklch(98.5% 0.01 250);
+  --color-accent: oklch(68% 0.16 65);
+  --color-accent-content: oklch(20% 0.04 60);
+}

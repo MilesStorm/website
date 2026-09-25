@@ -500,6 +500,69 @@ pub async fn set_dataset_consent(token: &str, share: bool, consent_version: &str
     Ok(())
 }
 
+/// The token's own account, as the profile page shows it.
+#[cfg(feature = "server")]
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccountProfile {
+    /// Permanent id; never shown, used to key the user's profile picture.
+    pub user_id: i64,
+    pub username: String,
+    pub display_name: Option<String>,
+}
+
+/// Why a profile request failed.
+#[cfg(feature = "server")]
+#[derive(Debug)]
+pub enum ProfileError {
+    /// Auth refused the value (e.g. a display name that is too long).
+    Invalid,
+    /// The session's token is no longer valid.
+    LoggedOut,
+    Other(String),
+}
+
+#[cfg(feature = "server")]
+async fn profile_call<T: Serialize>(path: &str, body: &T) -> Result<AccountProfile, ProfileError> {
+    use session::{auth_url, service_secret};
+
+    let resp = http_client()
+        .post(format!("{}{path}", auth_url()))
+        .header("x-service-token", service_secret())
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| ProfileError::Other(e.to_string()))?;
+    match resp.status() {
+        s if s.is_success() => resp.json().await.map_err(|e| ProfileError::Other(e.to_string())),
+        reqwest::StatusCode::BAD_REQUEST => Err(ProfileError::Invalid),
+        reqwest::StatusCode::UNAUTHORIZED => Err(ProfileError::LoggedOut),
+        s => Err(ProfileError::Other(format!("auth returned {s}"))),
+    }
+}
+
+/// The token's account.
+#[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.account_profile", skip_all)]
+pub async fn account_profile(token: &str) -> Result<AccountProfile, ProfileError> {
+    #[derive(Serialize)]
+    struct Req<'a> {
+        token: &'a str,
+    }
+    profile_call("/internal/profile", &Req { token }).await
+}
+
+/// Set (or with `None`/blank, clear) the token's account's display name.
+#[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.set_display_name", skip_all)]
+pub async fn set_display_name(token: &str, display_name: Option<&str>) -> Result<AccountProfile, ProfileError> {
+    #[derive(Serialize)]
+    struct Req<'a> {
+        token: &'a str,
+        display_name: Option<&'a str>,
+    }
+    profile_call("/internal/profile/display_name", &Req { token, display_name }).await
+}
+
 /// Check whether the current user holds a specific permission.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.check_permission", skip_all, fields(permission = %name))]
