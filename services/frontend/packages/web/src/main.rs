@@ -143,10 +143,12 @@ fn server_launch() -> ! {
     if store.is_none() {
         tracing::warn!("SURREAL_URL/SURREAL_USER/SURREAL_PASS not set: roll sharing and flagging are off");
     }
-    let _ = dataset::DATASET.set(store);
+    // Taken by the first server start only (the schema is applied once per process).
+    let store = std::sync::Mutex::new(store);
 
     dioxus::serve(move || {
         let redis_url = redis_url.clone();
+        let store = store.lock().ok().and_then(|mut s| s.take());
         async move {
             use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
 
@@ -178,6 +180,9 @@ fn server_launch() -> ! {
             pool.wait_for_connect()
                 .await
                 .expect("failed to connect to Redis");
+            if let Some(store) = store {
+                tokio::spawn(dataset::start(store, pool.clone()));
+            }
             let roll_hub = rolls::RollHub::connect(roll_config, roll_con_conf, pool.clone())
                 .await
                 .expect("failed to start the arcane roll subscriber");

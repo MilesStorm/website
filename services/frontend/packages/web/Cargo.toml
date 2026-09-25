@@ -35,10 +35,13 @@ axum-tracing-opentelemetry = { version = "0.25", features = ["tracing_level_info
 axum-prometheus = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 # Same fred the session store re-exports; `subscriber-client` adds the
-# auto-resubscribing client used for live arcane rolls (src/rolls.rs).
-fred = { version = "10.1", default-features = false, features = ["subscriber-client"] }
+# auto-resubscribing client used for live arcane rolls (src/rolls.rs); `i-scripts`
+# the compare-and-delete of the schema lock (src/dataset.rs).
+fred = { version = "10.1", default-features = false, features = ["subscriber-client", "i-scripts"] }
 # Roll-sharing store (SurrealDB over HTTP /rpc; src/dataset.rs).
 reqwest = { workspace = true }
+# Applies the roll-sharing tables (surreal/database/schema) at startup.
+surrealkit = "=0.7.0"
 base64 = "0.22" 
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

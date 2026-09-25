@@ -1,17 +1,28 @@
-# What each login may do, checked against the synced schema in a throwaway database.
-# Run: surrealkit test (see ../../../README.md)
+# What each kind of login may do with these tables, in a throwaway database.
+# The real logins are created by the infrastructure repo; the fixture below makes
+# stand-ins with the same roles: dice = the website (EDITOR), dice_reader = the
+# training tool (VIEWER).
+# Run: see ../../../README.md
 name = "access"
 tags = ["access"]
+
+[[fixtures]]
+name = "test_logins"
+actor = "root"
+sql = """
+DEFINE USER dice ON DATABASE PASSWORD 'test-dice' ROLES EDITOR;
+DEFINE USER dice_reader ON DATABASE PASSWORD 'test-reader' ROLES VIEWER;
+"""
 
 [actors.dice]
 kind = "database"
 username = "dice"
-password_env = "SURREALKIT_VAR_DICE_PASSWORD"
+password = "test-dice"
 
 [actors.reader]
 kind = "database"
 username = "dice_reader"
-password_env = "SURREALKIT_VAR_DICE_READER_PASSWORD"
+password = "test-reader"
 
 [[cases]]
 name = "website_saves_a_sample"

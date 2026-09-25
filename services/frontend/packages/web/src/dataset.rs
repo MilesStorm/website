@@ -6,14 +6,20 @@
 //!
 //! Talks to SurrealDB's HTTP `/rpc` endpoint with JSON and Basic auth as the
 //! database-level `dice` user. Pictures travel as base64 and are stored as bytes.
+//!
+//! The tables are defined in `surreal/database/schema/` and applied by the website
+//! itself at startup with surrealkit (like auth's sqlx migrations). The store only
+//! becomes available once they are, so nothing is written before the tables exist.
 //! Every failure is logged and swallowed by callers: training data must never break
 //! the camera stream.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use base64::Engine as _;
 use serde_json::{json, Value};
+use tower_sessions_redis_store::fred::prelude::*;
 
 /// Bump when the consent wording on the profile page changes (stored by auth).
 pub const CONSENT_VERSION: &str = "1";
@@ -23,11 +29,151 @@ const DEFAULT_SAMPLE_EVERY: u32 = 20;
 /// Per request; a slow store only delays the capture worker, never live rolls.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Set once at startup; None when the store isn't configured (e.g. local dev).
-pub static DATASET: OnceLock<Option<Dataset>> = OnceLock::new();
+// The table definitions, compiled in (`build.rs` rebuilds when files are added).
+surrealkit::embed_schema!("../../surreal/database/schema");
 
+/// The configured store, set at startup ([`start`]); unset in local dev without
+/// SurrealDB settings.
+static STORE: OnceLock<Dataset> = OnceLock::new();
+/// Whether the schema has been applied by this process ([`start`]).
+static SCHEMA_READY: AtomicBool = AtomicBool::new(false);
+
+/// The store, for saving: only once the schema is applied, so nothing is written
+/// before the tables exist. None means sharing and flagging are off.
 pub fn dataset() -> Option<&'static Dataset> {
-    DATASET.get().and_then(Option::as_ref)
+    SCHEMA_READY.load(Ordering::Acquire).then(|| STORE.get()).flatten()
+}
+
+/// The store whenever it's configured, schema applied or not. Only for deleting what
+/// users shared: that must keep working even while the schema step can't finish.
+pub fn configured() -> Option<&'static Dataset> {
+    STORE.get()
+}
+
+/// One attempt to apply the schema may take this long before it's given up.
+const SCHEMA_ATTEMPT_LIMIT: Duration = Duration::from_secs(600);
+const SCHEMA_RETRY_MAX: Duration = Duration::from_secs(60);
+/// While one replica is waiting for the other, it logs this often.
+const SCHEMA_WAIT_LOG: Duration = Duration::from_secs(60);
+
+/// Applies the schema once per process, one replica at a time (see [`SchemaLock`]),
+/// retrying until SurrealDB accepts it, then turns sharing on (like sqlx migrations
+/// at startup). Runs in the background: the website serves pages meanwhile.
+pub async fn start(store: Dataset, redis: Pool) {
+    let _ = STORE.set(store.clone());
+    let lock = SchemaLock::new(redis);
+    let mut delay = Duration::from_secs(1);
+    let mut waiting_since: Option<tokio::time::Instant> = None;
+    loop {
+        match lock.acquire().await {
+            Ok(true) => waiting_since = None,
+            Ok(false) => {
+                let since = *waiting_since.get_or_insert_with(tokio::time::Instant::now);
+                let waited = since.elapsed();
+                if waited.as_secs() % SCHEMA_WAIT_LOG.as_secs() < SchemaLock::POLL.as_secs() {
+                    tracing::info!(waited_s = waited.as_secs(), "roll-sharing schema: another replica is applying it; waiting");
+                }
+                tokio::time::sleep(SchemaLock::POLL).await;
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, retry_in = ?delay, "roll-sharing schema: Redis lock failed");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(SCHEMA_RETRY_MAX);
+                continue;
+            }
+        }
+        match lock.hold_while(tokio::time::timeout(SCHEMA_ATTEMPT_LIMIT, store.apply_schema())).await {
+            Ok(Ok(())) => {
+                lock.release().await;
+                break;
+            }
+            Ok(Err(e)) => {
+                lock.release().await;
+                tracing::warn!(error = %format!("{e:#}"), retry_in = ?delay, "applying the roll-sharing schema failed");
+            }
+            // Not released: SurrealDB may still be running the abandoned statements,
+            // and another replica must not start alongside them. The lock expires
+            // SchemaLock::TTL after its last renewal.
+            Err(_) => tracing::warn!(retry_in = ?delay, "applying the roll-sharing schema timed out"),
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(SCHEMA_RETRY_MAX);
+    }
+    SCHEMA_READY.store(true, Ordering::Release);
+    tracing::info!("roll-sharing schema applied; sharing and flagging are on");
+}
+
+/// Makes replicas take turns applying the schema: two surrealkit runs at once leave
+/// its bookkeeping (`__entity`) inconsistent, and every later run then fails (seen
+/// with two replicas starting together). The lock lives in Redis, which all
+/// replicas share, under a token only this process knows; it is renewed while held
+/// and expires by itself if the holder dies.
+struct SchemaLock {
+    redis: Pool,
+    token: String,
+}
+
+impl SchemaLock {
+    const KEY: &'static str = "arcane:schema_lock";
+    const TTL: Duration = Duration::from_secs(30);
+    const RENEW_EVERY: Duration = Duration::from_secs(10);
+    /// How often a waiting replica checks whether the lock is free.
+    const POLL: Duration = Duration::from_secs(2);
+    /// Extend or delete the lock only while it still holds our token.
+    const RENEW: &'static str =
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end";
+    const RELEASE: &'static str =
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
+    fn new(redis: Pool) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let host = std::env::var("HOSTNAME").unwrap_or_default();
+        Self { redis, token: format!("{host}:{}:{nanos}", std::process::id()) }
+    }
+
+    /// True once this process holds the lock; false while another one does.
+    async fn acquire(&self) -> Result<bool, Error> {
+        let ttl = Some(Expiration::PX(Self::TTL.as_millis() as i64));
+        let set: Option<String> = self.redis.set(Self::KEY, self.token.as_str(), ttl, Some(SetOptions::NX), false).await?;
+        if set.is_some() {
+            return Ok(true);
+        }
+        // A retried SET whose first reply was lost also answers "exists": check whose.
+        let holder: Option<String> = self.redis.get(Self::KEY).await?;
+        Ok(holder.as_deref() == Some(self.token.as_str()))
+    }
+
+    /// Runs `work`, renewing the lock meanwhile so it can't expire under a slow run.
+    async fn hold_while<T>(&self, work: impl std::future::Future<Output = T>) -> T {
+        tokio::pin!(work);
+        let mut renew = tokio::time::interval(Self::RENEW_EVERY);
+        renew.tick().await; // the first tick is immediate
+        loop {
+            tokio::select! {
+                out = &mut work => return out,
+                _ = renew.tick() => {
+                    let ttl = Self::TTL.as_millis().to_string();
+                    let renewed: Result<i64, _> = self.redis.eval(Self::RENEW, vec![Self::KEY], vec![self.token.as_str(), ttl.as_str()]).await;
+                    match renewed {
+                        Ok(1) => {}
+                        Ok(_) => tracing::error!("roll-sharing schema: lost the Redis lock while applying"),
+                        Err(e) => tracing::warn!(error = %e, "roll-sharing schema: renewing the Redis lock failed"),
+                    }
+                }
+            }
+        }
+    }
+
+    async fn release(&self) {
+        let released: Result<i64, _> = self.redis.eval(Self::RELEASE, vec![Self::KEY], vec![self.token.as_str()]).await;
+        if let Err(e) = released {
+            // It expires by itself; the other replica just waits a little longer.
+            tracing::warn!(error = %e, "roll-sharing schema: releasing the Redis lock failed");
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -37,6 +183,8 @@ pub struct Dataset {
 
 struct Inner {
     http: reqwest::Client,
+    /// Server base URL (`SURREAL_URL`).
+    url: String,
     rpc_url: String,
     user: String,
     pass: String,
@@ -70,6 +218,7 @@ impl Dataset {
             inner: Arc::new(Inner {
                 http: reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?,
                 rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
+                url,
                 user: var("SURREAL_USER")?,
                 pass: var("SURREAL_PASS")?,
                 ns: var("SURREAL_NS").unwrap_or_else(|| "milesstorm".into()),
@@ -77,6 +226,30 @@ impl Dataset {
                 sample_every,
             }),
         })
+    }
+
+    /// Brings SurrealDB's tables in line with `surreal/database/schema/` (surrealkit
+    /// sync: only changed files are applied; nothing is dropped). Signs in as the
+    /// website's own login.
+    async fn apply_schema(&self) -> anyhow::Result<()> {
+        let i = &self.inner;
+        let cfg = surrealkit::DbCfg::from_env(
+            None,
+            &surrealkit::DbOverrides {
+                host: Some(i.url.clone()),
+                ns: Some(i.ns.clone()),
+                db: Some(i.db.clone()),
+                user: Some(i.user.clone()),
+                pass: Some(i.pass.clone()),
+                auth_level: Some("database".into()),
+                folder: None,
+            },
+        )?;
+        let db = surrealkit::connect(&cfg).await?;
+        // No pruning: a table or field that disappears from the files is left in place
+        // (and logged by surrealkit) rather than dropped with the users' pictures in it.
+        // Removing one is a deliberate surrealkit rollout, not a side effect of a deploy.
+        surrealkit::Sync::embedded(embedded_schema::SCHEMA).prune(false).run(&db).await
     }
 
     pub fn sample_every(&self) -> u32 {

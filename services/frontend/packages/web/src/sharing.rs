@@ -88,7 +88,9 @@ pub async fn set_dataset_sharing(share: bool) -> Result<SharingState, ServerFnEr
 #[server(prefix = "/bff")]
 pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
     let (user, token, hub) = caller(false).await?;
-    let ds = crate::dataset::dataset().ok_or_else(|| ServerFnError::new("Sharing isn't available."))?;
+    // Deleting works whenever the store is configured, even while the schema step
+    // hasn't finished (then there is at most nothing, or older data, to delete).
+    let ds = crate::dataset::configured().ok_or_else(|| ServerFnError::new("Sharing isn't available."))?;
     // Stop new samples first (best effort), then delete what exists.
     if let Err(e) = api::set_dataset_consent(&token, false, crate::dataset::CONSENT_VERSION).await {
         tracing::warn!(error = %e, "turning sharing off failed during delete; deleting anyway");
