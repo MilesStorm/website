@@ -222,6 +222,11 @@ async fn run_arcane(
         MediaStreamConstraints, WebSocket,
     };
 
+    // Turns the camera off and closes the connection however this ends: the page is
+    // left (Dioxus drops this future when the component unmounts), an error, or a
+    // closed connection. Declared first so it outlives everything below.
+    let mut session = CameraSession::default();
+
     macro_rules! bail {
         ($msg:expr) => {{
             ws_state.set(WsState::Error($msg.into()));
@@ -244,13 +249,27 @@ async fn run_arcane(
     let mut constraints = MediaStreamConstraints::new();
     constraints.video(&JsValue::TRUE);
 
-    let stream_js = match JsFuture::from(
-        media_devices
-            .get_user_media_with_constraints(&constraints)
-            .unwrap(),
-    )
-    .await
+    let request = match media_devices.get_user_media_with_constraints(&constraints) {
+        Ok(p) => p,
+        Err(_) => bail!("camera unavailable"),
+    };
+    // If the page is left while the browser is still asking for permission or starting
+    // the camera, nothing awaits the result any more: stop that stream as it arrives.
+    // (A separate browser task, so it still runs after this future is dropped.)
     {
+        let left = session.left.clone();
+        let request = request.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(s) = JsFuture::from(request).await {
+                if left.get() {
+                    if let Ok(s) = s.dyn_into::<web_sys::MediaStream>() {
+                        stop_tracks(&s);
+                    }
+                }
+            }
+        });
+    }
+    let stream_js = match JsFuture::from(request).await {
         Ok(s) => s,
         Err(_) => bail!("camera permission denied"),
     };
@@ -269,6 +288,10 @@ async fn run_arcane(
     video
         .unchecked_ref::<HtmlMediaElement>()
         .set_src_object(Some(&stream));
+    // Moved, not `.clone()`d: web-sys's MediaStream::clone is the browser's
+    // MediaStream.clone(), which opens a second stream on the camera.
+    session.stream = Some(stream);
+    session.video = Some(video.clone());
 
     // Wait until the browser knows the video dimensions.
     JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
@@ -327,6 +350,7 @@ async fn run_arcane(
         Err(e) => bail!(format!("ws: {e:?}")),
     };
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
+    session.ws = Some(ws.clone());
 
     // Wait for the WS handshake.
     JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
@@ -420,6 +444,49 @@ async fn run_arcane(
             .map(|r| r.detections.clone())
             .unwrap_or_default();
         draw_overlay(&overlay_ctx, &dets, vid_w as f64, vid_h as f64, debug_mode());
+    }
+}
+
+/// What the Arcane page holds open while it runs. Dropping it (page left, error, or
+/// connection closed) stops the camera, so the browser's camera indicator goes off,
+/// and closes the connection to the dice server.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct CameraSession {
+    /// Set once the page is gone; read by a camera start-up still in flight.
+    left: std::rc::Rc<std::cell::Cell<bool>>,
+    stream: Option<web_sys::MediaStream>,
+    video: Option<web_sys::HtmlVideoElement>,
+    ws: Option<std::rc::Rc<web_sys::WebSocket>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for CameraSession {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        self.left.set(true);
+        if let Some(stream) = self.stream.take() {
+            stop_tracks(&stream);
+        }
+        if let Some(video) = self.video.take() {
+            video.unchecked_ref::<web_sys::HtmlMediaElement>().set_src_object(None);
+        }
+        if let Some(ws) = self.ws.take() {
+            ws.set_onopen(None);
+            ws.set_onmessage(None);
+            let _ = ws.close();
+        }
+    }
+}
+
+/// Stops every track of a camera stream (releases the camera).
+#[cfg(target_arch = "wasm32")]
+fn stop_tracks(stream: &web_sys::MediaStream) {
+    use wasm_bindgen::JsCast;
+    for track in stream.get_tracks().iter() {
+        if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
+            track.stop();
+        }
     }
 }
 

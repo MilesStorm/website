@@ -55,6 +55,7 @@ web-sys = { version = "0.3", features = [
     "Navigator",
     "MediaDevices",
     "MediaStream",
+    "MediaStreamTrack",
     "MediaStreamConstraints",
     "HtmlVideoElement",
     "HtmlMediaElement",
