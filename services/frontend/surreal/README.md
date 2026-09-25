@@ -17,7 +17,7 @@ The schema and the two logins are managed with [surrealkit](https://crates.io/cr
 | Login | Role | Used by | Kubernetes secret |
 |---|---|---|---|
 | root (Infisical `cluster-infra-6c0g` / prod / `/surreal`) | root | these setup steps only | – |
-| `dice` | EDITOR on `arcane` only | the website (frontend) | `surreal-dice` (`username`, `password`) in namespace `frontend` |
+| `dice` | EDITOR on `arcane` only | the website (frontend) | key `SURREAL_PASS` in `website-secrets` (username `dice` is set in the deployment) |
 | `dice_reader` | VIEWER on `arcane` only | `services/ai_pipeline/tools/pull_dataset.py` | none; env vars on the training PC |
 
 EDITOR is the smallest SurrealDB role that can write records. It could also change
@@ -52,9 +52,9 @@ the statement).
 when a password does. Update the password in Infisical, change the "Passwords last set"
 date in `database/schema/users.surql`, and run `sync`.
 
-Then sync the `dice` login into the Kubernetes secret `surreal-dice` (keys `username`,
-`password`) in the `frontend` namespace, the same way the other secrets are synced from
-Infisical. The frontend deployment reads it.
+Then add the dice password as key `SURREAL_PASS` in Infisical, next to the other
+`website-secrets` keys (`CLIENT_ID`, …). The frontend deployment reads it from there;
+the username `dice` is set in `crds/frontend/deployment.yaml`.
 
 ## Deploy order
 1. **ai_pipeline.** It numbers frames (`frame_seq`). Without it the website can't
@@ -62,7 +62,7 @@ Infisical. The frontend deployment reads it.
 2. **auth.** It adds `dataset_consent` (its migration runs at startup). With an older
    auth, the profile shows "Couldn't load your sharing setting" and automatic samples
    pause. Deleting still works.
-3. **SurrealDB:** `surrealkit sync` (above), then the `surreal-dice` secret.
+3. **SurrealDB:** `surrealkit sync` (above), then `SURREAL_PASS` in `website-secrets`.
 4. **frontend.** Without the secret it runs with sharing and flagging switched off.
 
 ## Known limits / follow-ups

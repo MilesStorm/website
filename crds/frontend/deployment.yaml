@@ -101,21 +101,17 @@ spec:
                 key: redis-password
           - name: AI_PIPELINE_SERVICE_URL
             value: "ws://ai-pipeline-service.ai-pipeline.svc.cluster.local:9000"
-          # Roll-sharing store (services/frontend/surreal/README.md). The secret is
-          # optional: without it the site runs with sharing and flagging switched off.
+          # Roll-sharing store (DICE-SETUP.md, step 2). SURREAL_PASS is optional: without
+          # it the site runs with sharing and flagging switched off.
           - name: SURREAL_URL
             value: "http://surrealdb.surreal.svc.cluster.local:8000"
           - name: SURREAL_USER
-            valueFrom:
-              secretKeyRef:
-                name: surreal-dice
-                key: username
-                optional: true
+            value: "dice"
           - name: SURREAL_PASS
             valueFrom:
               secretKeyRef:
-                name: surreal-dice
-                key: password
+                name: website-secrets
+                key: SURREAL_PASS
                 optional: true
           - name: RUST_LOG
             value: "info"
