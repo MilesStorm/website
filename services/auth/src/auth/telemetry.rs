@@ -24,3 +24,14 @@ pub fn ark_command(cmd: &str, status: &str) {
     )
     .increment(1);
 }
+
+/// An account email: `kind` is verify_email / reset_password / delete_account,
+/// `status` is sent / failed.
+pub fn email(kind: &str, status: &str) {
+    metrics::counter!(
+        "auth_emails_total",
+        "kind" => kind.to_string(),
+        "status" => status.to_string()
+    )
+    .increment(1);
+}
