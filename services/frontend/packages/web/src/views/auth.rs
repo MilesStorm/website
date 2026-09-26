@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use api::{get_my_permissions, login_password, register_password};
 
+use crate::emails::server_message;
 use crate::{LOGIN_STATUS, PERMISSIONS};
 
 // ---- Login ----
@@ -100,6 +101,9 @@ pub fn Login(error: String) -> Element {
                             }
                         }
                         button { r#type: "submit", class: "btn btn-primary w-full", "Log In" }
+                        div { class: "text-center",
+                            Link { class: "link text-sm opacity-80", to: "/forgot-password", "Forgot your password?" }
+                        }
                     }
                 }
 
@@ -141,10 +145,13 @@ pub fn Register() -> Element {
                     }
                     navigator().push("/");
                 }
-                Err(e) => reg_error.set(e.to_string()),
+                Err(e) => reg_error.set(server_message(e)),
             }
         });
     };
+    // Auth's replies for taken names (services/auth/src/auth/internal.rs).
+    let email_taken = reg_error() == "Email already in use";
+    let user_taken = reg_error() == "User already exists";
 
     rsx! {
         div { class: "h-[calc(100vh-5rem)] flex items-center justify-center",
@@ -186,29 +193,33 @@ pub fn Register() -> Element {
                     div { class: "mb-4",
                         div { class: "label",
                             span { class: "label-text", "Email" }
-                            if reg_error().contains("email") {
+                            if email_taken {
                                 span { class: "label-text-alt text-error", "Email already in use" }
                             }
                         }
                         input {
                             r#type: "email",
                             name: "email",
+                            autocomplete: "email",
+                            required: true,
                             class: "input input-bordered w-full",
-                            class: if reg_error().contains("email") { "input-error" }
+                            class: if email_taken { "input-error" }
                         }
                     }
                     div { class: "mb-4",
                         div { class: "label",
                             span { class: "label-text", "Username" }
-                            if reg_error().contains("User") || reg_error().contains("username") {
+                            if user_taken {
                                 span { class: "label-text-alt text-error", "Username already in use" }
                             }
                         }
                         input {
                             r#type: "text",
                             name: "username",
+                            autocomplete: "username",
+                            required: true,
                             class: "input input-bordered w-full",
-                            class: if reg_error().contains("User") { "input-error" }
+                            class: if user_taken { "input-error" }
                         }
                     }
                     div { class: "mb-6",
@@ -216,14 +227,18 @@ pub fn Register() -> Element {
                         input {
                             r#type: "password",
                             name: "password",
+                            autocomplete: "new-password",
+                            minlength: 8,
+                            required: true,
                             class: "input input-bordered w-full",
                             id: "password"
                         }
+                        p { class: "mt-1 text-xs opacity-60", "At least 8 characters. We'll email you a link to confirm your address." }
                     }
                     button { r#type: "submit", class: "btn btn-primary w-full", "Sign up with Email" }
                 }
 
-                if !reg_error().is_empty() && !reg_error().contains("email") && !reg_error().contains("User") {
+                if !reg_error().is_empty() && !email_taken && !user_taken {
                     div { class: "alert alert-error mt-4",
                         span { "{reg_error()}" }
                     }

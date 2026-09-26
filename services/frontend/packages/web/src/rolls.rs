@@ -33,7 +33,7 @@ use tower_sessions_redis_store::fred::prelude::*;
 use tower_sessions_redis_store::RedisStore;
 
 const CHANNEL_PREFIX: &str = "arcane:rolls:";
-const LAST_ROLL_PREFIX: &str = "arcane:last_roll:";
+pub(crate) const LAST_ROLL_PREFIX: &str = "arcane:last_roll:";
 const LAST_ROLL_TTL_SECS: i64 = 3600;
 /// Rolls queued per user for a slow viewer before it skips ahead.
 const PER_USER_BUFFER: usize = 16;

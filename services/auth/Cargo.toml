@@ -28,6 +28,10 @@ tower-sessions-sqlx-store = { version = "0.15.0", features = ["postgres"] }
 tower-sessions = { version = "0.14.0", features = ["axum-core"] }
 jsonwebtoken = "9"
 ulid = "1"
+# Account email links: random codes, stored hashed
+rand = "0.9"
+sha2 = "0.10"
+base64 = "0.22"
 
 # Metrics (Prometheus exposition format → Alloy → Mimir)
 axum-prometheus = "0.10"
