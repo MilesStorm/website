@@ -302,7 +302,7 @@ pub async fn arcane_me(session: tower_sessions::Session) -> Response {
 }
 
 struct RollStream {
-    /// The stored last roll, sent first.
+    /// The stored last roll, sent first as a `replay` event.
     pending: Option<Arc<str>>,
     rx: broadcast::Receiver<Arc<str>>,
     /// Last roll sent, to drop exact repeats.
@@ -314,8 +314,10 @@ struct RollStream {
 }
 
 /// `GET /api/arcane/rolls`: server-sent events, one `roll` event per settled roll,
-/// starting with the user's last roll from the past hour (if any). 401/403 when not
-/// allowed, 429 above `MAX_STREAMS_PER_USER` open streams.
+/// starting with the user's last roll from the past hour (if any) as a `replay`
+/// event, so a viewer can show it without acting on it as a new roll (the extension
+/// must not post an old roll to a game chat). 401/403 when not allowed, 429 above
+/// `MAX_STREAMS_PER_USER` open streams.
 pub async fn arcane_rolls(
     Extension(hub): Extension<RollHub>,
     session: tower_sessions::Session,
@@ -343,11 +345,11 @@ pub async fn arcane_rolls(
 
     let events = stream::unfold(state, |mut st| async move {
         loop {
-            let next = match st.pending.take() {
-                Some(p) => p,
+            let (next, replay) = match st.pending.take() {
+                Some(p) => (p, true),
                 None => tokio::select! {
                     got = st.rx.recv() => match got {
-                        Ok(p) => p,
+                        Ok(p) => (p, false),
                         Err(RecvError::Lagged(_)) => continue,
                         Err(RecvError::Closed) => return None,
                     },
@@ -365,7 +367,9 @@ pub async fn arcane_rolls(
                 continue;
             }
             st.sent = Some(next.clone());
-            let event = Event::default().event("roll").data(&*next);
+            let event = Event::default()
+                .event(if replay { "replay" } else { "roll" })
+                .data(&*next);
             return Some((Ok::<_, Infallible>(event), st));
         }
     });
