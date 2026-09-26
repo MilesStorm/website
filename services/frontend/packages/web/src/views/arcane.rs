@@ -3,6 +3,9 @@ use dioxus::prelude::*;
 
 use crate::{LOGIN_STATUS, PERMISSIONS};
 
+/// The newest signed Firefox extension (published by .github/workflows/extension.yml).
+const EXTENSION_XPI: &str = "https://github.com/MilesStorm/website/releases/download/arcane-dice/arcane-dice.xpi";
+
 #[component]
 pub fn Arcane() -> Element {
     let has_perm = PERMISSIONS.read().contains_key("arcane");
@@ -160,6 +163,17 @@ fn ArcaneIsland() -> Element {
                 match last_roll() {
                     Some(text) => rsx! { span { class: "text-base-content/50 font-normal", "Last roll: " } "{text}" },
                     None => rsx! { span { class: "text-base-content/40 text-base font-normal italic", "Roll some dice" } },
+                }
+            }
+            div { class: "w-full max-w-2xl rounded-lg border border-base-300 bg-base-100 px-4 py-3 text-sm",
+                p {
+                    span { class: "font-semibold", "Playing on Roll20? " }
+                    "The Firefox extension types each roll into your game's chat, where Roll20 shows the total. "
+                    a { class: "link link-primary font-medium", href: EXTENSION_XPI, "Install the extension" }
+                }
+                p { class: "mt-1 text-xs opacity-60",
+                    "Firefox asks you to confirm. If it only downloads the file, open it from the downloads list. "
+                    "It updates itself after that."
                 }
             }
 

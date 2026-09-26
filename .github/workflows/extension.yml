@@ -1,0 +1,97 @@
+name: extension-release
+
+# Signs the Firefox extension with Mozilla (unlisted: no public store page) and
+# publishes it on the `arcane-dice` GitHub release whenever `version` in
+# extension/arcane-dice/manifest.json is new. That release holds:
+#   arcane-dice.xpi          the newest version: the install link
+#   arcane-dice-<v>.xpi      each version
+#   updates.json             what installed copies check for updates (the manifest's update_url)
+# Needs the repository secrets AMO_JWT_ISSUER and AMO_JWT_SECRET: an API key from
+# https://addons.mozilla.org/developers/addon/api/key/
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+    - extension/arcane-dice/**
+    - .github/workflows/extension.yml
+  workflow_dispatch:
+
+# Two runs must never submit the same version at once.
+concurrency:
+  group: extension-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    name: Sign and publish
+    # Light work (Node only), and GitHub's runners come with node, jq and gh.
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: arcane-dice
+      SRC: extension/arcane-dice
+    steps:
+      - name: check out repo code
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: test
+        working-directory: extension/arcane-dice
+        run: node --test test/
+
+      - name: is this version new?
+        id: version
+        run: |
+          v=$(jq -r .version "$SRC/manifest.json")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "arcane-dice-$v.xpi"; then
+            echo "Version $v is already published; bump \"version\" in manifest.json to release."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: sign with Mozilla (unlisted)
+        if: steps.version.outputs.new == 'true'
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          npx -y web-ext@10.7.0 sign \
+            --channel unlisted \
+            --source-dir "$SRC" \
+            --artifacts-dir out \
+            --ignore-files "test/**" package.json README.md \
+            --approval-timeout 1800000 \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET"
+
+      - name: publish on the release
+        if: steps.version.outputs.new == 'true'
+        run: |
+          v=${{ steps.version.outputs.version }}
+          id=$(jq -r .browser_specific_settings.gecko.id "$SRC/manifest.json")
+          signed=$(ls out/*.xpi)
+          cp "$signed" "arcane-dice-$v.xpi"
+          cp "$signed" arcane-dice.xpi
+          url="https://github.com/${{ github.repository }}/releases/download/$TAG/arcane-dice-$v.xpi"
+          hash="sha256:$(sha256sum "arcane-dice-$v.xpi" | cut -d' ' -f1)"
+          jq -n --arg id "$id" --arg v "$v" --arg url "$url" --arg hash "$hash" \
+            '{addons: {($id): {updates: [{version: $v, update_link: $url, update_hash: $hash}]}}}' > updates.json
+
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --latest=false \
+              --title "Arcane Dice (Firefox extension)" \
+              --notes "Install: open arcane-dice.xpi in Firefox. Installed copies update themselves from updates.json."
+          fi
+          # The new version first, updates.json last: installed copies never see an
+          # update that isn't there yet.
+          gh release upload "$TAG" "arcane-dice-$v.xpi" arcane-dice.xpi --clobber
+          gh release upload "$TAG" updates.json --clobber
