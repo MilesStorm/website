@@ -44,7 +44,7 @@ jobs:
 
       - name: test
         working-directory: extension/arcane-dice
-        run: node --test test/
+        run: node --test "test/*.test.js"
 
       - name: is this version new?
         id: version
