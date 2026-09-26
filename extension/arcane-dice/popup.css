@@ -144,3 +144,25 @@ button {
 .empty {
   color: var(--muted);
 }
+
+.roll20 {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--chip-border);
+}
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.switch input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+code {
+  font-size: 12px;
+}

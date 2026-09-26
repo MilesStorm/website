@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Arcane Dice",
-  "version": "0.2.0",
-  "description": "Shows your latest dice roll from the Arcane dice tray on milesstorm.com.",
+  "version": "0.3.0",
+  "description": "Shows your latest dice roll from the Arcane dice tray on milesstorm.com, and types it into Roll20's chat.",
   "browser_specific_settings": {
     "gecko": {
       "id": "arcane-dice@milesstorm.com",
@@ -14,12 +14,31 @@
       }
     }
   },
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "121",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
-    "https://milesstorm.com/*"
+    "https://milesstorm.com/*",
+    "https://app.roll20.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ],
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.roll20.net/editor*"
+      ],
+      "js": [
+        "roll20.js"
+      ],
+      "run_at": "document_idle"
+    }
   ],
   "action": {
     "default_title": "Latest dice roll",

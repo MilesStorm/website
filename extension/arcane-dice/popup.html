@@ -40,6 +40,18 @@
 
     <p id="empty" class="empty" hidden>No rolls yet. Open the Arcane page on any device and roll.</p>
 
+    <section class="roll20">
+      <label class="switch">
+        <input type="checkbox" id="auto-send" checked />
+        Send rolls to Roll20 chat
+      </label>
+      <p class="hint">
+        While a Roll20 game is open, each roll is typed into its chat as an inline roll, like
+        <code>[[13 + 3]]</code>, and Roll20 shows the total. Rolls with an unreadable die aren't sent.
+      </p>
+      <button id="grant-roll20" type="button" hidden>Allow access to Roll20</button>
+    </section>
+
     <script type="module" src="popup.js"></script>
   </body>
 </html>
