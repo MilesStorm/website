@@ -20,14 +20,16 @@ popup ◀──SSE──── website (/api/arcane/rolls) ──SSE──▶ ba
 The same folder loads in both browsers; nothing needs building.
 
 ## Install
-**Firefox (140 or newer):**
-1. Open `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on…** and pick this folder's `manifest.json`.
-3. Temporary add-ons are removed when Firefox restarts. To keep it installed, sign it
-   on addons.mozilla.org as a self-distributed (unlisted) add-on, e.g. with
-   `npx web-ext sign --channel unlisted`.
+**Firefox (140 or newer):** open
+<https://github.com/MilesStorm/website/releases/download/arcane-dice/arcane-dice.xpi>
+(the Arcane page links to it) and confirm. If Firefox only downloads the file, open it
+from the downloads list. It's signed by Mozilla, stays installed, and updates itself.
 
-**Chrome:**
+**Trying out changes (Firefox):** open `about:debugging#/runtime/this-firefox`, click
+**Load Temporary Add-on…** and pick this folder's `manifest.json`. Temporary add-ons are
+removed when Firefox restarts.
+
+**Chrome (not tested yet):**
 1. Open `chrome://extensions` and turn on **Developer mode**.
 2. Click **Load unpacked** and pick this folder.
 
@@ -84,6 +86,23 @@ permission for the site. The extension never sees a password or token.
 | `GET /api/arcane/rolls` | SSE stream: first `event: replay` with the last roll from the past hour (if any), then `event: roll` for each new roll; 401 when logged out, 403 without the permission, 429 with more than 8 open |
 
 The roll JSON is ai_pipeline's `RollEvent` (`services/ai_pipeline/src/roll.rs`).
+
+## Releases
+`.github/workflows/extension.yml` releases a new version whenever `version` in
+`manifest.json` changes on `main`:
+1. It runs the tests.
+2. Mozilla signs the extension as **unlisted**: no public store page; signing is
+   automatic and takes minutes.
+3. The workflow puts the signed file on the `arcane-dice` GitHub release as
+   `arcane-dice-<version>.xpi` and as `arcane-dice.xpi` (the install link), then
+   updates `updates.json`.
+
+Installed copies check `updates.json` (the manifest's `update_url`) about once a day.
+Firefox fetches it, not the extension. Mozilla won't sign the same version twice, so
+bump `version` for every release.
+
+The workflow needs two repository secrets, `AMO_JWT_ISSUER` and `AMO_JWT_SECRET`: an
+API key from <https://addons.mozilla.org/developers/addon/api/key/>.
 
 ## Tests
 ```

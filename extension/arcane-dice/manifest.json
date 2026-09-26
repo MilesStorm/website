@@ -1,17 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Arcane Dice",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Shows your latest dice roll from the Arcane dice tray on milesstorm.com, and types it into Roll20's chat.",
   "browser_specific_settings": {
     "gecko": {
       "id": "arcane-dice@milesstorm.com",
       "strict_min_version": "140.0",
+      "update_url": "https://github.com/MilesStorm/website/releases/download/arcane-dice/updates.json",
       "data_collection_permissions": {
         "required": [
           "none"
         ]
       }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
     }
   },
   "minimum_chrome_version": "121",
