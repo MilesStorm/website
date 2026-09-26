@@ -16,6 +16,8 @@ use crate::{ACCOUNT, LOGIN_STATUS, PERMISSIONS};
 #[component]
 fn Panel(title: String, children: Element) -> Element {
     rsx! {
+        // The address holds a one-time code: don't send it along to other sites.
+        document::Meta { name: "referrer", content: "no-referrer" }
         div { class: "min-h-[calc(100vh-5rem)] flex items-center justify-center px-4 py-10",
             div { class: "bg-base-200 p-8 rounded-lg shadow-lg max-w-md w-full flex flex-col gap-4",
                 h2 { class: "text-2xl font-bold text-center", "{title}" }

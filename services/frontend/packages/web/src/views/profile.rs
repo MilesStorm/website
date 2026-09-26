@@ -284,7 +284,9 @@ fn DeleteCard(account: AccountInfo) -> Element {
     let mut busy = use_signal(|| false);
     let mut typed = use_signal(String::new);
     let mut msg = use_signal(|| Option::<(bool, String)>::None);
-    let has_email = account.email.is_some();
+    // A confirmed address gets a link; otherwise it might never arrive.
+    let by_email = account.email.is_some() && account.email_verified;
+    let unconfirmed = account.email.is_some() && !account.email_verified;
     let username = account.username.clone();
     let matches = typed().trim() == username;
 
@@ -307,7 +309,7 @@ fn DeleteCard(account: AccountInfo) -> Element {
             }
             if open() {
                 div { class: "flex flex-col gap-3 border-t border-error/40 bg-error/10 px-6 py-4",
-                    if has_email {
+                    if by_email {
                         p { class: "text-sm",
                             "We'll email you a link to confirm. Nothing is deleted until you open it and confirm once more."
                         }
@@ -331,6 +333,7 @@ fn DeleteCard(account: AccountInfo) -> Element {
                         }
                     } else {
                         label { class: "text-sm", r#for: "delete-confirm",
+                            if unconfirmed { "Your email isn't confirmed, so there's no link to wait for. " }
                             "Type your username, "
                             span { class: "font-semibold", "{username}" }
                             ", to confirm."

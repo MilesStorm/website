@@ -193,13 +193,23 @@ pub async fn delete_account(code: String) -> Result<Done, ServerFnError> {
     let user_id = reply.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| ServerFnError::new("unexpected reply"))?;
     let username = server::text(&reply, "username");
     server::forget(user_id, &username, &hub).await?;
-    server::call("/internal/account/delete/confirm", serde_json::json!({ "code": code })).await?;
+    // Rare: the link ran out or was replaced in the moment since the check.
+    server::call("/internal/account/delete/confirm", serde_json::json!({ "code": code }))
+        .await
+        .map_err(|e| {
+            tracing::warn!(user_id, "deleting an account: data removed but the account wasn't");
+            ServerFnError::new(format!(
+                "Your pictures and rolls were removed, but the account itself wasn't deleted: {}",
+                server_message(e)
+            ))
+        })?;
     let logged_out = server::log_out_if(&session, &username).await;
     Ok(Done { username, logged_out })
 }
 
-/// Deletes the logged-in account right away. Only for accounts without an email
-/// (GitHub logins), which can't get a link; `confirm` must be the username.
+/// Deletes the logged-in account right away. Only for accounts without a confirmed
+/// email (GitHub logins, or an address that may be wrong), which a link might never
+/// reach; `confirm` must be the username.
 #[server(prefix = "/bff")]
 pub async fn delete_account_without_email(confirm: String) -> Result<Done, ServerFnError> {
     let (session, hub) = server::request()?;
@@ -212,8 +222,8 @@ pub async fn delete_account_without_email(confirm: String) -> Result<Done, Serve
             return Err(ServerFnError::new("Something went wrong on our side. Try again in a minute."));
         }
     };
-    if profile.email.is_some() {
-        return Err(ServerFnError::new("Your account has an email address: use the emailed link."));
+    if profile.email.is_some() && profile.email_verified {
+        return Err(ServerFnError::new("Your email is confirmed: use the emailed link."));
     }
     if confirm.trim() != profile.username {
         return Err(ServerFnError::new("Type your username exactly to confirm."));

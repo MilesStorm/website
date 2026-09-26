@@ -22,7 +22,8 @@
 //!   using the code (the website removes the user's other data first).
 //! - `POST /internal/account/delete/confirm` `{code}` → `{user_id, username}`: deletes.
 //! - `POST /internal/account/delete/direct` `{token}` → `{user_id, username}`: deletes
-//!   an account that has no email (GitHub logins), the only way those can confirm.
+//!   an account without a confirmed email (GitHub logins, or an address that may be
+//!   wrong), which a link might never reach.
 
 use axum::{
     Json, Router,
@@ -42,7 +43,7 @@ use tokio::task;
 use super::internal::InternalState;
 use super::mail::{Letter, Mailer, site_url};
 
-/// Most links of one kind per account per day.
+/// Most links of one kind per account per day, and most emails to one address per day.
 const DAILY_LIMIT: i64 = 10;
 /// A new link of the same kind isn't sent sooner than this after the last one.
 const COOLDOWN_SECS: i64 = 60;
@@ -144,7 +145,15 @@ async fn issue(db: &PgPool, user_id: i64, purpose: Purpose, email: &str) -> Resu
     .fetch_one(&mut *tx)
     .await?;
     let too_soon = last.is_some_and(|t| Utc::now() - t < chrono::Duration::seconds(COOLDOWN_SECS));
-    if too_soon || count >= DAILY_LIMIT {
+    // Also per address, over all accounts: signing up again and again with the same
+    // address (or its capitalisations) mustn't flood that inbox.
+    let (to_address,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM email_tokens WHERE LOWER(email) = LOWER($1) AND created_at > NOW() - INTERVAL '1 day'",
+    )
+    .bind(email)
+    .fetch_one(&mut *tx)
+    .await?;
+    if too_soon || count >= DAILY_LIMIT || to_address >= DAILY_LIMIT {
         return Err(IssueError::TooSoon);
     }
     sqlx::query(
@@ -479,7 +488,8 @@ async fn password_forgot(State(state): State<InternalState>, Json(req): Json<For
         let by = if login.contains('@') { "LOWER(u.email) = LOWER($1)" } else { "u.username = $1" };
         let account: Result<Option<Account>, _> = sqlx::query_as(&format!(
             "SELECT {ACCOUNT_COLUMNS} FROM users u \
-             WHERE {by} AND u.password IS NOT NULL AND u.email IS NOT NULL LIMIT 1"
+             WHERE {by} AND u.password IS NOT NULL AND u.email IS NOT NULL \
+             ORDER BY u.email_verified_at IS NULL, u.id LIMIT 1"
         ))
         .bind(&login)
         .fetch_optional(&db)
@@ -547,8 +557,13 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
         .fetch_optional(&mut *tx)
         .await?;
         let Some((username,)) = username else { return Ok(None) };
-        // Log out everywhere: whoever knew the old password shouldn't stay in.
+        // Log out everywhere: whoever knew the old password shouldn't stay in. Their
+        // outstanding links (e.g. to delete the account) stop working too.
         sqlx::query("DELETE FROM bff_tokens WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE email_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL")
             .bind(user_id)
             .execute(&mut *tx)
             .await?;
@@ -600,11 +615,13 @@ async fn delete_check(State(state): State<InternalState>, Json(req): Json<CodeRe
 async fn delete_confirm(State(state): State<InternalState>, Json(req): Json<CodeReq>) -> Response {
     let result: Result<Option<(i64, String)>, sqlx::Error> = async {
         let mut tx = state.db.begin().await?;
-        let Some((user_id, _)) = redeem(&mut *tx, &req.code, Purpose::DeleteAccount, true).await? else {
+        let Some((user_id, email)) = redeem(&mut *tx, &req.code, Purpose::DeleteAccount, true).await? else {
             return Ok(None);
         };
-        let deleted = sqlx::query_as("DELETE FROM users WHERE id = $1 RETURNING id, username")
+        // Only while the address is still the one the link was sent to.
+        let deleted = sqlx::query_as("DELETE FROM users WHERE id = $1 AND email = $2 RETURNING id, username")
             .bind(user_id)
+            .bind(&email)
             .fetch_optional(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -621,11 +638,13 @@ async fn delete_direct(State(state): State<InternalState>, Json(req): Json<Token
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "logged_out"),
         Err(e) => return db_error("loading the account", e),
     };
-    if account.email.is_some() {
-        // Accounts with an email confirm by email.
+    if account.email.is_some() && account.email_verified_at.is_some() {
+        // Accounts with a confirmed email confirm by email.
         return error(StatusCode::CONFLICT, "has_email");
     }
-    let result = sqlx::query_as("DELETE FROM users WHERE id = $1 AND email IS NULL RETURNING id, username")
+    let result = sqlx::query_as(
+        "DELETE FROM users WHERE id = $1 AND (email IS NULL OR email_verified_at IS NULL) RETURNING id, username",
+    )
         .bind(account.id)
         .fetch_optional(&state.db)
         .await;

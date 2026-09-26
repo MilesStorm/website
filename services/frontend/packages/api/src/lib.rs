@@ -306,7 +306,12 @@ pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
             .send()
             .await
         {
-            Ok(r) => r.status() != reqwest::StatusCode::UNAUTHORIZED,
+            // Only auth's "unknown token" reply; a 401 for a wrong service secret
+            // or any other failure must not log everyone out.
+            Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
+                r.text().await.map(|b| b != "Invalid or expired token").unwrap_or(true)
+            }
+            Ok(_) => true,
             Err(e) => {
                 tracing::warn!(error = %e, "checking the session's token failed");
                 true
@@ -359,10 +364,12 @@ pub async fn register_password(
     }
 
     if resp.status() == reqwest::StatusCode::BAD_REQUEST {
-        // Auth says what's wrong ("Invalid email address", password too short).
+        // Auth says what's wrong ("Invalid email address", password too short);
+        // anything else (e.g. a malformed request) gets a generic message.
         let body = resp.text().await.unwrap_or_default();
         metrics::counter!("bff_register_attempts_total", "status" => "invalid").increment(1);
-        return Err(ServerFnError::new(body));
+        let known = body == "Invalid email address" || body.starts_with("Password must be at least");
+        return Err(ServerFnError::new(if known { body.as_str() } else { "Registration failed" }));
     }
 
     if !resp.status().is_success() {

@@ -246,6 +246,9 @@ async fn oauth_exchange(
 
 // ---- Token introspection → JWT ----
 
+/// Introspection's reply for a token that doesn't exist or has expired.
+const INVALID_TOKEN: &str = "Invalid or expired token";
+
 #[derive(Deserialize)]
 struct IntrospectReq {
     token: String,
@@ -269,7 +272,7 @@ async fn introspect(
     State(state): State<InternalState>,
     Json(req): Json<IntrospectReq>,
 ) -> impl IntoResponse {
-    let row: Option<TokenRow> = sqlx::query_as(
+    let row: Option<TokenRow> = match sqlx::query_as(
         r#"
         SELECT t.user_id, u.username
         FROM bff_tokens t
@@ -280,11 +283,20 @@ async fn introspect(
     .bind(&req.token)
     .fetch_optional(&state.db)
     .await
-    .unwrap_or(None);
+    {
+        Ok(row) => row,
+        // Not "invalid token": the website logs a session out only on that reply.
+        Err(e) => {
+            tracing::error!(error = %e, "token introspection query failed");
+            telemetry::token_operation("introspect", "error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let Some(row) = row else {
         telemetry::token_operation("introspect", "invalid");
-        return (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response();
+        // The website logs a session out on exactly this reply (`INVALID_TOKEN`).
+        return (StatusCode::UNAUTHORIZED, INVALID_TOKEN).into_response();
     };
 
     let permissions: Vec<String> = sqlx::query_scalar(
@@ -360,6 +372,23 @@ async fn register(
             format!("Password must be at least {} characters", account_email::PASSWORD_MIN),
         )
             .into_response();
+    }
+    // The unique index is case-sensitive; addresses aren't.
+    match sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM users WHERE LOWER(email) = LOWER($1))")
+        .bind(&email)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(false) => {}
+        Ok(true) => {
+            tracing::warn!("registration failed: email already in use");
+            telemetry::token_operation("register", "conflict");
+            return (StatusCode::CONFLICT, "Email already in use").into_response();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "registration failed: checking the email");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
     let password = req.password.clone();
     let hashed = task::spawn_blocking(move || password_auth::generate_hash(password))
