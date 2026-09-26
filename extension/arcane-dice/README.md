@@ -106,7 +106,7 @@ API key from <https://addons.mozilla.org/developers/addon/api/key/>.
 
 ## Tests
 ```
-node --test test/
+node --test "test/*.test.js"
 ```
 Covers the stream parser (chunks split mid-line, CRLF, multi-line data, keep-alive
 comments), roll parsing and display, the replay flag, the chat text, when rolls are sent
