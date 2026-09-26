@@ -5,28 +5,16 @@
 // extension never sees or stores a password or token. `chrome.*` is used
 // throughout: Firefox provides it too, with promises.
 
-import { SseParser } from "./lib/sse.js";
 import { canFlag, flagPayload, flagResult } from "./lib/flag.js";
-import { parseRoll, describeRoll, timeAgo } from "./lib/roll.js";
-import { BASE, originPattern } from "./lib/config.js";
+import { describeRoll, timeAgo } from "./lib/roll.js";
+import { AUTO_SEND_KEY, BASE, ROLL20, autoSendOn, originPattern } from "./lib/config.js";
+import { getMe, sleep, streamRolls } from "./lib/stream.js";
 
 const $ = (id) => document.getElementById(id);
 
 const base = BASE;
 let controller = new AbortController();
 let shown = null;
-
-/** The server sends a keep-alive every 20 s; this long without a byte means the link is dead. */
-const STALL_MS = 50_000;
-
-/** Resolves after `ms`, or as soon as `signal` aborts. */
-function sleep(ms, signal) {
-  return new Promise((resolve) => {
-    const onAbort = () => (clearTimeout(t), resolve());
-    const t = setTimeout(() => (signal.removeEventListener("abort", onAbort), resolve()), ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
 
 /** Forget the shown roll (logged out, no access, or another site). */
 function clearRoll() {
@@ -151,56 +139,6 @@ $("flag-form").addEventListener("submit", async (e) => {
   if (shown) renderFlag(shown);
 });
 
-async function getMe(signal) {
-  const resp = await fetch(`${base}/api/arcane/me`, { credentials: "include", cache: "no-store", signal });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
-}
-
-/**
- * Streams rolls until the connection ends. Resolves to "denied" on 401/403 (the
- * caller re-checks login), "busy" on 429 (too many popups open), or "ended" after a
- * stream that delivered data. Throws when the site can't be reached or goes silent.
- */
-async function streamRolls(outer) {
-  // Aborted by the caller (site changed) or by the stall watchdog.
-  const ctl = new AbortController();
-  const stop = () => ctl.abort();
-  outer.addEventListener("abort", stop, { once: true });
-  let stall = setTimeout(stop, STALL_MS);
-  try {
-    const resp = await fetch(`${base}/api/arcane/rolls`, {
-      credentials: "include",
-      cache: "no-store",
-      headers: { Accept: "text/event-stream" },
-      signal: ctl.signal,
-    });
-    if (resp.status === 401 || resp.status === 403) return "denied";
-    if (resp.status === 429) return "busy";
-    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
-
-    const reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();
-    const parser = new SseParser();
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return "ended";
-      clearTimeout(stall);
-      stall = setTimeout(stop, STALL_MS);
-      for (const ev of parser.push(value)) {
-        if (ev.event !== "roll") continue;
-        const roll = parseRoll(ev.data);
-        if (!roll) continue;
-        roll.receivedAt = Date.now();
-        render(roll);
-        chrome.storage.session.set({ lastRoll: roll }).catch(console.error);
-      }
-    }
-  } finally {
-    clearTimeout(stall);
-    outer.removeEventListener("abort", stop);
-  }
-}
-
 async function run() {
   let backoff = 1000;
   for (;;) {
@@ -229,7 +167,10 @@ async function run() {
       }
       setStatus("live", `Live, as ${me.username}`);
       if (!shown) render(null);
-      const outcome = await streamRolls(signal);
+      const outcome = await streamRolls(signal, (roll) => {
+        render(roll);
+        chrome.storage.session.set({ lastRoll: roll }).catch(console.error);
+      });
       if (outcome === "ended") {
         // A stream that worked: reconnect promptly. (The server also ends streams
         // after a logout, and the next /me check then shows that.)
@@ -263,6 +204,27 @@ $("login").addEventListener("click", () => chrome.tabs.create({ url: `${base}/lo
 $("grant").addEventListener("click", async () => {
   if (await chrome.permissions.request({ origins: [originPattern(base)] })) restart();
 });
+
+// ── Roll20 ────────────────────────────────────────────────────────────────────
+
+const roll20 = { origins: [originPattern(ROLL20)] };
+
+async function showRoll20() {
+  $("auto-send").checked = await autoSendOn();
+  // Without site access the Roll20 part of the extension doesn't run there.
+  $("grant-roll20").hidden = !$("auto-send").checked || (await chrome.permissions.contains(roll20));
+}
+
+$("auto-send").addEventListener("change", async (e) => {
+  await chrome.storage.local.set({ [AUTO_SEND_KEY]: e.target.checked });
+  showRoll20();
+});
+// permissions.request needs a user click, so it can only happen here.
+$("grant-roll20").addEventListener("click", async () => {
+  await chrome.permissions.request(roll20);
+  showRoll20();
+});
+showRoll20();
 
 // Keep "12 s ago" current, and hide the flag link once the roll is too old.
 setInterval(() => {
