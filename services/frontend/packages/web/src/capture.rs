@@ -196,6 +196,20 @@ impl RollHub {
         }
     }
 
+    /// Removes everything kept in Redis for `user` (held roll, last roll, rate
+    /// counters), for deleting their account.
+    pub async fn forget_user(&self, user: &str) -> Result<(), Error> {
+        let keys = vec![
+            held_meta_key(user),
+            held_jpeg_key(user),
+            format!("{}{user}", crate::rolls::LAST_ROLL_PREFIX),
+            format!("arcane:auto_count:{user}"),
+            format!("arcane:flag_count:{user}"),
+        ];
+        let _: i64 = self.pool.next().del(keys).await?;
+        Ok(())
+    }
+
     /// Increment a counter that resets `secs` after it was created; returns the new
     /// value, or None if Redis failed (callers refuse). The counter is created with
     /// its expiry in one command, so it can never be left without one.

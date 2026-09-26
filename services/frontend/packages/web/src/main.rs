@@ -4,7 +4,10 @@ use dioxus::prelude::*;
 
 use api::{check_login_status, get_my_permissions, logout};
 use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
-use views::{AdminPanel, Arcane, Ark, AssholeTimer, Landing, Login, NotFound, Profile, Register};
+use views::{
+    AccountDeleted, AdminPanel, Arcane, Ark, AssholeTimer, DeleteAccount, ForgotPassword, Landing, Login, NotFound,
+    Profile, Register, ResetPassword, VerifyEmail,
+};
 
 mod views;
 #[cfg(not(target_arch = "wasm32"))]
@@ -15,6 +18,7 @@ mod capture;
 mod dataset;
 mod sharing;
 mod account;
+mod emails;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
@@ -504,6 +508,16 @@ enum Route {
         Login { error: String },
         #[route("/register")]
         Register {},
+        #[route("/forgot-password")]
+        ForgotPassword {},
+        #[route("/reset-password?:code")]
+        ResetPassword { code: String },
+        #[route("/verify-email?:code")]
+        VerifyEmail { code: String },
+        #[route("/delete-account?:code")]
+        DeleteAccount { code: String },
+        #[route("/account-deleted")]
+        AccountDeleted {},
         #[route("/profile")]
         Profile {},
         #[route("/ark")]

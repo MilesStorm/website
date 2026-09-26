@@ -286,11 +286,39 @@ pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
         .get("username")
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some(username) = username else {
+        return Ok(LoginStatus::LoggedOut);
+    };
 
-    Ok(match username {
-        Some(u) => LoginStatus::LoggedIn(u),
-        None => LoginStatus::LoggedOut,
-    })
+    // Auth drops every token of an account when its password is reset or it is
+    // deleted: then this session is over too. Other failures leave it alone.
+    let token: Option<String> = sess.get("opaque_token").await.ok().flatten();
+    #[derive(Serialize)]
+    struct Req {
+        token: String,
+    }
+    let valid = match token {
+        None => false,
+        Some(token) => match http_client()
+            .post(format!("{}/internal/token/introspect", auth_url()))
+            .header("x-service-token", service_secret())
+            .json(&Req { token })
+            .send()
+            .await
+        {
+            Ok(r) => r.status() != reqwest::StatusCode::UNAUTHORIZED,
+            Err(e) => {
+                tracing::warn!(error = %e, "checking the session's token failed");
+                true
+            }
+        },
+    };
+    if !valid {
+        tracing::info!(username = %username, "session's token no longer valid; logging out");
+        let _ = sess.flush().await;
+        return Ok(LoginStatus::LoggedOut);
+    }
+    Ok(LoginStatus::LoggedIn(username))
 }
 
 /// Register a new account and auto-login on success.
@@ -327,6 +355,13 @@ pub async fn register_password(
         let body = resp.text().await.unwrap_or_default();
         tracing::warn!(username = %username, reason = %body, "registration conflict");
         metrics::counter!("bff_register_attempts_total", "status" => "conflict").increment(1);
+        return Err(ServerFnError::new(body));
+    }
+
+    if resp.status() == reqwest::StatusCode::BAD_REQUEST {
+        // Auth says what's wrong ("Invalid email address", password too short).
+        let body = resp.text().await.unwrap_or_default();
+        metrics::counter!("bff_register_attempts_total", "status" => "invalid").increment(1);
         return Err(ServerFnError::new(body));
     }
 
@@ -508,6 +543,29 @@ pub struct AccountProfile {
     pub user_id: i64,
     pub username: String,
     pub display_name: Option<String>,
+    /// `None` for accounts without one (GitHub logins).
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub email_verified: bool,
+}
+
+/// POST `body` to auth's `path`: the status and the JSON reply (`Null` when the
+/// reply isn't JSON). Auth's email endpoints answer errors as `{"error": code}`.
+#[cfg(feature = "server")]
+pub async fn auth_json<T: Serialize>(path: &str, body: &T) -> Result<(u16, serde_json::Value), String> {
+    use session::{auth_url, service_secret};
+
+    let resp = http_client()
+        .post(format!("{}{path}", auth_url()))
+        .header("x-service-token", service_secret())
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let json = resp.json().await.unwrap_or(serde_json::Value::Null);
+    Ok((status, json))
 }
 
 /// Why a profile request failed.
