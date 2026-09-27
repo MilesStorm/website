@@ -158,10 +158,11 @@ pub fn Register() -> Element {
             div { class: "p-8 bg-base-200 shadow-lg rounded-lg max-w-md w-full",
                 h2 { class: "text-center text-2xl font-bold mb-6", "Sign Up" }
 
-                div { class: "flex flex-col space-y-4 mb-6",
+                // Same brand-styled buttons as the log in page.
+                div { class: "space-y-4 flex flex-col mb-4",
                     a {
                         href: "/oauth/start/github",
-                        class: "btn btn-outline btn-accent w-full",
+                        class: "btn bg-black text-white border-black",
                         onclick: |evt: MouseEvent| {
                             evt.prevent_default();
                             spawn(async move {
@@ -170,11 +171,12 @@ pub fn Register() -> Element {
                                 ).await;
                             });
                         },
+                        github_icon {}
                         "Sign up with GitHub"
                     }
                     a {
                         href: "/oauth/start/google",
-                        class: "btn btn-outline btn-accent w-full",
+                        class: "btn bg-white text-black border-[#e5e5e5]",
                         onclick: |evt: MouseEvent| {
                             evt.prevent_default();
                             spawn(async move {
@@ -183,6 +185,7 @@ pub fn Register() -> Element {
                                 ).await;
                             });
                         },
+                        google_icon {}
                         "Sign up with Google"
                     }
                 }
