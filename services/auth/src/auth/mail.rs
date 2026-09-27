@@ -126,7 +126,8 @@ pub fn site_url() -> String {
         .to_string()
 }
 
-/// An email with a greeting, some paragraphs, one button and a closing note.
+/// An email with a greeting, some paragraphs, one button and a closing note, in the
+/// website's default (dark) colours.
 pub struct Letter<'a> {
     pub to: &'a str,
     pub subject: &'a str,
@@ -156,18 +157,18 @@ impl Letter<'_> {
         let link = escape(self.link);
         let html = format!(
             r#"<!doctype html>
-<html><body style="margin:0;padding:0;background:#f4f4f5">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:32px 16px">
+<html><head><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"></head><body style="margin:0;padding:0;background:#1d232a">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1d232a;padding:32px 16px">
 <tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:12px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#18181b;font-size:16px;line-height:1.5">
-<tr><td style="padding:32px 32px 8px;font-size:14px;font-weight:700;letter-spacing:.04em;color:#6d28d9">MILESSTORM.COM</td></tr>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#191e24;border-radius:12px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d1d5db;font-size:16px;line-height:1.5">
+<tr><td style="padding:32px 32px 8px;font-size:14px;font-weight:700;letter-spacing:.04em;color:#40c6ed">MILESSTORM.COM</td></tr>
 <tr><td style="padding:8px 32px 0">
 <p style="margin:0 0 16px">Hi {name},</p>
 {paragraphs}
-<p style="margin:24px 0"><a href="{link}" style="display:inline-block;background:#6d28d9;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 24px;border-radius:8px">{button}</a></p>
-<p style="margin:0 0 16px;font-size:13px;color:#52525b">If the button doesn't work, copy this link into your browser:<br><a href="{link}" style="color:#6d28d9;word-break:break-all">{link}</a></p>
+<p style="margin:24px 0"><a href="{link}" style="display:inline-block;background:#40c6ed;color:#191e24;text-decoration:none;font-weight:600;padding:12px 24px;border-radius:8px">{button}</a></p>
+<p style="margin:0 0 16px;font-size:13px;color:#9ca3af">If the button doesn't work, copy this link into your browser:<br><a href="{link}" style="color:#40c6ed;word-break:break-all">{link}</a></p>
 </td></tr>
-<tr><td style="padding:16px 32px 32px;font-size:13px;color:#71717a;border-top:1px solid #e4e4e7">{footer}</td></tr>
+<tr><td style="padding:16px 32px 32px;font-size:13px;color:#9ca3af;border-top:1px solid #2a323c">{footer}</td></tr>
 </table>
 </td></tr>
 </table>

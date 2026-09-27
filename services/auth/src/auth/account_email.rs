@@ -327,7 +327,7 @@ fn reset_letter(account: &Account, email: &str, code: &str) -> super::mail::Mail
 fn delete_letter(account: &Account, email: &str, code: &str) -> super::mail::Mail {
     let link = link(Purpose::DeleteAccount, code);
     let paragraph = format!(
-        "You asked to delete your account, {}. Deleting removes your profile, your picture and any dice pictures you shared. It can't be undone.",
+        "You asked to delete your account, {}. Deleting removes your profile and picture, and any data you chose to share will also be removed. It can't be undone.",
         account.username
     );
     Letter {

@@ -199,7 +199,7 @@ pub async fn delete_account(code: String) -> Result<Done, ServerFnError> {
         .map_err(|e| {
             tracing::warn!(user_id, "deleting an account: data removed but the account wasn't");
             ServerFnError::new(format!(
-                "Your pictures and rolls were removed, but the account itself wasn't deleted: {}",
+                "The data you shared was removed, but the account itself wasn't deleted: {}",
                 server_message(e)
             ))
         })?;

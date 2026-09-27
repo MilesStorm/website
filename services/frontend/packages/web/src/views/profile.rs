@@ -296,7 +296,7 @@ fn DeleteCard(account: AccountInfo) -> Element {
                 div {
                     h2 { class: "text-lg font-bold", "Delete account" }
                     p { class: "mt-1 text-sm opacity-70 max-w-md",
-                        "Removes your account, profile picture and any dice pictures you shared. This can't be undone."
+                        "Removes your account and profile picture. Any data you chose to share will also be removed. This can't be undone."
                     }
                 }
                 if !open() {

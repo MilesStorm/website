@@ -305,7 +305,7 @@ pub fn DeleteAccount(code: String) -> Element {
                     p {
                         "This permanently deletes the account "
                         span { class: "font-semibold", "{d.username}" }
-                        ": your profile, your profile picture and any dice pictures you shared. "
+                        ": your profile and profile picture. Any data you chose to share will also be removed. "
                         "It can't be undone."
                     }
                     div { class: "flex flex-col gap-2 sm:flex-row-reverse",
