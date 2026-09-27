@@ -311,7 +311,7 @@ impl Backend {
                     return Ok(user);
                 }
 
-                // First-time Google login. A username collision with another account would
+                // First-time Google login; Google has confirmed the address. A username collision with another account would
                 // surface as a unique-violation Sqlx error rather than silently overwriting.
                 let username = user_info.name.clone().unwrap_or_else(|| {
                     user_info
@@ -324,8 +324,8 @@ impl Backend {
 
                 let user = sqlx::query_as(
                     r#"
-                    insert into users (username, email, access_token)
-                    values ($1, $2, $3)
+                    insert into users (username, email, access_token, email_verified_at)
+                    values ($1, $2, $3, now())
                     returning *
                     "#,
                 )

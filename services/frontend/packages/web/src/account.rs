@@ -22,6 +22,9 @@ pub struct AccountInfo {
     pub picture_version: Option<i64>,
     /// False when the picture store (SurrealDB) isn't reachable/configured.
     pub pictures_available: bool,
+    /// `None` for accounts without one (GitHub logins).
+    pub email: Option<String>,
+    pub email_verified: bool,
 }
 
 impl AccountInfo {
@@ -85,6 +88,8 @@ mod server {
             display_name: profile.display_name,
             picture_version,
             pictures_available,
+            email: profile.email,
+            email_verified: profile.email_verified,
         }
     }
 

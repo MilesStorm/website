@@ -3,12 +3,10 @@ use dioxus::prelude::*;
 use ui::{data_dir::Theme, default_profile_picture, get_mode, set_mode};
 
 use crate::account::{get_account, remove_profile_picture, set_account_display_name, AccountInfo, PICTURE_MAX_UPLOAD};
+use crate::emails::{delete_account_without_email, request_account_deletion, send_confirmation_email, server_message};
 use crate::sharing::{delete_my_dataset, get_dataset_sharing, set_dataset_sharing, SharingState};
 use crate::{ACCOUNT, LOGIN_STATUS, PERMISSIONS};
 use ui::data_dir::LoginStatus;
-
-/// Where people are sent to ask for their account to be deleted.
-const OWNER_CONTACT: &str = "https://github.com/MilesStorm";
 
 #[component]
 pub fn Profile() -> Element {
@@ -46,7 +44,10 @@ fn ProfileForm() -> Element {
             div { class: "bg-base-200 p-6 sm:p-10 rounded-lg shadow-lg max-w-4xl mx-auto flex flex-col gap-8",
                 h1 { class: "text-2xl font-bold", "Profile" }
                 match ACCOUNT() {
-                    Some(account) => rsx! { AccountCard { account } },
+                    Some(account) => rsx! {
+                        AccountCard { account: account.clone() }
+                        EmailCard { account }
+                    },
                     None if load_error() => rsx! {
                         p { class: "text-error", "Your account can't be loaded right now. Try again later." }
                     },
@@ -56,10 +57,8 @@ fn ProfileForm() -> Element {
                 if PERMISSIONS.read().contains_key("arcane") {
                     DiceSharing {}
                 }
-                p { class: "text-sm opacity-70",
-                    "Want your account deleted? Contact the site owner on "
-                    a { class: "link", href: OWNER_CONTACT, target: "_blank", rel: "noopener noreferrer", "GitHub" }
-                    "."
+                if let Some(account) = ACCOUNT() {
+                    DeleteCard { account }
                 }
             }
         }
@@ -221,6 +220,163 @@ fn AccountCard(account: AccountInfo) -> Element {
     }
 }
 
+/// The account's email address, and whether it's confirmed.
+#[component]
+fn EmailCard(account: AccountInfo) -> Element {
+    let mut busy = use_signal(|| false);
+    let mut msg = use_signal(|| Option::<(bool, String)>::None);
+
+    rsx! {
+        section { class: CARD,
+            div { class: "flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between",
+                div { class: "min-w-0",
+                    h2 { class: "text-lg font-bold", "Email" }
+                    match account.email.clone() {
+                        Some(email) => rsx! {
+                            p { class: "mt-1 flex flex-wrap items-center gap-2 text-sm",
+                                span { class: "break-all", "{email}" }
+                                if account.email_verified {
+                                    span { class: "badge badge-success badge-sm", "Confirmed" }
+                                } else {
+                                    span { class: "badge badge-warning badge-sm", "Not confirmed" }
+                                }
+                            }
+                            if !account.email_verified {
+                                p { class: "mt-1 text-xs opacity-60 max-w-md",
+                                    "Confirm it so we can help you if you forget your password."
+                                }
+                            }
+                        },
+                        None => rsx! {
+                            p { class: "mt-1 text-sm opacity-70", "Your account has no email address: you log in with GitHub." }
+                        },
+                    }
+                }
+                if account.email.is_some() && !account.email_verified {
+                    button {
+                        class: "btn btn-sm btn-primary shrink-0",
+                        disabled: busy(),
+                        onclick: move |_| {
+                            spawn(async move {
+                                busy.set(true);
+                                msg.set(Some(match send_confirmation_email().await {
+                                    Ok(to) => (false, format!("Sent. Open the link in the email to {to}; check your spam folder too.")),
+                                    Err(e) => (true, server_message(e)),
+                                }));
+                                busy.set(false);
+                            });
+                        },
+                        "Send confirmation email"
+                    }
+                }
+            }
+            if msg().is_some() {
+                div { class: "border-t border-base-300 px-6 py-3", Message { msg: msg() } }
+            }
+        }
+    }
+}
+
+/// Deleting the account: by emailed link, or (without an email) by typing the username.
+#[component]
+fn DeleteCard(account: AccountInfo) -> Element {
+    let mut open = use_signal(|| false);
+    let mut busy = use_signal(|| false);
+    let mut typed = use_signal(String::new);
+    let mut msg = use_signal(|| Option::<(bool, String)>::None);
+    // A confirmed address gets a link; otherwise it might never arrive.
+    let by_email = account.email.is_some() && account.email_verified;
+    let unconfirmed = account.email.is_some() && !account.email_verified;
+    let username = account.username.clone();
+    let matches = typed().trim() == username;
+
+    rsx! {
+        section { class: "rounded-box border border-error/40 bg-base-100 overflow-hidden",
+            div { class: "flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between",
+                div {
+                    h2 { class: "text-lg font-bold", "Delete account" }
+                    p { class: "mt-1 text-sm opacity-70 max-w-md",
+                        "Removes your account, profile picture and any dice pictures you shared. This can't be undone."
+                    }
+                }
+                if !open() {
+                    button {
+                        class: "btn btn-sm btn-outline btn-error shrink-0",
+                        onclick: move |_| open.set(true),
+                        "Delete my account…"
+                    }
+                }
+            }
+            if open() {
+                div { class: "flex flex-col gap-3 border-t border-error/40 bg-error/10 px-6 py-4",
+                    if by_email {
+                        p { class: "text-sm",
+                            "We'll email you a link to confirm. Nothing is deleted until you open it and confirm once more."
+                        }
+                        div { class: "flex flex-wrap gap-2",
+                            button { class: "btn btn-ghost btn-sm", onclick: move |_| { open.set(false); msg.set(None); }, "Cancel" }
+                            button {
+                                class: "btn btn-error btn-sm",
+                                disabled: busy(),
+                                onclick: move |_| {
+                                    spawn(async move {
+                                        busy.set(true);
+                                        msg.set(Some(match request_account_deletion().await {
+                                            Ok(to) => (false, format!("Sent to {to}. The link works for 1 hour.")),
+                                            Err(e) => (true, server_message(e)),
+                                        }));
+                                        busy.set(false);
+                                    });
+                                },
+                                "Email me the link"
+                            }
+                        }
+                    } else {
+                        label { class: "text-sm", r#for: "delete-confirm",
+                            if unconfirmed { "Your email isn't confirmed, so there's no link to wait for. " }
+                            "Type your username, "
+                            span { class: "font-semibold", "{username}" }
+                            ", to confirm."
+                        }
+                        div { class: "flex flex-wrap gap-2",
+                            input {
+                                id: "delete-confirm",
+                                r#type: "text",
+                                autocomplete: "off",
+                                class: "input input-bordered input-sm w-full max-w-xs",
+                                value: "{typed}",
+                                oninput: move |evt| typed.set(evt.value()),
+                            }
+                            button { class: "btn btn-ghost btn-sm", onclick: move |_| { open.set(false); typed.set(String::new()); msg.set(None); }, "Cancel" }
+                            button {
+                                class: "btn btn-error btn-sm",
+                                disabled: busy() || !matches,
+                                onclick: move |_| {
+                                    spawn(async move {
+                                        busy.set(true);
+                                        match delete_account_without_email(typed()).await {
+                                            Ok(_) => {
+                                                *LOGIN_STATUS.write() = LoginStatus::LoggedOut;
+                                                *PERMISSIONS.write() = Default::default();
+                                                *ACCOUNT.write() = None;
+                                                navigator().replace("/account-deleted");
+                                            }
+                                            Err(e) => msg.set(Some((true, server_message(e)))),
+                                        }
+                                        busy.set(false);
+                                    });
+                                },
+                                "Delete permanently"
+                            }
+                        }
+                    }
+                    Message { msg: msg() }
+                }
+            }
+        }
+    }
+}
+
 /// Site theme, kept in this browser.
 #[component]
 fn AppearanceCard() -> Element {
@@ -257,13 +413,6 @@ fn Message(msg: Option<(bool, String)>) -> Element {
     }
 }
 
-/// The text of a server function's error, as written by the server.
-fn server_message(e: ServerFnError) -> String {
-    match e {
-        ServerFnError::ServerError { message, .. } => message,
-        _ => "Couldn't reach the site. Check your connection and try again.".into(),
-    }
-}
 
 /// POST the file to `/api/profile/picture`; the new picture's version, or a message.
 async fn upload_picture(bytes: &[u8]) -> Result<i64, String> {

@@ -14,6 +14,8 @@ use sqlx::PgPool;
 use tokio::task;
 use ulid::Ulid;
 
+use super::account_email;
+use super::mail::Mailer;
 use super::telemetry;
 use super::user::{Backend, BackendError, BffToken, OAuthProvider};
 
@@ -23,6 +25,7 @@ pub struct InternalState {
     pub jwt_secret: String,
     pub service_secret: String,
     pub backend: Backend,
+    pub mailer: Mailer,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,6 +58,8 @@ pub fn router(state: InternalState) -> Router<()> {
         .route("/internal/admin/roles/all", get(admin_list_all_roles))
         .route("/internal/admin/permissions", get(admin_list_permissions))
         .route("/internal/admin/roles/{role_id}/permissions/{permission_id}", post(admin_assign_role_permission).delete(admin_revoke_role_permission))
+        // Confirm email, reset password, delete account
+        .merge(account_email::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             verify_service_token,
@@ -241,6 +246,9 @@ async fn oauth_exchange(
 
 // ---- Token introspection → JWT ----
 
+/// Introspection's reply for a token that doesn't exist or has expired.
+const INVALID_TOKEN: &str = "Invalid or expired token";
+
 #[derive(Deserialize)]
 struct IntrospectReq {
     token: String,
@@ -264,7 +272,7 @@ async fn introspect(
     State(state): State<InternalState>,
     Json(req): Json<IntrospectReq>,
 ) -> impl IntoResponse {
-    let row: Option<TokenRow> = sqlx::query_as(
+    let row: Option<TokenRow> = match sqlx::query_as(
         r#"
         SELECT t.user_id, u.username
         FROM bff_tokens t
@@ -275,11 +283,20 @@ async fn introspect(
     .bind(&req.token)
     .fetch_optional(&state.db)
     .await
-    .unwrap_or(None);
+    {
+        Ok(row) => row,
+        // Not "invalid token": the website logs a session out only on that reply.
+        Err(e) => {
+            tracing::error!(error = %e, "token introspection query failed");
+            telemetry::token_operation("introspect", "error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let Some(row) = row else {
         telemetry::token_operation("introspect", "invalid");
-        return (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response();
+        // The website logs a session out on exactly this reply (`INVALID_TOKEN`).
+        return (StatusCode::UNAUTHORIZED, INVALID_TOKEN).into_response();
     };
 
     let permissions: Vec<String> = sqlx::query_scalar(
@@ -346,6 +363,33 @@ async fn register(
     State(state): State<InternalState>,
     Json(req): Json<RegisterReq>,
 ) -> impl IntoResponse {
+    let Some(email) = account_email::clean_email(&req.email) else {
+        return (StatusCode::BAD_REQUEST, "Invalid email address").into_response();
+    };
+    if !account_email::password_ok(&req.password) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Password must be at least {} characters", account_email::PASSWORD_MIN),
+        )
+            .into_response();
+    }
+    // The unique index is case-sensitive; addresses aren't.
+    match sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM users WHERE LOWER(email) = LOWER($1))")
+        .bind(&email)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(false) => {}
+        Ok(true) => {
+            tracing::warn!("registration failed: email already in use");
+            telemetry::token_operation("register", "conflict");
+            return (StatusCode::CONFLICT, "Email already in use").into_response();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "registration failed: checking the email");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
     let password = req.password.clone();
     let hashed = task::spawn_blocking(move || password_auth::generate_hash(password))
         .await
@@ -355,7 +399,7 @@ async fn register(
         "INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, password",
     )
     .bind(&req.username)
-    .bind(&req.email)
+    .bind(&email)
     .bind(&hashed)
     .fetch_one(&state.db)
     .await;
@@ -365,6 +409,7 @@ async fn register(
             Ok(bff_token) => {
                 tracing::info!(user_id = u.id, username = %u.username, "registration succeeded");
                 telemetry::token_operation("register", "success");
+                account_email::send_verification_in_background(&state, u.id);
                 Json(TokenResp {
                     token: bff_token.token,
                     username: u.username,
@@ -384,7 +429,7 @@ async fn register(
                 (StatusCode::CONFLICT, "User already exists").into_response()
             }
             Some("users_email_key") => {
-                tracing::warn!(email = %req.email, "registration failed: email already in use");
+                tracing::warn!("registration failed: email already in use");
                 telemetry::token_operation("register", "conflict");
                 (StatusCode::CONFLICT, "Email already in use").into_response()
             }
@@ -469,26 +514,28 @@ async fn resolve_ark_user(db: &PgPool, token: &str) -> Option<i64> {
 // What a logged-in user can see and change about their own account on the website's
 // profile page. The username can't be changed: GitHub logins find their account by it.
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 struct ProfileResp {
     user_id: i64,
     username: String,
     display_name: Option<String>,
+    /// `None` for accounts without one (GitHub logins).
+    email: Option<String>,
+    email_verified: bool,
 }
 
-/// The token's user (id, username, display name), for any valid token.
+const PROFILE_COLUMNS: &str =
+    "u.id AS user_id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS email_verified";
+
+/// The token's user (id, username, display name, email), for any valid token.
 async fn resolve_profile(db: &PgPool, token: &str) -> Result<Option<ProfileResp>, sqlx::Error> {
-    let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT u.id, u.username, u.display_name FROM bff_tokens t
-        JOIN users u ON u.id = t.user_id
-        WHERE t.token = $1 AND t.expires_at > NOW()
-        "#,
-    )
+    sqlx::query_as(&format!(
+        "SELECT {PROFILE_COLUMNS} FROM bff_tokens t JOIN users u ON u.id = t.user_id \
+         WHERE t.token = $1 AND t.expires_at > NOW()"
+    ))
     .bind(token)
     .fetch_optional(db)
-    .await?;
-    Ok(row.map(|(user_id, username, display_name)| ProfileResp { user_id, username, display_name }))
+    .await
 }
 
 #[tracing::instrument(name = "profile.get", skip_all)]
@@ -539,22 +586,19 @@ async fn profile_set_display_name(
     let Ok(name) = clean_display_name(req.display_name.as_deref()) else {
         return (StatusCode::BAD_REQUEST, "Invalid display name").into_response();
     };
-    let row: Result<Option<(i64, String, Option<String>)>, _> = sqlx::query_as(
-        r#"
-        UPDATE users u SET display_name = $2
-        FROM bff_tokens t
-        WHERE t.token = $1 AND t.expires_at > NOW() AND u.id = t.user_id
-        RETURNING u.id, u.username, u.display_name
-        "#,
-    )
+    let row: Result<Option<ProfileResp>, _> = sqlx::query_as(&format!(
+        "UPDATE users u SET display_name = $2 FROM bff_tokens t \
+         WHERE t.token = $1 AND t.expires_at > NOW() AND u.id = t.user_id \
+         RETURNING {PROFILE_COLUMNS}"
+    ))
     .bind(&req.token)
     .bind(&name)
     .fetch_optional(&state.db)
     .await;
     match row {
-        Ok(Some((user_id, username, display_name))) => {
-            tracing::info!(user_id, "display name changed");
-            Json(ProfileResp { user_id, username, display_name }).into_response()
+        Ok(Some(profile)) => {
+            tracing::info!(user_id = profile.user_id, "display name changed");
+            Json(profile).into_response()
         }
         Ok(None) => (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response(),
         Err(e) => {

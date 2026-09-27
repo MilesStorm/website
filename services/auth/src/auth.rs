@@ -1,6 +1,8 @@
+mod account_email;
 pub mod arcane;
 mod core;
 mod internal;
+mod mail;
 pub mod permissions;
 mod protected_route;
 mod session_store;
@@ -96,6 +98,7 @@ impl Auth {
         );
         tokio::spawn(sync_sessions_gauge(self.db.clone()));
         tokio::spawn(poll_pool_metrics(self.db.clone()));
+        tokio::spawn(account_email::clean_expired(self.db.clone()));
 
         let session_layer = SessionManagerLayer::new(session_store)
             // Defense-in-depth: even though auth is now cluster-internal, require Secure
@@ -113,6 +116,7 @@ impl Auth {
             jwt_secret: env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
             service_secret: env::var("BFF_SERVICE_SECRET").expect("BFF_SERVICE_SECRET must be set"),
             backend,
+            mailer: mail::Mailer::from_env(),
         };
 
         let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
