@@ -15,6 +15,7 @@ use tokio::task;
 use ulid::Ulid;
 
 use super::account_email;
+use super::invites;
 use super::mail::Mailer;
 use super::telemetry;
 use super::user::{Backend, BackendError, BffToken, OAuthProvider};
@@ -60,6 +61,8 @@ pub fn router(state: InternalState) -> Router<()> {
         .route("/internal/admin/roles/{role_id}/permissions/{permission_id}", post(admin_assign_role_permission).delete(admin_revoke_role_permission))
         // Confirm email, reset password, delete account
         .merge(account_email::routes())
+        // Invite links that give a role
+        .merge(invites::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             verify_service_token,

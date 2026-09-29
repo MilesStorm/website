@@ -131,6 +131,32 @@ pub struct AdminUser {
     pub roles: Vec<AdminUserRole>,
 }
 
+/// An invite link as the admin panel lists it (services/auth/src/auth/invites.rs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdminInvite {
+    pub id: i32,
+    pub role_id: i32,
+    pub role: String,
+    pub note: Option<String>,
+    /// Username of the admin who made it.
+    pub created_by: Option<String>,
+    /// RFC 3339 timestamps.
+    pub created_at: String,
+    pub expires_at: String,
+    /// `None` = any number of people.
+    pub max_uses: Option<i32>,
+    pub uses: i32,
+    pub revoked: bool,
+    /// Whether it can still let someone new in.
+    pub live: bool,
+    /// Usernames of who joined through it, in order.
+    #[serde(default)]
+    pub joined: Vec<String>,
+    /// The link itself: only right after making it.
+    #[serde(default)]
+    pub link: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PagedResult<T> {
     pub items: Vec<T>,

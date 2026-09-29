@@ -31,6 +31,15 @@ Resend's free plan sends 100 emails a day and 3,000 a month. Emails that couldn'
 sent are logged (`sending an account email failed`, with Resend's reason) and counted
 in `auth_emails_total{status="failed"}`.
 
+## Invite links
+
+Links that give whoever opens them a role, e.g. `arcane_user` for the Arcane dice test
+group (`src/auth/invites.rs`). Make them in the website's admin panel, Invites tab: pick
+the role, how many days the link works and how many people can use it. The link is shown
+once, when made (only its SHA-256 is stored, in `invites`), and can be turned off there.
+Someone without an account is asked to sign up or log in first, and joins right after.
+Links use `SITE_URL`, like the emails.
+
 ## Running the server
 
 for development purposes you can add an .env file to the root folder and the server will automatically parse. However for production you need to set the environment variables manually for security purposes.

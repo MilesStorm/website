@@ -2,6 +2,7 @@ mod account_email;
 pub mod arcane;
 mod core;
 mod internal;
+mod invites;
 mod mail;
 pub mod permissions;
 mod protected_route;

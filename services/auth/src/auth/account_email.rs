@@ -100,14 +100,14 @@ pub fn routes() -> Router<InternalState> {
 // ---- Codes ----
 
 /// A fresh link code: 32 random bytes, URL-safe base64 (43 characters).
-fn new_code() -> String {
+pub(super) fn new_code() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// What's stored for a code.
-fn hash(code: &str) -> String {
+pub(super) fn hash(code: &str) -> String {
     Sha256::digest(code.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -281,11 +281,11 @@ pub fn clean_email(raw: &str) -> Option<String> {
 }
 
 /// The error body the website reads: `{"error": code}`.
-fn error(status: StatusCode, code: &str) -> Response {
+pub(super) fn error(status: StatusCode, code: &str) -> Response {
     (status, Json(serde_json::json!({ "error": code }))).into_response()
 }
 
-fn db_error(what: &str, e: sqlx::Error) -> Response {
+pub(super) fn db_error(what: &str, e: sqlx::Error) -> Response {
     tracing::error!(error = %e, "{what} failed");
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal")
 }
