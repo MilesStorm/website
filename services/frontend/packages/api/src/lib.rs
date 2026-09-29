@@ -3,7 +3,9 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub use ui::data_dir::{AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus, PagedResult};
+pub use ui::data_dir::{
+    AdminInvite, AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus, PagedResult,
+};
 
 /// Request extension that carries the serialised W3C `traceparent` captured
 /// before Dioxus's SSR dispatcher spawns server-function tasks.
@@ -41,6 +43,18 @@ mod session {
         let parts = ctx.parts_mut();
         parts.extensions.get::<crate::IncomingTraceparent>().map(|t| t.0.clone())
     }
+}
+
+/// Gives the session a new ID on logging in, keeping what's in it (e.g. a pending
+/// invite). Otherwise someone who planted a known session ID in a browser (session
+/// fixation) would be logged in as whoever logs in there next. Call before storing
+/// the login; on failure, don't log in.
+#[cfg(feature = "server")]
+pub async fn fresh_session_id(sess: &tower_sessions::Session) -> Result<(), String> {
+    sess.cycle_id().await.map_err(|e| {
+        tracing::error!(error = %e, "giving the session a new ID on login failed");
+        e.to_string()
+    })
 }
 
 #[cfg(feature = "server")]
@@ -243,12 +257,14 @@ pub async fn login_password(
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-    sess.insert("opaque_token", data.token)
+    fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
+    sess.insert("opaque_token", &data.token)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     sess.insert("username", data.username.clone())
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
+    redeem_pending_invite(&sess, &data.token).await;
 
     tracing::info!(username = %data.username, "password login succeeded");
     metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "success").increment(1);
@@ -384,12 +400,14 @@ pub async fn register_password(
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-    sess.insert("opaque_token", data.token)
+    fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
+    sess.insert("opaque_token", &data.token)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     sess.insert("username", data.username.clone())
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
+    redeem_pending_invite(&sess, &data.token).await;
 
     tracing::info!(username = %data.username, "registration succeeded");
     metrics::counter!("bff_register_attempts_total", "status" => "success").increment(1);
@@ -573,6 +591,72 @@ pub async fn auth_json<T: Serialize>(path: &str, body: &T) -> Result<(u16, serde
     let status = resp.status().as_u16();
     let json = resp.json().await.unwrap_or(serde_json::Value::Null);
     Ok((status, json))
+}
+
+// ---- Invite links ----
+//
+// Someone logged out who opens an invite link (`/invite?code=…`) gets the code kept
+// in their session; logging in or signing up by any means then redeems it, and the
+// next page is the invite page again, which says they're in.
+
+/// Session key: an invite opened while logged out, redeemed on logging in.
+#[cfg(feature = "server")]
+pub const PENDING_INVITE_KEY: &str = "pending_invite";
+/// Session key: the invite page to open right after logging in.
+#[cfg(feature = "server")]
+pub const INVITE_RETURN_KEY: &str = "invite_return";
+
+/// How long an invite opened while logged out waits for a log in. Short, so on a
+/// shared computer the next person to log in doesn't get it.
+#[cfg(feature = "server")]
+const PENDING_INVITE_SECS: u64 = 3600;
+
+/// An invite opened while logged out, kept in the session.
+#[cfg(feature = "server")]
+#[derive(Serialize, Deserialize)]
+pub struct PendingInvite {
+    code: String,
+    /// Unix seconds.
+    opened_at: u64,
+}
+
+#[cfg(feature = "server")]
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+#[cfg(feature = "server")]
+impl PendingInvite {
+    pub fn new(code: String) -> Self {
+        Self { code, opened_at: unix_now() }
+    }
+
+    /// The code, if it was opened recently enough.
+    fn fresh_code(self, now: u64) -> Option<String> {
+        (now.saturating_sub(self.opened_at) <= PENDING_INVITE_SECS).then_some(self.code)
+    }
+}
+
+/// Redeems the session's pending invite for the account just logged in as `token`.
+/// Returns the invite page to show next (it also says if the link no longer works).
+#[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.redeem_pending_invite", skip_all)]
+pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) -> Option<String> {
+    let pending: PendingInvite = sess.remove(PENDING_INVITE_KEY).await.ok().flatten()?;
+    let Some(code) = pending.fresh_code(unix_now()) else {
+        tracing::info!("pending invite ignored: opened too long ago");
+        return None;
+    };
+    match auth_json("/internal/invite/redeem", &serde_json::json!({ "code": code, "token": token })).await {
+        Ok((200..=299, reply)) => tracing::info!(role = ?reply.get("role"), "pending invite redeemed"),
+        Ok((status, reply)) => tracing::warn!(status, reply = %reply, "pending invite not redeemed"),
+        Err(e) => tracing::error!(error = %e, "redeeming a pending invite failed"),
+    }
+    let page = format!("/invite?code={code}");
+    if let Err(e) = sess.insert(INVITE_RETURN_KEY, &page).await {
+        tracing::warn!(error = %e, "saving the invite page to return to failed");
+    }
+    Some(page)
 }
 
 /// Why a profile request failed.
@@ -962,4 +1046,119 @@ pub async fn admin_revoke_role_permission(role_id: i32, permission_id: i32) -> R
         return Err(ServerFnError::new("Failed to revoke permission"));
     }
     Ok(())
+}
+
+// ---- Admin invite links ----
+
+/// The latest invite links, newest first.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_list_invites", skip_all)]
+pub async fn admin_list_invites() -> Result<Vec<AdminInvite>, ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    let resp = http_client()
+        .get(format!("{}/internal/admin/invites", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to fetch invites"));
+    }
+    resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Makes an invite link that gives `role_id`, working for `days` days and for up
+/// to `max_uses` people (`None`: any number). The reply's `link` is shown only now.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_create_invite", skip_all, fields(role_id, days))]
+pub async fn admin_create_invite(
+    role_id: i32,
+    days: i64,
+    max_uses: Option<i32>,
+    note: Option<String>,
+) -> Result<AdminInvite, ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+    let sess = get_session().ok_or_else(|| ServerFnError::new("Not authenticated"))?;
+    let token: String = sess
+        .get("opaque_token")
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| ServerFnError::new("Not authenticated"))?;
+
+    let body = serde_json::json!({
+        "token": token,
+        "role_id": role_id,
+        "days": days,
+        "max_uses": max_uses,
+        "note": note,
+    });
+    let resp = http_client()
+        .post(format!("{}/internal/admin/invites", auth_url()))
+        .header("x-service-token", service_secret())
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    match resp.status() {
+        s if s.is_success() => resp.json().await.map_err(|e| ServerFnError::new(e.to_string())),
+        reqwest::StatusCode::BAD_REQUEST => {
+            let reply: serde_json::Value = resp.json().await.unwrap_or_default();
+            Err(ServerFnError::new(if reply.get("error").and_then(|e| e.as_str()) == Some("admin_role") {
+                "Links can't give a role with admin rights: give that role in the Users tab instead."
+            } else {
+                "Check the fields: 1 to 365 days, 1 to 1000 people, and a note of at most 100 characters."
+            }))
+        }
+        reqwest::StatusCode::NOT_FOUND => Err(ServerFnError::new("That role no longer exists.")),
+        s => Err(ServerFnError::new(format!("Failed to make the invite ({s})"))),
+    }
+}
+
+/// Stops an invite link from letting anyone else in. People who already joined keep the role.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.admin_revoke_invite", skip_all, fields(invite_id))]
+pub async fn admin_revoke_invite(invite_id: i32) -> Result<(), ServerFnError> {
+    use session::*;
+
+    if !check_permission("manage_permissions".to_string()).await? {
+        return Err(ServerFnError::new("Forbidden"));
+    }
+
+    let resp = http_client()
+        .delete(format!("{}/internal/admin/invites/{invite_id}", auth_url()))
+        .header("x-service-token", service_secret())
+        .send()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(ServerFnError::new("Failed to revoke the invite"));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::PendingInvite;
+
+    #[test]
+    fn pending_invites_wait_an_hour() {
+        let p = |opened_at| PendingInvite { code: "c".into(), opened_at };
+        assert_eq!(p(1000).fresh_code(1000 + 3600), Some("c".into()));
+        assert_eq!(p(1000).fresh_code(1000 + 3601), None);
+        // A clock that went backwards doesn't make it last forever or panic.
+        assert_eq!(p(5000).fresh_code(1000), Some("c".into()));
+    }
 }

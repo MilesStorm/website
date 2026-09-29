@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use api::{get_my_permissions, login_password, register_password};
 
 use crate::emails::server_message;
+use crate::invites::after_login_path;
 use crate::{LOGIN_STATUS, PERMISSIONS};
 
 // ---- Login ----
@@ -24,7 +25,7 @@ pub fn Login(error: String) -> Element {
                         let map = perms.into_iter().map(|n| (n, true)).collect();
                         *PERMISSIONS.write() = map;
                     }
-                    navigator().push("/");
+                    navigator().push(next_page().await);
                 }
                 Err(e) => login_error.set(e.to_string()),
             }
@@ -143,7 +144,7 @@ pub fn Register() -> Element {
                         let map = perms.into_iter().map(|n| (n, true)).collect();
                         *PERMISSIONS.write() = map;
                     }
-                    navigator().push("/");
+                    navigator().push(next_page().await);
                 }
                 Err(e) => reg_error.set(server_message(e)),
             }
@@ -249,6 +250,12 @@ pub fn Register() -> Element {
             }
         }
     }
+}
+
+/// The page to open after logging in or signing up: the invite page when that's
+/// where they came from (the invite was just redeemed), otherwise the start page.
+async fn next_page() -> String {
+    after_login_path().await.unwrap_or_else(|_| "/".into())
 }
 
 fn form_text(evt: &FormData, name: &str) -> String {

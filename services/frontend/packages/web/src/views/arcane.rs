@@ -17,8 +17,11 @@ pub fn Arcane() -> Element {
             }
         },
         LoginStatus::LoggedIn(_) if !has_perm => rsx! {
-            div { class: "flex h-screen items-center justify-center",
+            div { class: "flex h-screen flex-col items-center justify-center gap-2 px-4 text-center",
                 p { "You do not have permission to access the dice recognizer." }
+                p { class: "text-sm opacity-70",
+                    "The dice recognizer is being tested by a small group. Got an invite link? Open it to join."
+                }
             }
         },
         LoginStatus::LoggedIn(_) => rsx! { ArcaneIsland {} },

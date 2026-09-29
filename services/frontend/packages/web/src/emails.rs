@@ -35,14 +35,14 @@ pub struct Done {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-mod server {
+pub(crate) mod server {
     use super::*;
     use dioxus::fullstack::FullstackContext;
     use serde_json::Value;
 
     /// The request's session and roll hub, after checking the request came from this
     /// site (a second line of defence after the SameSite=Lax cookie).
-    pub(super) fn request() -> Result<(Option<tower_sessions::Session>, Option<crate::rolls::RollHub>), ServerFnError> {
+    pub(crate) fn request() -> Result<(Option<tower_sessions::Session>, Option<crate::rolls::RollHub>), ServerFnError> {
         let ctx = FullstackContext::current().ok_or_else(|| ServerFnError::new("no request context"))?;
         let parts = ctx.parts_mut();
         if !crate::rolls::origin_allowed(&parts.headers) {
@@ -55,7 +55,7 @@ mod server {
     }
 
     /// The session's auth token.
-    pub(super) async fn token(session: &Option<tower_sessions::Session>) -> Result<String, ServerFnError> {
+    pub(crate) async fn token(session: &Option<tower_sessions::Session>) -> Result<String, ServerFnError> {
         let token: Option<String> = match session {
             Some(s) => s.get("opaque_token").await.ok().flatten(),
             None => None,
@@ -63,8 +63,8 @@ mod server {
         token.ok_or_else(|| ServerFnError::new(LOGGED_OUT))
     }
 
-    pub(super) const LOGGED_OUT: &str = "You've been logged out. Log in again.";
-    const OFFLINE: &str = "Something went wrong on our side. Try again in a minute.";
+    pub(crate) const LOGGED_OUT: &str = "You've been logged out. Log in again.";
+    pub(crate) const OFFLINE: &str = "Something went wrong on our side. Try again in a minute.";
 
     /// Calls auth; `Ok` with the reply on 2xx, otherwise the page's message for the
     /// error code auth gave.

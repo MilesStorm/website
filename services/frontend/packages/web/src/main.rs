@@ -5,8 +5,8 @@ use dioxus::prelude::*;
 use api::{check_login_status, get_my_permissions, logout};
 use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
 use views::{
-    AccountDeleted, AdminPanel, Arcane, Ark, AssholeTimer, DeleteAccount, ForgotPassword, Landing, Login, NotFound,
-    Profile, Register, ResetPassword, VerifyEmail,
+    AccountDeleted, AdminPanel, Arcane, Ark, AssholeTimer, DeleteAccount, ForgotPassword, Invite, Landing, Login,
+    NotFound, Profile, Register, ResetPassword, VerifyEmail,
 };
 
 mod views;
@@ -19,6 +19,7 @@ mod dataset;
 mod sharing;
 mod account;
 mod emails;
+mod invites;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
@@ -476,7 +477,10 @@ async fn oauth_callback(
 
     match api::exchange_oauth_code(&provider, &code).await {
         Ok((token, username)) => {
-            if let Err(e) = session.insert("opaque_token", token).await {
+            if api::fresh_session_id(&session).await.is_err() {
+                return Redirect::to("/login?error=session_failed").into_response();
+            }
+            if let Err(e) = session.insert("opaque_token", &token).await {
                 tracing::error!(error = %e, %provider, "oauth_callback: failed to write opaque_token");
                 return Redirect::to("/login?error=session_failed").into_response();
             }
@@ -484,7 +488,14 @@ async fn oauth_callback(
                 tracing::error!(error = %e, %provider, "oauth_callback: failed to write username");
                 return Redirect::to("/login?error=session_failed").into_response();
             }
-            Redirect::to("/").into_response()
+            // Came from an invite link: back to it (the invite was just redeemed).
+            match api::redeem_pending_invite(&session, &token).await {
+                Some(page) => {
+                    let _ = session.remove::<String>(api::INVITE_RETURN_KEY).await;
+                    Redirect::to(&page).into_response()
+                }
+                None => Redirect::to("/").into_response(),
+            }
         }
         Err(e) if e.contains("email_exists") || e.contains("Email already in use") => {
             Redirect::to("/login?error=email_exists").into_response()
@@ -518,6 +529,8 @@ enum Route {
         DeleteAccount { code: String },
         #[route("/account-deleted")]
         AccountDeleted {},
+        #[route("/invite?:code")]
+        Invite { code: String },
         #[route("/profile")]
         Profile {},
         #[route("/ark")]
