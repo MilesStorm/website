@@ -39,27 +39,48 @@ RUN cargo build --release
 RUN find /app/target -name "yolo26s.bpk" -exec cp {} /app/yolo26s.bpk \;
 
 
-FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04 AS runtime
+# Gather the only CUDA files the runtime needs. burn's CUDA backend compiles its
+# kernels while running, with NVRTC and the CUDA headers; the GPU driver itself
+# comes from the host through the NVIDIA container runtime. `cp -a` keeps the
+# library symlinks as symlinks.
+RUN mkdir -p /cuda/lib64 \
+ && cp -a /usr/local/cuda/lib64/libnvrtc.so* /usr/local/cuda/lib64/libnvrtc-builtins.so* /cuda/lib64/ \
+ && cp -a /usr/local/cuda/targets/x86_64-linux/include /cuda/include \
+ && strip /app/target/release/dice_detector
+
+
+# Plain Ubuntu plus the files above, instead of an NVIDIA image: none of the
+# CUDA libraries those ship (cudart, cuBLAS, cuDNN, ...) are used.
+FROM ubuntu:24.04 AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -d /home/appuser appuser
+COPY --from=builder /cuda /usr/local/cuda
+ENV CUDA_PATH=/usr/local/cuda
+# /usr/local/nvidia/* is where Kubernetes GPU setups may mount the driver.
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+# Tell the NVIDIA container runtime to pass the GPU and driver into the container.
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN useradd -m -d /home/appuser appuser \
+ && mkdir /app && chown appuser:appuser /app
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/dice_detector ./dice_detector
-COPY --from=builder /app/yolo26s.bpk               ./models/yolo26s.bpk
+# --chown on each copy; a separate `chown -R` would store every file a second time.
+COPY --chown=appuser:appuser --from=builder /app/target/release/dice_detector ./dice_detector
+COPY --chown=appuser:appuser --from=builder /app/yolo26s.bpk               ./models/yolo26s.bpk
 
 # Dice-value head (ResNet18 trained by tools/train_head_torch.py --all). Model
 # weights never go in git: the file is a GitHub Release asset, pinned by SHA-256
 # so the build fails if the download differs. To ship a new model: upload a new
 # release asset, then update the URL default and the checksum here.
 ARG DICE_HEAD_URL=https://github.com/MilesStorm/website/releases/download/dice-head-v1/dice_head_resnet18.safetensors
-ADD --chmod=0644 --checksum=sha256:6b6e71693e5b9b667c2d047a3f1dd464017538637eea8c7f6b136c1cf20c2bd9 ${DICE_HEAD_URL} ./models/dice_head_resnet18.safetensors
+ADD --chown=appuser:appuser --chmod=0644 --checksum=sha256:6b6e71693e5b9b667c2d047a3f1dd464017538637eea8c7f6b136c1cf20c2bd9 ${DICE_HEAD_URL} ./models/dice_head_resnet18.safetensors
 
-RUN chown -R appuser:appuser /app
 USER appuser
 
 ENV RUST_LOG=info
