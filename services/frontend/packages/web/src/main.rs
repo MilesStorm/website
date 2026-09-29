@@ -131,7 +131,7 @@ fn server_launch() -> ! {
 
     let otel_log_layer = _otel_log_provider
         .as_ref()
-        .map(|p| OpenTelemetryTracingBridge::new(p));
+        .map(OpenTelemetryTracingBridge::new);
 
     // Init subscriber before dioxus::serve — Dioxus's own try_init().ok() will
     // then fail silently and our subscriber (JSON + OTel) wins.
@@ -412,7 +412,9 @@ async fn capture_traceparent(
 
 // ---- OAuth Axum handlers ----
 
+#[cfg(not(target_arch = "wasm32"))]
 const OAUTH_CSRF_KEY: &str = "oauth_csrf_state";
+#[cfg(not(target_arch = "wasm32"))]
 const OAUTH_PROVIDER_KEY: &str = "oauth_provider";
 
 /// Begin the OAuth flow for `provider`. Asks auth (cluster-internal) for the provider's

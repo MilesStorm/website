@@ -5,7 +5,7 @@ use axum::{
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 use jsonwebtoken::{EncodingKey, Header, encode};
 use password_auth::verify_password;

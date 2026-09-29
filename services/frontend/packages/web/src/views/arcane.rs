@@ -27,6 +27,8 @@ pub fn Arcane() -> Element {
 
 // ── shared types ──────────────────────────────────────────────────────────────
 
+// Only the browser build connects, so the server build never constructs most variants.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 enum WsState {
     Connecting,
@@ -99,13 +101,13 @@ fn roll_text(roll: &RollEvent) -> String {
 
 #[component]
 fn ArcaneIsland() -> Element {
-    let mut ws_state = use_signal(|| WsState::Connecting);
-    let mut frame_ms = use_signal(|| 0u64);
+    let ws_state = use_signal(|| WsState::Connecting);
+    let frame_ms = use_signal(|| 0u64);
     let mut debug_mode = use_signal(|| false);
-    let mut detect_count = use_signal(|| 0usize);
-    let mut server_error = use_signal(|| Option::<String>::None);
-    let mut debug_text = use_signal(|| String::new());
-    let mut last_roll = use_signal(|| Option::<String>::None);
+    let detect_count = use_signal(|| 0usize);
+    let server_error = use_signal(|| Option::<String>::None);
+    let debug_text = use_signal(String::new);
+    let last_roll = use_signal(|| Option::<String>::None);
 
     use_coroutine(move |_: UnboundedReceiver<()>| async move {
         #[cfg(target_arch = "wasm32")]
@@ -221,7 +223,7 @@ fn ArcaneIsland() -> Element {
 #[cfg(target_arch = "wasm32")]
 async fn run_arcane(
     mut ws_state: Signal<WsState>,
-    mut frame_ms: Signal<u64>,
+    frame_ms: Signal<u64>,
     debug_mode: Signal<bool>,
     mut detect_count: Signal<usize>,
     mut server_error: Signal<Option<String>>,
@@ -529,8 +531,6 @@ async fn sleep_ms(ms: i32) {
 /// dice confidence: green ≥80 %, yellow ≥50 %, red below that.
 #[cfg(target_arch = "wasm32")]
 fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: f64, h: f64, debug: bool) {
-    use wasm_bindgen::JsValue;
-
     ctx.clear_rect(0.0, 0.0, w, h);
 
     for det in dets {
@@ -554,7 +554,7 @@ fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: 
         };
 
         // Box
-        ctx.set_stroke_style(&JsValue::from_str(color));
+        ctx.set_stroke_style_str(color);
         ctx.set_line_width(2.5);
         ctx.stroke_rect(x, y, bw, bh);
 
@@ -575,9 +575,9 @@ fn draw_overlay(ctx: &web_sys::CanvasRenderingContext2d, dets: &[Detection], w: 
         ctx.set_font("bold 13px monospace");
         // Rough text width estimate: ~8px per character
         let pill_w = label.len() as f64 * 8.0 + 6.0;
-        ctx.set_fill_style(&JsValue::from_str("rgba(0,0,0,0.55)"));
+        ctx.set_fill_style_str("rgba(0,0,0,0.55)");
         ctx.fill_rect(x, y - 18.0, pill_w, 17.0);
-        ctx.set_fill_style(&JsValue::from_str(color));
+        ctx.set_fill_style_str(color);
         ctx.fill_text(&label, x + 3.0, y - 4.0).ok();
     }
 }

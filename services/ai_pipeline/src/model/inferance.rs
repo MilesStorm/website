@@ -95,14 +95,14 @@ impl<B: Backend> DicePipeline<B> {
     /// Load YOLO and the ResNet18 head (`head_path`: safetensors from
     /// `tools/train_head_torch.py --all`). Fails if the weights don't load completely.
     pub fn new(device: B::Device, head_path: &Path, dice_threshold: f32) -> anyhow::Result<Self> {
-        let yolo = my_model::Model::<B>::from_file(&yolo_bpk_path(), &device);
+        let yolo = my_model::Model::<B>::from_file(yolo_bpk_path(), &device);
         let head = ResNet18Head::<B>::load(head_path, &device)?;
         Ok(Self { yolo, head: Some(head), device, conf_threshold: DEFAULT_CONF, dice_threshold })
     }
 
     /// Load only the YOLO detector for offline crop export, where no classification is performed.
     pub fn yolo_only(device: B::Device, conf_threshold: f32) -> Self {
-        let yolo = my_model::Model::<B>::from_file(&yolo_bpk_path(), &device);
+        let yolo = my_model::Model::<B>::from_file(yolo_bpk_path(), &device);
         Self { yolo, head: None, device, conf_threshold, dice_threshold: DEFAULT_DICE_THRESHOLD }
     }
 
@@ -135,7 +135,7 @@ impl<B: Backend> DicePipeline<B> {
 
         boxes
             .iter()
-            .zip(probs.chunks_exact(crate::model::head::NUM_CLASSES))
+            .zip(probs.as_chunks::<{ crate::model::head::NUM_CLASSES }>().0)
             .map(|(b, p)| {
                 let (class, conf) = p
                     .iter()
@@ -180,7 +180,7 @@ impl<B: Backend> DicePipeline<B> {
             .unwrap();
 
         let mut boxes = Vec::new();
-        for row in raw.chunks_exact(6) {
+        for row in raw.as_chunks::<6>().0 {
             let conf = row[4];
             if conf < self.conf_threshold {
                 continue;
