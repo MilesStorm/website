@@ -167,8 +167,10 @@ mod tests {
     fn read_f32(path: PathBuf) -> Vec<f32> {
         std::fs::read(&path)
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect()
     }
 
@@ -212,7 +214,7 @@ mod tests {
         // threshold) and the chosen class. Raw logits also get a relative bound;
         // GPU float rounding differs slightly between PyTorch and burn kernels.
         let softmax = |v: &[f32]| -> Vec<f32> {
-            v.chunks_exact(crate::model::head::NUM_CLASSES)
+            v.as_chunks::<{ crate::model::head::NUM_CLASSES }>().0.iter()
                 .flat_map(|r| {
                     let m = r.iter().cloned().fold(f32::MIN, f32::max);
                     let e: Vec<f32> = r.iter().map(|x| (x - m).exp()).collect();
@@ -226,7 +228,7 @@ mod tests {
         let logit_scale = expected.iter().fold(0f32, |m, x| m.max(x.abs()));
         let prob_diff = max_abs(&softmax(&got), &softmax(&expected));
         let argmax = |v: &[f32]| {
-            v.chunks_exact(crate::model::head::NUM_CLASSES)
+            v.as_chunks::<{ crate::model::head::NUM_CLASSES }>().0.iter()
                 .map(|r| r.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0)
                 .collect::<Vec<_>>()
         };

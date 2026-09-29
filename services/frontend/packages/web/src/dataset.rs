@@ -445,7 +445,7 @@ pub fn auto_reason(roll: &Value, roll_id: &str, every: u32) -> Option<&'static s
     if unsure {
         return Some("unsure");
     }
-    (stable_hash(roll_id) % u64::from(every.max(1)) == 0).then_some("sampled")
+    stable_hash(roll_id).is_multiple_of(u64::from(every.max(1))).then_some("sampled")
 }
 
 /// FNV-1a: stable across processes and replicas (unlike std's randomized hasher).

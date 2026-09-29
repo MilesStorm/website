@@ -913,7 +913,7 @@ pub async fn admin_list_all_roles() -> Result<Vec<AdminRole>, ServerFnError> {
     }
 
     #[derive(Deserialize)]
-    struct RoleResp { id: i32, name: String, permissions: Vec<serde_json::Value> }
+    struct RoleResp { id: i32, name: String }
 
     let resp = http_client()
         .get(format!("{}/internal/admin/roles/all", auth_url()))

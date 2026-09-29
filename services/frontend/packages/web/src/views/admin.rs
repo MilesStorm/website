@@ -109,7 +109,7 @@ fn AdminPanelInner() -> Element {
 
 #[component]
 fn UsersTab(all_roles: Vec<AdminRole>) -> Element {
-    let mut search = use_signal(|| String::new());
+    let mut search = use_signal(String::new);
     let mut page = use_signal(|| 0u32);
     let mut refresh = use_signal(|| 0u32);
     let mut load_error: Signal<Option<String>> = use_signal(|| None);
@@ -268,7 +268,7 @@ fn UserRow(user: AdminUser, all_roles: Vec<AdminRole>, on_change: EventHandler<(
 
 #[component]
 fn RolesTab(all_permissions: Vec<AdminPermission>) -> Element {
-    let mut search = use_signal(|| String::new());
+    let mut search = use_signal(String::new);
     let mut page = use_signal(|| 0u32);
     let mut refresh = use_signal(|| 0u32);
     let mut load_error: Signal<Option<String>> = use_signal(|| None);

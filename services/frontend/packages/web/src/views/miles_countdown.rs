@@ -2,6 +2,8 @@ use dioxus::prelude::*;
 
 #[component]
 pub fn AssholeTimer() -> Element {
+    // Only the browser build ticks the countdown.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut remaining = use_signal(|| None::<(u64, u64, u64, u64)>);
 
     use_effect(move || {

@@ -428,7 +428,7 @@ pub fn audit<B: Backend>(exp_dirs: &[String], device: B::Device, root: &Path, ou
                 .convert::<f32>()
                 .to_vec()
                 .unwrap();
-            for (s, p) in chunk.iter().zip(probs.chunks_exact(NUM_CLASSES)) {
+            for (s, p) in chunk.iter().zip(probs.as_chunks::<NUM_CLASSES>().0) {
                 let (pred, pred_p) = p
                     .iter()
                     .enumerate()
@@ -475,7 +475,7 @@ pub fn audit<B: Backend>(exp_dirs: &[String], device: B::Device, root: &Path, ou
 /// pull. Sqrt softens the curve so rare classes still get a lift but common
 /// classes aren't sacrificed.
 pub fn compute_class_weights<B: AutodiffBackend>(batches: &[DiceBatch<B>]) -> Vec<f32> {
-    let mut counts = vec![0usize; NUM_CLASSES];
+    let mut counts = [0usize; NUM_CLASSES];
     for batch in batches {
         let data: Vec<i64> = batch
             .targets

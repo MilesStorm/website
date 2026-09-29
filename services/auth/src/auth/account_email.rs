@@ -343,6 +343,7 @@ fn delete_letter(account: &Account, email: &str, code: &str) -> super::mail::Mai
 }
 
 /// Issues a code and emails it. Errors are ready-made responses.
+#[expect(clippy::result_large_err, reason = "the error is the HTTP response itself, returned once")]
 async fn issue_and_send(
     db: &PgPool,
     mailer: &Mailer,
@@ -497,10 +498,10 @@ async fn password_forgot(State(state): State<InternalState>, Json(req): Json<For
         match account {
             Ok(Some(account)) => {
                 let email = account.email.clone().unwrap_or_default();
-                if let Err(r) = issue_and_send(&db, &mailer, &account, &email, Purpose::ResetPassword).await {
-                    if r.status() == StatusCode::TOO_MANY_REQUESTS {
-                        tracing::info!(user_id = account.id, "password reset not sent: asked again too soon");
-                    }
+                if let Err(r) = issue_and_send(&db, &mailer, &account, &email, Purpose::ResetPassword).await
+                    && r.status() == StatusCode::TOO_MANY_REQUESTS
+                {
+                    tracing::info!(user_id = account.id, "password reset not sent: asked again too soon");
                 }
             }
             Ok(None) => tracing::info!("password reset asked for an unknown or password-less account"),
