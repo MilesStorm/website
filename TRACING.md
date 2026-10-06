@@ -42,8 +42,9 @@ Tempo directly. The browser sends its spans (and errors, web vitals) through Gra
 
 Sampling: the first traced hop decides and everything after follows the `traceparent` flag. For
 browser traffic that is Faro (session sampling, `sessionTracking.samplingRate`, default all); for
-everything else the Gateway (`istio/manifests/telemetry.yaml` in the homelab repo, 100%). Lowering
-one without the other leaves the other's traces at full volume. A client can send its own
+everything else the Gateway (`istio/manifests/telemetry.yaml` in the homelab repo, 100%; only for
+milesstorm.com, other hosts on the Gateway start no traces: `istio/manifests/gateway-trace-hosts.yaml`).
+Lowering one without the other leaves the other's traces at full volume. A client can send its own
 `traceparent`; Faro's uploads use that to opt out (below).
 
 ## Browser
@@ -166,6 +167,8 @@ named like `POST /bff/login_password`.
   - camera sessions and roll streams while they run: `arcane.ws_session`, ai_pipeline's
     `arcane.ws_connection` and `arcane.rolls_stream` are exported only when they end, and lost if
     a pod restarts meanwhile;
+  - Gateway and waypoint spans while Tempo restarts: Istio sends them to Tempo directly, without
+    Alloy's retry, so a trace from that minute misses its Envoy spans;
   - browsers that never send their spans (an ad blocker blocks `/faro/collect`, or the tab closed
     within Faro's 1 s batch): the request still carries the browser's `traceparent`, so the
     `milesstorm-web` root is missing.
