@@ -4,8 +4,9 @@
 //! (`api::dataset_consent`); the picture held for flagging and rate counters live in
 //! Redis (`capture.rs`); saved rolls, pictures and the deletion log live here.
 //!
-//! Talks to SurrealDB's HTTP `/rpc` endpoint with JSON and Basic auth as the
-//! database-level `dice` user. Pictures travel as base64 and are stored as bytes.
+//! Talks to SurrealDB's HTTP `/rpc` endpoint with JSON as the database-level `dice`
+//! user, signed in once for a token (see [`Dataset::token`]). Pictures travel as
+//! base64 and are stored as bytes.
 //!
 //! The tables are defined in `surreal/database/schema/` and applied by the website
 //! itself at startup with surrealkit (like auth's sqlx migrations). The store only
@@ -193,6 +194,8 @@ struct Inner {
     ns: String,
     db: String,
     sample_every: u32,
+    /// Token from signing in; None until the first query and after it is rejected.
+    token: tokio::sync::Mutex<Option<String>>,
 }
 
 /// A roll plus the camera frame that showed it, as held for flagging.
@@ -203,6 +206,15 @@ pub struct Capture {
     /// The last per-frame result JSON (all detections), if any.
     pub frame: Option<Value>,
     pub jpeg: Vec<u8>,
+}
+
+/// The start of a SurrealDB reply, for an error message.
+fn truncate(body: &str) -> &str {
+    let mut end = body.len().min(200);
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    &body[..end]
 }
 
 impl Dataset {
@@ -226,6 +238,7 @@ impl Dataset {
                 ns: var("SURREAL_NS").unwrap_or_else(|| "milesstorm".into()),
                 db: var("SURREAL_DB").unwrap_or_else(|| "arcane".into()),
                 sample_every,
+                token: tokio::sync::Mutex::new(None),
             }),
         })
     }
@@ -258,24 +271,57 @@ impl Dataset {
         self.inner.sample_every
     }
 
-    /// Run SurrealQL; returns each statement's result, or the first error.
-    async fn query(&self, sql: &str, vars: Value) -> anyhow::Result<Vec<Value>> {
+    /// A token for `dice`. SurrealDB checks a password against its slow hash (~60 ms),
+    /// so sending it with every query (Basic auth) made every query that slow; a token
+    /// is only a signature check. `stale` is a token SurrealDB rejected (expired): sign
+    /// in again unless another query already has.
+    ///
+    /// Queries wait for one sign-in rather than each doing their own. The wait, sign-in
+    /// included, is bounded like a request: if SurrealDB hangs, every waiter would
+    /// otherwise sign in after the one before it timed out, 3 s each.
+    async fn token(&self, stale: Option<&str>) -> anyhow::Result<String> {
+        tokio::time::timeout(REQUEST_TIMEOUT, self.sign_in_unless_done(stale))
+            .await
+            .map_err(|_| anyhow::anyhow!("surrealdb signin: timed out"))?
+    }
+
+    async fn sign_in_unless_done(&self, stale: Option<&str>) -> anyhow::Result<String> {
         let i = &self.inner;
+        let mut token = i.token.lock().await;
+        if let Some(t) = token.as_deref().filter(|t| Some(*t) != stale) {
+            return Ok(t.to_string());
+        }
         let resp = i
             .http
-            .post(&i.rpc_url)
+            .post(format!("{}/signin", i.url.trim_end_matches('/')))
             .with_extension(api::trace::Peer { service: "surrealdb", system: "surrealdb" })
-            .basic_auth(&i.user, Some(&i.pass))
             .header("Accept", "application/json")
-            .header("surreal-ns", &i.ns)
-            .header("surreal-db", &i.db)
-            .header("surreal-auth-ns", &i.ns)
-            .header("surreal-auth-db", &i.db)
-            .json(&json!({"id": 1, "method": "query", "params": [sql, vars]}))
+            .json(&json!({"NS": i.ns, "DB": i.db, "user": i.user, "pass": i.pass}))
             .send()
             .await?;
         let status = resp.status();
-        let body: Value = resp.json().await?;
+        let body = resp.text().await?;
+        let t = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|b| b.get("token")?.as_str().map(str::to_string))
+            .ok_or_else(|| anyhow::anyhow!("surrealdb signin {status}: {}", truncate(&body)))?;
+        *token = Some(t.clone());
+        Ok(t)
+    }
+
+    /// Run SurrealQL; returns each statement's result, or the first error.
+    async fn query(&self, sql: &str, vars: Value) -> anyhow::Result<Vec<Value>> {
+        let token = self.token(None).await?;
+        let mut resp = self.send_query(&token, sql, &vars).await?;
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let token = self.token(Some(&token)).await?;
+            resp = self.send_query(&token, sql, &vars).await?;
+        }
+        let status = resp.status();
+        let text = resp.text().await?;
+        // A rejected token's reply is plain text, not JSON.
+        let body: Value = serde_json::from_str(&text)
+            .map_err(|_| anyhow::anyhow!("surrealdb {status}: {}", truncate(&text)))?;
         if let Some(err) = body.get("error") {
             anyhow::bail!("surrealdb {status}: {err}");
         }
@@ -290,6 +336,22 @@ impl Dataset {
                 _ => Err(anyhow::anyhow!("surrealdb: {}", r.get("result").unwrap_or(r))),
             })
             .collect()
+    }
+
+    /// The query sent with `token`; [`Self::query`] reads the reply.
+    async fn send_query(&self, token: &str, sql: &str, vars: &Value) -> anyhow::Result<reqwest::Response> {
+        let i = &self.inner;
+        Ok(i
+            .http
+            .post(&i.rpc_url)
+            .with_extension(api::trace::Peer { service: "surrealdb", system: "surrealdb" })
+            .bearer_auth(token)
+            .header("Accept", "application/json")
+            .header("surreal-ns", &i.ns)
+            .header("surreal-db", &i.db)
+            .json(&json!({"id": 1, "method": "query", "params": [sql, vars]}))
+            .send()
+            .await?)
     }
 
     /// Delete every sample and picture the user shared or flagged; returns how many
@@ -485,6 +547,129 @@ pub fn clean_values(values: &[Option<String>], dice: usize) -> Option<Vec<Option
             Some(_) => None,
         })
         .collect()
+}
+
+/// [`Dataset::query`]'s sign-in against a stand-in for SurrealDB's `/signin` and `/rpc`.
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+    use axum::{extract::State, http::{HeaderMap, StatusCode}, routing::post, Json, Router};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Fake {
+        signins: usize,
+        /// The token `/rpc` accepts; `None` rejects every token (as after it expired).
+        valid: Option<String>,
+        /// The `Authorization` header of each `/rpc` request.
+        auth_seen: Vec<String>,
+        /// Refuse every sign-in (as after the password changed).
+        refuse: bool,
+    }
+    type Shared = Arc<Mutex<Fake>>;
+
+    async fn signin(State(f): State<Shared>, Json(b): Json<Value>) -> (StatusCode, Json<Value>) {
+        // Slow like the real password check, so concurrent first queries overlap.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let refused = f.lock().unwrap().refuse;
+        if refused || b != json!({"NS": "milesstorm", "DB": "arcane", "user": "dice", "pass": "pw"}) {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"code": 401, "details": "Authentication failed"})));
+        }
+        let mut f = f.lock().unwrap();
+        f.signins += 1;
+        let token = format!("token-{}", f.signins);
+        f.valid = Some(token.clone());
+        (StatusCode::OK, Json(json!({"code": 200, "token": token})))
+    }
+
+    async fn rpc(State(f): State<Shared>, headers: HeaderMap, Json(b): Json<Value>) -> (StatusCode, String) {
+        let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+        let mut f = f.lock().unwrap();
+        f.auth_seen.push(auth.clone());
+        if f.valid.as_ref().map(|t| format!("Bearer {t}")) != Some(auth) {
+            return (StatusCode::UNAUTHORIZED, "The token has expired".into());
+        }
+        let sql = b["params"][0].clone();
+        (StatusCode::OK, json!({"id": 1, "result": [{"status": "OK", "result": sql}]}).to_string())
+    }
+
+    async fn serve(pass: &str) -> (Dataset, Shared) {
+        let fake = Shared::default();
+        let app = Router::new()
+            .route("/signin", post(signin))
+            .route("/rpc", post(rpc))
+            .with_state(fake.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ds = Dataset {
+            inner: Arc::new(Inner {
+                http: api::trace::client(reqwest::Client::new()),
+                rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
+                url,
+                user: "dice".into(),
+                pass: pass.into(),
+                ns: "milesstorm".into(),
+                db: "arcane".into(),
+                sample_every: DEFAULT_SAMPLE_EVERY,
+                token: tokio::sync::Mutex::new(None),
+            }),
+        };
+        (ds, fake)
+    }
+
+    #[tokio::test]
+    async fn signs_in_once_and_sends_the_token() {
+        let (ds, fake) = serve("pw").await;
+        for n in 0..3 {
+            let sql = format!("RETURN {n}");
+            assert_eq!(ds.query(&sql, json!({})).await.unwrap(), vec![json!(sql)]);
+        }
+        let f = fake.lock().unwrap();
+        assert_eq!(f.signins, 1);
+        assert_eq!(f.auth_seen, vec!["Bearer token-1"; 3]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_queries_share_one_sign_in() {
+        let (ds, fake) = serve("pw").await;
+        let results = futures_util::future::join_all((0..5).map(|_| ds.query("RETURN 1", json!({})))).await;
+        assert!(results.iter().all(Result::is_ok));
+        assert_eq!(fake.lock().unwrap().signins, 1);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_token_signs_in_again_and_retries_once() {
+        let (ds, fake) = serve("pw").await;
+        ds.query("RETURN 1", json!({})).await.unwrap();
+        fake.lock().unwrap().valid = None; // expired
+        assert_eq!(ds.query("RETURN 2", json!({})).await.unwrap(), vec![json!("RETURN 2")]);
+        let f = fake.lock().unwrap();
+        assert_eq!(f.signins, 2);
+        assert_eq!(f.auth_seen, vec!["Bearer token-1", "Bearer token-1", "Bearer token-2"]);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_token_and_a_refused_sign_in_is_an_error() {
+        let (ds, fake) = serve("pw").await;
+        ds.query("RETURN 1", json!({})).await.unwrap();
+        {
+            let mut f = fake.lock().unwrap();
+            f.valid = None;
+            f.refuse = true;
+        }
+        let err = ds.query("RETURN 2", json!({})).await.unwrap_err().to_string();
+        assert!(err.contains("signin 401"), "{err}");
+        assert_eq!(fake.lock().unwrap().auth_seen.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_sign_in_is_an_error_without_querying() {
+        let (ds, fake) = serve("wrong").await;
+        let err = ds.query("RETURN 1", json!({})).await.unwrap_err().to_string();
+        assert!(err.contains("signin 401") && err.contains("Authentication failed"), "{err}");
+        assert!(fake.lock().unwrap().auth_seen.is_empty());
+    }
 }
 
 #[cfg(test)]

@@ -241,18 +241,35 @@ fn server_launch() -> ! {
 /// Page requests reach Dioxus's fallback, which has no `MatchedPath`, so `OtelAxumLayer`
 /// names their span just `GET`. Names it after the page's `Route` variant instead: a
 /// bounded set, unlike raw paths (span names become Tempo span-metrics labels).
+/// Server functions are named by their path without Dioxus's hash ([`server_fn_route`]).
 #[cfg(not(target_arch = "wasm32"))]
 async fn name_page_span(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     use axum::http::Method;
     let method = req.method();
-    if (method == Method::GET || method == Method::HEAD)
-        && req.extensions().get::<axum::extract::MatchedPath>().is_none()
-    {
+    let span = tracing::Span::current();
+    let matched = req.extensions().get::<axum::extract::MatchedPath>();
+    // Only a path that reached a server function: any other is the client's own string,
+    // and span names become span-metrics labels.
+    if let Some(route) = matched.and_then(|m| server_fn_route(m.as_str())) {
+        span.record("otel.name", format!("{method} {route}"));
+        span.record("http.route", route);
+    } else if (method == Method::GET || method == Method::HEAD) && matched.is_none() {
         let page = page_name(req.uri().path());
-        let span = tracing::Span::current();
         span.record("otel.name", format!("{method} {page}"));
     }
     next.run(req).await
+}
+
+/// `/bff/get_account` for `/bff/get_account12855143162362325647`: Dioxus appends a hash to
+/// each server function's path, which the browser's span (assets/trace.js) leaves out, so
+/// both sides of a call carry the same name. None for other paths.
+#[cfg(not(target_arch = "wasm32"))]
+fn server_fn_route(path: &str) -> Option<&str> {
+    let name = path.strip_prefix("/bff/")?;
+    let base = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    // The same rule as trace.js: 6 or more digits after a name.
+    let digits = name.len() - base.len();
+    (digits >= 6 && !base.is_empty() && !base.ends_with('/')).then(|| &path[..path.len() - digits])
 }
 
 /// The `Route` variant `path` renders (`NotFound` for anything unknown).
@@ -640,6 +657,17 @@ fn WebNavbar() -> Element {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    #[test]
+    fn server_function_spans_leave_out_the_hash() {
+        use super::server_fn_route;
+        assert_eq!(server_fn_route("/bff/get_account12855143162362325647"), Some("/bff/get_account"));
+        assert_eq!(server_fn_route("/bff/login_password123456"), Some("/bff/login_password"));
+        assert_eq!(server_fn_route("/bff/get_account"), None);
+        assert_eq!(server_fn_route("/bff/get_account12345"), None);
+        assert_eq!(server_fn_route("/bff/12855143162362325647"), None);
+        assert_eq!(server_fn_route("/api/profile/picture"), None);
+    }
+
     #[test]
     fn code_pages_start_with_the_same_markup_before_hydration() {
         use dioxus::prelude::*;

@@ -100,8 +100,11 @@ read every table in its database.
   The number of camera connections per user isn't limited.
 
 ## Notes
-- Inside the cluster the website talks to SurrealDB over plain HTTP with Basic auth,
-  like the other in-cluster services.
+- Inside the cluster the website talks to SurrealDB over plain HTTP. It signs in once
+  (`/signin`) and sends the token with each query, signing in again when SurrealDB
+  rejects it (`src/dataset.rs`). Basic auth on every query would cost each one a password
+  check against SurrealDB's slow hash, ~60 ms. A token stays valid for its duration
+  (1 h by default) after the `dice` password changes: restart the website to drop it.
 - Roll pictures are held in Redis for 10 minutes so "flag as wrong roll" can save
   them. Only each user's latest roll is held. Nothing reaches SurrealDB unless the
   user opted in on their profile, or flagged that roll.
