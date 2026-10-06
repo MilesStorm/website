@@ -67,7 +67,7 @@ const LIVE: &str = "i.revoked_at IS NULL AND i.expires_at > NOW() AND (i.max_use
 
 /// The link for `code`.
 fn link(code: &str) -> String {
-    format!("{}/invite?code={code}", site_url())
+    format!("{}/invite#{code}", site_url())
 }
 
 /// The note as it will be stored: trimmed, `None` when empty. `Err` when too long
@@ -373,6 +373,9 @@ mod tests {
 
     #[test]
     fn links_open_the_invite_page() {
-        assert!(link("abc").ends_with("/invite?code=abc"));
+        let url = reqwest::Url::parse(&link("a_b-c")).unwrap();
+        assert_eq!(url.path(), "/invite");
+        assert_eq!(url.query(), None);
+        assert_eq!(url.fragment(), Some("a_b-c"));
     }
 }

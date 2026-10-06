@@ -513,7 +513,7 @@ pub async fn auth_json<T: Serialize>(path: &str, body: &T) -> Result<(u16, serde
 
 // ---- Invite links ----
 //
-// Someone logged out who opens an invite link (`/invite?code=…`) gets the code kept
+// Someone logged out who opens an invite link (`/invite#…`) gets the code kept
 // in their session; logging in or signing up by any means then redeems it, and the
 // next page is the invite page again, which says they're in.
 
@@ -570,7 +570,7 @@ pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) 
         Ok((status, reply)) => tracing::warn!(status, reply = %reply, "pending invite not redeemed"),
         Err(e) => tracing::error!(error = %e, "redeeming a pending invite failed"),
     }
-    let page = format!("/invite?code={code}");
+    let page = format!("/invite#{code}");
     if let Err(e) = sess.insert(INVITE_RETURN_KEY, &page).await {
         tracing::warn!(error = %e, "saving the invite page to return to failed");
     }

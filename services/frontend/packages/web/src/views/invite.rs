@@ -1,4 +1,4 @@
-//! The page an invite link opens (`/invite?code=…`). Logged in: joins right away.
+//! The page an invite link opens (`/invite#…`). Logged in: joins right away.
 //! Logged out: offers signing up or logging in, after which the site comes back
 //! here and the user is in. Server side: `crate::invites`.
 
@@ -12,10 +12,12 @@ use crate::PERMISSIONS;
 
 #[component]
 pub fn Invite(code: String) -> Element {
+    let code = super::email_links::use_link_code(code);
     let mut state = use_signal(|| Option::<Result<Opened, String>>::None);
 
     // In the browser only, like the email links; again if the address's code changes.
-    use_effect(use_reactive!(|code| {
+    use_effect(move || {
+        let Some(code) = code() else { return };
         state.set(None);
         spawn(async move {
             let opened = open_invite(code).await.map_err(server_message);
@@ -27,7 +29,7 @@ pub fn Invite(code: String) -> Element {
             }
             state.set(Some(opened));
         });
-    }));
+    });
 
     rsx! {
         // The address holds the invite code: don't send it along to other sites.

@@ -536,15 +536,15 @@ enum Route {
         Register {},
         #[route("/forgot-password")]
         ForgotPassword {},
-        #[route("/reset-password?:code")]
+        #[route("/reset-password#:code")]
         ResetPassword { code: String },
-        #[route("/verify-email?:code")]
+        #[route("/verify-email#:code")]
         VerifyEmail { code: String },
-        #[route("/delete-account?:code")]
+        #[route("/delete-account#:code")]
         DeleteAccount { code: String },
         #[route("/account-deleted")]
         AccountDeleted {},
-        #[route("/invite?:code")]
+        #[route("/invite#:code")]
         Invite { code: String },
         #[route("/profile")]
         Profile {},
@@ -640,6 +640,42 @@ fn WebNavbar() -> Element {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    #[test]
+    fn code_pages_start_with_the_same_markup_before_hydration() {
+        use dioxus::prelude::*;
+        fn render(code: &str) -> String {
+            dioxus::ssr::render_element(rsx! {
+                super::ResetPassword { code: code.to_string() }
+                super::VerifyEmail { code: code.to_string() }
+                super::DeleteAccount { code: code.to_string() }
+                super::Invite { code: code.to_string() }
+            })
+        }
+        let server = render("");
+        let browser_initial = render("a_b-c");
+        assert_eq!(server, browser_initial);
+        assert!(!server.contains("a_b-c"));
+        assert!(server.contains("loading-spinner"));
+    }
+
+    #[test]
+    fn one_time_code_routes_use_fragments() {
+        use super::Route;
+        for (path, route) in [
+            ("/reset-password", Route::ResetPassword { code: "a_b-c".into() }),
+            ("/verify-email", Route::VerifyEmail { code: "a_b-c".into() }),
+            ("/delete-account", Route::DeleteAccount { code: "a_b-c".into() }),
+            ("/invite", Route::Invite { code: "a_b-c".into() }),
+        ] {
+            let address = route.to_string();
+            assert_eq!(address, format!("{path}#a_b-c"));
+            assert_eq!(address.parse::<Route>().unwrap(), route);
+            // This is all the browser sends in the initial HTTP request.
+            let server_route = path.parse::<Route>().unwrap();
+            assert_eq!(server_route.to_string(), path);
+        }
+    }
+
     #[test]
     fn pages_are_named_by_route() {
         assert_eq!(super::page_name("/"), "Landing");

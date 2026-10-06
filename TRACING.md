@@ -173,15 +173,21 @@ named like `POST /bff/login_password`.
     within Faro's 1 s batch): the request still carries the browser's `traceparent`, so the
     `milesstorm-web` root is missing.
 
+One-time account and invite links use fragments (`/reset-password#<code>`,
+`/verify-email#<code>`, `/delete-account#<code>`, `/invite#<code>`). Dioxus reads the
+fragment in the browser after hydration and sends the code in the server-function
+body. It never reaches the gateway or frontend as part of the HTTP URL. Faro also
+scrubs fragments from browser telemetry. Auth and frontend must be deployed
+together for this link format. Previously issued query-string links need to be
+reissued (or converted from `?code=<code>` to `#<code>`); already stored traces
+are unaffected. OAuth callbacks still use query strings.
+
 ## Not covered yet
 
 - **auth's session store.** tower-sessions-sqlx-store needs a raw `PgPool`, so its queries have no
   spans. The BFF calls auth with tokens, not sessions, so this only affects auth's own pages.
 - **Redis outside the session layer.** The roll hub's calls (PUBLISH/GET, and its own session reads)
   have no spans.
-- **Query strings in server spans.** Reset, verification, deletion and invite links carry their code
-  in the query string. Browser spans are scrubbed, but the Gateway's `http.url` and the frontend's
-  `url.query` record it. Moving the codes to the URL fragment would keep them off the wire.
 - **auth's own outbound calls.** These are OAuth, Resend and ark. They carry no client spans, because
   auth uses reqwest 0.12 and reqwest-tracing 0.7 needs reqwest 0.13. The ark calls do forward
   `traceparent`.
