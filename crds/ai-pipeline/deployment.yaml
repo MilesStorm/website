@@ -35,8 +35,6 @@ spec:
           limits:
             nvidia.com/gpu: "1"
         env:
-          - name: RUST_LOG
-            value: "info"
           - name: YOLO_MODEL_PATH
             value: "/app/models/yolo26s.bpk"
           - name: DICE_HEAD_PATH

@@ -15,6 +15,8 @@ jsonwebtoken = { workspace = true }
 http = "1"
 tracing = { workspace = true }
 tower-sessions = { workspace = true, optional = true }
+# Same as tower-sessions-core: SessionStore is an #[async_trait] trait (trace::TracedStore).
+async-trait = { version = "0.1.89", optional = true }
 reqwest-middleware = { workspace = true, optional = true }
 reqwest-tracing = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
@@ -25,6 +27,7 @@ metrics = { version = "0.24", optional = true }
 server = [
     "dioxus/server",
     "dep:tower-sessions",
+    "dep:async-trait",
     "dep:reqwest-middleware",
     "dep:reqwest-tracing",
     "dep:opentelemetry",

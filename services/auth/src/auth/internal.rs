@@ -10,7 +10,6 @@ use axum::{
 use jsonwebtoken::{EncodingKey, Header, encode};
 use password_auth::verify_password;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use tokio::task;
 use ulid::Ulid;
 
@@ -18,11 +17,12 @@ use super::account_email;
 use super::invites;
 use super::mail::Mailer;
 use super::telemetry;
+use super::Db;
 use super::user::{Backend, BackendError, BffToken, OAuthProvider};
 
 #[derive(Clone)]
 pub struct InternalState {
-    pub db: PgPool,
+    pub db: Db,
     pub jwt_secret: String,
     pub service_secret: String,
     pub backend: Backend,
@@ -70,7 +70,7 @@ pub fn router(state: InternalState) -> Router<()> {
         .with_state(state)
 }
 
-async fn create_bff_token(db: &PgPool, user_id: i64) -> Result<BffToken, sqlx::Error> {
+async fn create_bff_token(db: &Db, user_id: i64) -> Result<BffToken, sqlx::Error> {
     sqlx::query_as("INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2) RETURNING *")
         .bind(Ulid::new().to_string())
         .bind(user_id)
@@ -494,7 +494,7 @@ struct DockerRequestResponse {
     command_result: Option<CommandResult>,
 }
 
-async fn resolve_ark_user(db: &PgPool, token: &str) -> Option<i64> {
+async fn resolve_ark_user(db: &Db, token: &str) -> Option<i64> {
     let row: Option<(i64,)> = sqlx::query_as(
         r#"
         SELECT t.user_id FROM bff_tokens t
@@ -531,7 +531,7 @@ const PROFILE_COLUMNS: &str =
     "u.id AS user_id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS email_verified";
 
 /// The token's user (id, username, display name, email), for any valid token.
-async fn resolve_profile(db: &PgPool, token: &str) -> Result<Option<ProfileResp>, sqlx::Error> {
+async fn resolve_profile(db: &Db, token: &str) -> Result<Option<ProfileResp>, sqlx::Error> {
     sqlx::query_as(&format!(
         "SELECT {PROFILE_COLUMNS} FROM bff_tokens t JOIN users u ON u.id = t.user_id \
          WHERE t.token = $1 AND t.expires_at > NOW()"
@@ -618,7 +618,7 @@ async fn profile_set_display_name(
 // a choice; the pictures themselves are stored by the website in SurrealDB.
 
 /// The token's user, if the token is valid and the user holds `arcane`.
-async fn resolve_arcane_user(db: &PgPool, token: &str) -> Option<i64> {
+async fn resolve_arcane_user(db: &Db, token: &str) -> Option<i64> {
     let row: Option<(i64,)> = sqlx::query_as(
         r#"
         SELECT t.user_id FROM bff_tokens t

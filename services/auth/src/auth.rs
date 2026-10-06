@@ -35,6 +35,10 @@ use self::{
     user::Backend,
 };
 
+/// Request-path pool: every query gets an OTel client span (see TRACING.md). Migrations,
+/// the session store and periodic loops keep the raw `PgPool` so ticks don't start traces.
+pub type Db = sqlx_tracing::Pool<sqlx::Postgres>;
+
 pub struct Auth {
     db: PgPool,
     client: BasicClientSet,
@@ -109,11 +113,13 @@ impl Auth {
             .with_name("milesstorm.auth")
             .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
-        let backend = Backend::new(self.db.clone(), self.client, self.g_client);
+        // peer.service="postgres" names the node in Tempo's service graph.
+        let db: Db = sqlx_tracing::PoolBuilder::from(self.db.clone()).with_name("postgres").build();
+        let backend = Backend::new(db.clone(), self.client, self.g_client);
         let auth_layer = AuthManagerLayerBuilder::new(backend.clone(), session_layer).build();
 
         let internal_state = InternalState {
-            db: self.db.clone(),
+            db,
             jwt_secret: env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
             service_secret: env::var("BFF_SERVICE_SECRET").expect("BFF_SERVICE_SECRET must be set"),
             backend,

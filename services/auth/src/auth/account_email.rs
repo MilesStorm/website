@@ -39,7 +39,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::task;
+use tracing::Instrument as _;
 
+use super::Db;
 use super::internal::InternalState;
 use super::mail::{Letter, Mailer, site_url};
 
@@ -129,12 +131,12 @@ impl From<sqlx::Error> for IssueError {
 }
 
 /// Creates a link code for the user, replacing any unused one of the same purpose.
-async fn issue(db: &PgPool, user_id: i64, purpose: Purpose, email: &str) -> Result<String, IssueError> {
+async fn issue(db: &Db, user_id: i64, purpose: Purpose, email: &str) -> Result<String, IssueError> {
     let mut tx = db.begin().await?;
     // One issuer per account at a time, so the limits below can't be raced.
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
         .bind(user_id)
-        .execute(&mut *tx)
+        .execute(&mut tx.executor())
         .await?;
     let (last, count): (Option<DateTime<Utc>>, i64) = sqlx::query_as(
         "SELECT MAX(created_at), COUNT(*) FROM email_tokens \
@@ -142,7 +144,7 @@ async fn issue(db: &PgPool, user_id: i64, purpose: Purpose, email: &str) -> Resu
     )
     .bind(user_id)
     .bind(purpose.as_str())
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut tx.executor())
     .await?;
     let too_soon = last.is_some_and(|t| Utc::now() - t < chrono::Duration::seconds(COOLDOWN_SECS));
     // Also per address, over all accounts: signing up again and again with the same
@@ -151,7 +153,7 @@ async fn issue(db: &PgPool, user_id: i64, purpose: Purpose, email: &str) -> Resu
         "SELECT COUNT(*) FROM email_tokens WHERE LOWER(email) = LOWER($1) AND created_at > NOW() - INTERVAL '1 day'",
     )
     .bind(email)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut tx.executor())
     .await?;
     if too_soon || count >= DAILY_LIMIT || to_address >= DAILY_LIMIT {
         return Err(IssueError::TooSoon);
@@ -161,7 +163,7 @@ async fn issue(db: &PgPool, user_id: i64, purpose: Purpose, email: &str) -> Resu
     )
     .bind(user_id)
     .bind(purpose.as_str())
-    .execute(&mut *tx)
+    .execute(&mut tx.executor())
     .await?;
     let code = new_code();
     sqlx::query(
@@ -173,14 +175,14 @@ async fn issue(db: &PgPool, user_id: i64, purpose: Purpose, email: &str) -> Resu
     .bind(purpose.as_str())
     .bind(email)
     .bind(purpose.lifetime_secs() as f64)
-    .execute(&mut *tx)
+    .execute(&mut tx.executor())
     .await?;
     tx.commit().await?;
     Ok(code)
 }
 
 /// Forgets a code whose email couldn't be sent, so asking again works right away.
-async fn withdraw(db: &PgPool, code: &str) {
+async fn withdraw(db: &Db, code: &str) {
     if let Err(e) = sqlx::query("DELETE FROM email_tokens WHERE token_hash = $1")
         .bind(hash(code))
         .execute(db)
@@ -248,7 +250,7 @@ impl Account {
 const ACCOUNT_COLUMNS: &str = "u.id, u.username, u.display_name, u.email, u.email_verified_at";
 
 /// The account a session token belongs to.
-async fn token_account(db: &PgPool, token: &str) -> Result<Option<Account>, sqlx::Error> {
+async fn token_account(db: &Db, token: &str) -> Result<Option<Account>, sqlx::Error> {
     sqlx::query_as(&format!(
         "SELECT {ACCOUNT_COLUMNS} FROM bff_tokens t JOIN users u ON u.id = t.user_id \
          WHERE t.token = $1 AND t.expires_at > NOW()"
@@ -258,7 +260,7 @@ async fn token_account(db: &PgPool, token: &str) -> Result<Option<Account>, sqlx
     .await
 }
 
-async fn account_by_id(db: &PgPool, id: i64) -> Result<Option<Account>, sqlx::Error> {
+async fn account_by_id(db: &Db, id: i64) -> Result<Option<Account>, sqlx::Error> {
     sqlx::query_as(&format!("SELECT {ACCOUNT_COLUMNS} FROM users u WHERE u.id = $1"))
         .bind(id)
         .fetch_optional(db)
@@ -345,7 +347,7 @@ fn delete_letter(account: &Account, email: &str, code: &str) -> super::mail::Mai
 /// Issues a code and emails it. Errors are ready-made responses.
 #[expect(clippy::result_large_err, reason = "the error is the HTTP response itself, returned once")]
 async fn issue_and_send(
-    db: &PgPool,
+    db: &Db,
     mailer: &Mailer,
     account: &Account,
     email: &str,
@@ -377,6 +379,7 @@ async fn issue_and_send(
 /// After registering: email a confirmation link without holding up the reply.
 pub fn send_verification_in_background(state: &InternalState, user_id: i64) {
     let (db, mailer) = (state.db.clone(), state.mailer.clone());
+    let span = super::telemetry::detached_span("email.verify_send");
     task::spawn(async move {
         let account = match account_by_id(&db, user_id).await {
             Ok(Some(a)) => a,
@@ -389,7 +392,7 @@ pub fn send_verification_in_background(state: &InternalState, user_id: i64) {
         if let Some(email) = account.email.clone() {
             let _ = issue_and_send(&db, &mailer, &account, &email, Purpose::VerifyEmail).await;
         }
-    });
+    }.instrument(span));
 }
 
 // ---- Handlers ----
@@ -444,7 +447,7 @@ async fn verify_send(State(state): State<InternalState>, Json(req): Json<TokenRe
 async fn verify_confirm(State(state): State<InternalState>, Json(req): Json<CodeReq>) -> Response {
     let result: Result<Option<String>, sqlx::Error> = async {
         let mut tx = state.db.begin().await?;
-        let Some((user_id, email)) = redeem(&mut *tx, &req.code, Purpose::VerifyEmail, true).await? else {
+        let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::VerifyEmail, true).await? else {
             return Ok(None);
         };
         // Only while the address is still the one the link was sent to.
@@ -454,7 +457,7 @@ async fn verify_confirm(State(state): State<InternalState>, Json(req): Json<Code
         )
         .bind(user_id)
         .bind(&email)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut tx.executor())
         .await?;
         tx.commit().await?;
         if username.is_some() {
@@ -485,6 +488,7 @@ async fn password_forgot(State(state): State<InternalState>, Json(req): Json<For
     // Everything else happens after replying, so the reply looks and takes the same
     // whether or not the account exists.
     let (db, mailer) = (state.db.clone(), state.mailer.clone());
+    let span = super::telemetry::detached_span("email.password_reset_send");
     task::spawn(async move {
         let by = if login.contains('@') { "LOWER(u.email) = LOWER($1)" } else { "u.username = $1" };
         let account: Result<Option<Account>, _> = sqlx::query_as(&format!(
@@ -507,7 +511,7 @@ async fn password_forgot(State(state): State<InternalState>, Json(req): Json<For
             Ok(None) => tracing::info!("password reset asked for an unknown or password-less account"),
             Err(e) => tracing::error!(error = %e, "looking up an account for a password reset failed"),
         }
-    });
+    }.instrument(span));
     StatusCode::ACCEPTED.into_response()
 }
 
@@ -543,7 +547,7 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
     };
     let result: Result<Option<(i64, String)>, sqlx::Error> = async {
         let mut tx = state.db.begin().await?;
-        let Some((user_id, email)) = redeem(&mut *tx, &req.code, Purpose::ResetPassword, true).await? else {
+        let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::ResetPassword, true).await? else {
             return Ok(None);
         };
         // Resetting through the emailed link also proves the address is theirs.
@@ -555,18 +559,18 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
         .bind(user_id)
         .bind(&hashed)
         .bind(&email)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut tx.executor())
         .await?;
         let Some((username,)) = username else { return Ok(None) };
         // Log out everywhere: whoever knew the old password shouldn't stay in. Their
         // outstanding links (e.g. to delete the account) stop working too.
         sqlx::query("DELETE FROM bff_tokens WHERE user_id = $1")
             .bind(user_id)
-            .execute(&mut *tx)
+            .execute(&mut tx.executor())
             .await?;
         sqlx::query("UPDATE email_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL")
             .bind(user_id)
-            .execute(&mut *tx)
+            .execute(&mut tx.executor())
             .await?;
         tx.commit().await?;
         Ok(Some((user_id, username)))
@@ -616,14 +620,14 @@ async fn delete_check(State(state): State<InternalState>, Json(req): Json<CodeRe
 async fn delete_confirm(State(state): State<InternalState>, Json(req): Json<CodeReq>) -> Response {
     let result: Result<Option<(i64, String)>, sqlx::Error> = async {
         let mut tx = state.db.begin().await?;
-        let Some((user_id, email)) = redeem(&mut *tx, &req.code, Purpose::DeleteAccount, true).await? else {
+        let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::DeleteAccount, true).await? else {
             return Ok(None);
         };
         // Only while the address is still the one the link was sent to.
         let deleted = sqlx::query_as("DELETE FROM users WHERE id = $1 AND email = $2 RETURNING id, username")
             .bind(user_id)
             .bind(&email)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut tx.executor())
             .await?;
         tx.commit().await?;
         Ok(deleted)

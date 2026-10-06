@@ -773,6 +773,7 @@ fn Pagination(page: u32, total: i64, limit: u32, on_page: EventHandler<u32>) -> 
                     Some(i) => rsx! {
                         button {
                             class: if i == page { "btn btn-sm btn-primary" } else { "btn btn-sm btn-ghost" },
+                            "data-trace-name": "page",
                             onclick: move |_| on_page.call(i),
                             "{i + 1}"
                         }

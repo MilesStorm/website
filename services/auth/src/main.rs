@@ -68,9 +68,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // JSON structured logging — one object per line, parsed by Loki / any log aggregator.
     // The OTel log bridge additionally ships log events via OTLP so Loki entries carry
     // trace_id/span_id, enabling Tempo → Loki correlation.
+    // The filter also decides which spans exist (TRACING.md, "Log level"). Targets match by
+    // prefix: `sqlx=warn` would hide sqlx_tracing's query spans too, hence the override.
     tracing_subscriber::registry()
         .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
-            |_| "info,sqlx=warn,tower_sessions=warn".into(),
+            |_| "info,sqlx=warn,sqlx_tracing=info,tower_sessions=warn,axum_login=warn".into(),
         )))
         .with(tracing_subscriber::fmt::layer().json())
         .with(otel_layer)

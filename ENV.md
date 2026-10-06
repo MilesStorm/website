@@ -21,7 +21,7 @@
 | `BFF_CALLBACK_URL` | `http://localhost:8080` | Public URL of the frontend. After a successful OAuth login, auth redirects the browser here (`/oauth/callback?code=...`). In production set this to `https://milesstorm.com`. |
 | `SERVER_IP` | `localhost` | Bind address. Set to `0.0.0.0` in the K8s deployment. |
 | `SERVER_PORT` | `7070` | Bind port. |
-| `RUST_LOG` | `info,sqlx=warn,tower_sessions=warn` | Log filter string passed to `tracing-subscriber`. |
+| `RUST_LOG` | `info,sqlx=warn,sqlx_tracing=info,tower_sessions=warn,axum_login=warn` | Log filter string passed to `tracing-subscriber`. |
 
 ---
 

@@ -113,8 +113,6 @@ spec:
                 name: website-secrets
                 key: SURREAL_PASS
                 optional: true
-          - name: RUST_LOG
-            value: "info"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: "http://alloy.monitoring.svc.cluster.local:4317"
       imagePullSecrets:
