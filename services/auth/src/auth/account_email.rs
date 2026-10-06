@@ -115,7 +115,7 @@ pub(super) fn hash(code: &str) -> String {
 
 /// The link for `code`.
 fn link(purpose: Purpose, code: &str) -> String {
-    format!("{}{}?code={code}", site_url(), purpose.page())
+    format!("{}{}#{code}", site_url(), purpose.page())
 }
 
 #[derive(Debug)]
@@ -671,6 +671,16 @@ fn deleted_reply(result: Result<Option<(i64, String)>, sqlx::Error>) -> Response
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn email_codes_stay_in_the_fragment() {
+        for purpose in [Purpose::VerifyEmail, Purpose::ResetPassword, Purpose::DeleteAccount] {
+            let url = reqwest::Url::parse(&link(purpose, "a_b-c")).unwrap();
+            assert_eq!(url.path(), purpose.page());
+            assert_eq!(url.query(), None);
+            assert_eq!(url.fragment(), Some("a_b-c"));
+        }
+    }
 
     #[test]
     fn codes_are_long_random_and_url_safe() {

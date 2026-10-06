@@ -36,6 +36,15 @@ fn forget_login() {
 
 const MISSING_CODE: &str = "This link is incomplete. Open it straight from the email, or copy the whole link.";
 
+/// Dioxus reads the fragment from browser history. Wait until after hydration to
+/// use it: the server never receives it, so the first render must match the SSR
+/// loading view. `None` means loading; `Some("")` means an incomplete link.
+pub(super) fn use_link_code(fragment: String) -> Signal<Option<String>> {
+    let mut code = use_signal(|| None);
+    use_effect(use_reactive!(|fragment| code.set(Some(fragment))));
+    code
+}
+
 // ---- Forgot password ----
 
 #[component]
@@ -103,12 +112,16 @@ pub fn ForgotPassword() -> Element {
 
 #[component]
 pub fn ResetPassword(code: String) -> Element {
+    let code = use_link_code(code);
     let mut password = use_signal(String::new);
     let mut again = use_signal(String::new);
     let mut busy = use_signal(|| false);
     let mut done = use_signal(|| Option::<String>::None);
     let mut error = use_signal(|| Option::<String>::None);
 
+    let Some(code) = code() else {
+        return rsx! { Panel { title: "Choose a new password", span { class: "loading loading-spinner loading-md" } } };
+    };
     if code.is_empty() {
         return rsx! { Panel { title: "Choose a new password", p { "{MISSING_CODE}" } } };
     }
@@ -202,12 +215,13 @@ enum Confirming {
 
 #[component]
 pub fn VerifyEmail(code: String) -> Element {
+    let code = use_link_code(code);
     let mut state = use_signal(|| Confirming::Working);
 
     // In the browser only: opening the link confirms (no button needed, since a link
     // checker opening it too would do no harm).
     use_effect(move || {
-        let code = code.clone();
+        let Some(code) = code() else { return };
         spawn(async move {
             if code.is_empty() {
                 state.set(Confirming::Failed(MISSING_CODE.into()));
@@ -256,13 +270,13 @@ pub fn VerifyEmail(code: String) -> Element {
 
 #[component]
 pub fn DeleteAccount(code: String) -> Element {
+    let code = use_link_code(code);
     let mut account = use_signal(|| Option::<Result<Deletion, String>>::None);
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| Option::<String>::None);
 
-    let check_code = code.clone();
     use_effect(move || {
-        let code = check_code.clone();
+        let Some(code) = code() else { return };
         spawn(async move {
             if code.is_empty() {
                 account.set(Some(Err(MISSING_CODE.into())));
@@ -273,7 +287,7 @@ pub fn DeleteAccount(code: String) -> Element {
     });
 
     let delete = move |_| {
-        let code = code.clone();
+        let Some(code) = code() else { return };
         spawn(async move {
             busy.set(true);
             error.set(None);
