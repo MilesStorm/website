@@ -225,9 +225,10 @@ fn server_launch() -> ! {
                 )
                 .layer(axum::Extension(roll_hub))
                 .layer(layer)
-                .layer(axum::middleware::from_fn(capture_traceparent))
+                .layer(axum::middleware::from_fn(api::trace::capture_request_context))
                 .layer(OtelInResponseLayer)
-                .layer(OtelAxumLayer::default())
+                // Prometheus scrapes every 15s; a trace each would bury the real ones.
+                .layer(OtelAxumLayer::default().filter(|path| path != "/metrics"))
                 .layer(prometheus_layer);
             Ok(router)
         }
@@ -269,9 +270,14 @@ async fn arcane_ws_proxy(
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
     let session_id = session.id();
     let token: String = session.get("opaque_token").await.ok().flatten().unwrap_or_default();
+    // The camera session outlives this request (it ends at the 101), so it gets a span of
+    // its own in the same trace, which ai_pipeline's connection joins.
+    let session_span = api::detached_span!("arcane.ws_session", user = %user);
     // Camera frames are a few hundred KB; anything much larger isn't a frame.
-    ws.max_message_size(4 * 1024 * 1024)
-        .on_upgrade(move |socket| proxy_ws(socket, ai_url, hub, user, token, session_id))
+    ws.max_message_size(4 * 1024 * 1024).on_upgrade(move |socket| {
+        use tracing::Instrument as _;
+        proxy_ws(socket, ai_url, hub, user, token, session_id).instrument(session_span)
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -287,7 +293,17 @@ async fn proxy_ws(
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TngMsg;
 
-    let (upstream, _) = match tokio_tungstenite::connect_async(&upstream_url).await {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+
+    let mut upstream_req = match upstream_url.as_str().into_client_request() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, upstream = %upstream_url, "invalid ai_pipeline URL");
+            return;
+        }
+    };
+    api::trace::inject(&tracing::Span::current(), upstream_req.headers_mut());
+    let (upstream, _) = match tokio_tungstenite::connect_async(upstream_req).await {
         Ok(conn) => conn,
         Err(e) => {
             tracing::error!(error = %e, upstream = %upstream_url, "ai_pipeline connect failed");
@@ -330,13 +346,15 @@ async fn proxy_ws(
                             if rolls_tx.try_send(t.to_string()).is_err() {
                                 tracing::warn!("arcane roll dropped: Redis publish queue full");
                             }
-                            let job = capture::CaptureJob {
-                                roll: t.to_string(),
-                                frame: last_frame.take().filter(|(s, _)| Some(*s) == seq).map(|(_, f)| f),
-                                jpeg: seq.and_then(|s| frames.lock().unwrap().get(s)),
-                            };
-                            if capture_tx.try_send(job).is_err() {
-                                tracing::debug!("roll capture skipped: queue full");
+                            // Reserve first, so a full queue makes no (empty) capture span.
+                            match capture_tx.try_reserve() {
+                                Ok(permit) => permit.send(capture::CaptureJob {
+                                    roll: t.to_string(),
+                                    frame: last_frame.take().filter(|(s, _)| Some(*s) == seq).map(|(_, f)| f),
+                                    jpeg: seq.and_then(|s| frames.lock().unwrap().get(s)),
+                                    span: api::detached_span!("arcane.capture"),
+                                }),
+                                Err(_) => tracing::debug!("roll capture skipped: queue full"),
                             }
                         } else if let Some(s) = seq {
                             last_frame = Some((s, t.to_string()));
@@ -372,43 +390,6 @@ fn reply_info(text: &str) -> (bool, Option<u64>) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return (false, None) };
     let is_roll = v.get("type").and_then(|t| t.as_str()) == Some("roll");
     (is_roll, v.get("frame_seq").and_then(|s| s.as_u64()))
-}
-
-// ---- Trace context capture middleware ----
-
-/// Runs after `OtelAxumLayer` has created the request span. Reads back the current
-/// span's OTel context and stores the serialised `traceparent` as a request extension.
-/// BFF server functions read this extension to forward the trace context to auth even
-/// when Dioxus's SSR dispatcher spawns them into a new task (dropping thread-local state).
-#[cfg(not(target_arch = "wasm32"))]
-async fn capture_traceparent(
-    mut req: axum::http::Request<axum::body::Body>,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    use opentelemetry::propagation::TextMapPropagator as _;
-    use opentelemetry_sdk::propagation::TraceContextPropagator;
-    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-
-    use opentelemetry::trace::TraceContextExt as _;
-
-    let current_span = tracing::Span::current();
-    let cx = current_span.context();
-    let otel_span = cx.span();
-    let sc = otel_span.span_context();
-
-    if sc.is_valid() {
-        // Record OTel trace_id on the request span so it appears in every JSON
-        // log line emitted during this request — enabling Loki↔Tempo correlation.
-        current_span.record("trace_id", sc.trace_id().to_string());
-
-        let propagator = TraceContextPropagator::new();
-        let mut carrier = std::collections::HashMap::new();
-        propagator.inject_context(&cx, &mut carrier);
-        if let Some(tp) = carrier.remove("traceparent") {
-            req.extensions_mut().insert(api::IncomingTraceparent(tp));
-        }
-    }
-    next.run(req).await
 }
 
 // ---- OAuth Axum handlers ----
@@ -549,8 +530,8 @@ enum Route {
 
 #[component]
 fn App() -> Element {
-    let status = use_server_future(check_login_status)?;
-    let perms = use_server_future(get_my_permissions)?;
+    let status = api::trace::use_server_future("check_login_status", check_login_status)?;
+    let perms = api::trace::use_server_future("get_my_permissions", get_my_permissions)?;
 
     use_effect(move || {
         if let Some(Ok(s)) = status.value()() {

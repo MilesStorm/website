@@ -23,6 +23,20 @@ anyhow = "1.0.102"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
+# OpenTelemetry: bump these together, with reqwest-tracing's `opentelemetry_0_NN` feature
+# matching `opentelemetry`. A mismatch still compiles but silently stops trace propagation;
+# the tests in packages/api/src/trace.rs catch it. See TRACING.md ("Upgrading").
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "logs"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "logs"] }
+opentelemetry-appender-tracing = "0.27"
+tracing-opentelemetry = "0.28"
+# `tracing_level_info` raises OtelAxumLayer's per-request span from TRACE to INFO so it
+# survives the `info` EnvFilter.
+axum-tracing-opentelemetry = { version = "0.25", features = ["tracing_level_info"] }
+reqwest-middleware = { version = "0.5", features = ["json"] }
+reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_27"] }
+
 # workspace
 ui = { path = "packages/ui" }
 api = { path = "packages/api" }

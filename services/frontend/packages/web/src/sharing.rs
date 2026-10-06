@@ -101,7 +101,8 @@ pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
     let n = ds.delete_user_data(&user).await.map_err(store_error)?;
     tracing::info!(rolls = n, "user deleted shared roll pictures");
     let (ds, hub) = (ds.clone(), hub.clone());
-    tokio::spawn(async move {
+    let span = api::detached_span!("dataset.delete_again");
+    tokio::spawn(tracing::Instrument::instrument(async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         if let Some(hub) = &hub {
             hub.clear_held(&user).await;
@@ -111,6 +112,6 @@ pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
             Ok(late) => tracing::info!(rolls = late, "deleted rolls saved during a delete"),
             Err(e) => tracing::error!(error = %e, "second delete pass failed"),
         }
-    });
+    }, span));
     Ok(n)
 }

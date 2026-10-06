@@ -7,12 +7,7 @@ pub use ui::data_dir::{
     AdminInvite, AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus, PagedResult,
 };
 
-/// Request extension that carries the serialised W3C `traceparent` captured
-/// before Dioxus's SSR dispatcher spawns server-function tasks.
-/// Set by the `capture_traceparent` middleware in the `web` crate.
-#[cfg(feature = "server")]
-#[derive(Clone)]
-pub struct IncomingTraceparent(pub String);
+pub mod trace;
 
 // ---- Session helpers (server-only) ----
 
@@ -35,14 +30,6 @@ mod session {
     pub fn service_secret() -> String {
         std::env::var("BFF_SERVICE_SECRET").expect("BFF_SERVICE_SECRET must be set")
     }
-
-    /// Returns the W3C `traceparent` captured before any Dioxus spawn, or `None`
-    /// if not available (in which case `TracingMiddleware` handles propagation).
-    pub fn traceparent() -> Option<String> {
-        let ctx = FullstackContext::current()?;
-        let parts = ctx.parts_mut();
-        parts.extensions.get::<crate::IncomingTraceparent>().map(|t| t.0.clone())
-    }
 }
 
 /// Gives the session a new ID on logging in, keeping what's in it (e.g. a pending
@@ -57,81 +44,12 @@ pub async fn fresh_session_id(sess: &tower_sessions::Session) -> Result<(), Stri
     })
 }
 
+/// The BFF's client for calls to auth: every request gets a CLIENT span and carries
+/// the trace context (see `trace::client`).
 #[cfg(feature = "server")]
 fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
-    use std::sync::OnceLock;
-    use reqwest_middleware::ClientBuilder;
-    static CLIENT: OnceLock<reqwest_middleware::ClientWithMiddleware> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        ClientBuilder::new(reqwest::Client::new())
-            .with(PropagateTraceContext)
-            .build()
-    })
-}
-
-/// Injects the W3C `traceparent` header into every outbound BFF→auth request.
-///
-/// Session path (both SSR and client-triggered): `capture_traceparent` Axum middleware
-/// serialises the current OTel context into `IncomingTraceparent` before any Dioxus
-/// spawn. This is preferred — auth becomes a child of the same HTTP request span.
-///
-/// Fallback (background tasks with no active HTTP request): extract context from the
-/// live tracing span when no session traceparent is available.
-#[cfg(feature = "server")]
-struct PropagateTraceContext;
-
-#[cfg(feature = "server")]
-#[async_trait::async_trait]
-impl reqwest_middleware::Middleware for PropagateTraceContext {
-    async fn handle(
-        &self,
-        mut req: reqwest::Request,
-        extensions: &mut http::Extensions,
-        next: reqwest_middleware::Next<'_>,
-    ) -> reqwest_middleware::Result<reqwest::Response> {
-        use opentelemetry::trace::TraceContextExt as _;
-        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-
-        let session_tp = session::traceparent();
-        let cx = tracing::Span::current().context();
-        let live_span = cx.span();
-        let live_sc = live_span.span_context();
-
-        tracing::warn!(
-            session_traceparent = ?session_tp,
-            live_span_valid = live_sc.is_valid(),
-            live_trace_id = %live_sc.trace_id(),
-            "PropagateTraceContext: selecting traceparent"
-        );
-
-        let used_session = session_tp.is_some();
-        let traceparent = if session_tp.is_some() {
-            // A real HTTP request is in scope — the Axum middleware captured the traceparent.
-            // Use it so auth stays in the same trace as the frontend HTTP request span.
-            session_tp
-        } else if live_sc.is_valid() {
-            // No session context (e.g. background task) — best-effort: use current live span.
-            let mut carrier = std::collections::HashMap::new();
-            opentelemetry::global::get_text_map_propagator(|p| p.inject_context(&cx, &mut carrier));
-            carrier.remove("traceparent")
-        } else {
-            None
-        };
-
-        tracing::warn!(
-            selected_traceparent = ?traceparent,
-            source = if used_session { "session" } else if traceparent.is_some() { "live_span" } else { "none" },
-            "PropagateTraceContext: injecting traceparent"
-        );
-
-        if let Some(tp) = traceparent {
-            if let Ok(val) = reqwest::header::HeaderValue::from_str(&tp) {
-                req.headers_mut().insert("traceparent", val);
-            }
-        }
-
-        next.run(req, extensions).await
-    }
+    static CLIENT: std::sync::OnceLock<reqwest_middleware::ClientWithMiddleware> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| trace::client(reqwest::Client::new()))
 }
 
 // ---- Plain async helpers for Axum OAuth handlers in the web crate ----

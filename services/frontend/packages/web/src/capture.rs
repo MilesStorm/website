@@ -26,6 +26,8 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tower_sessions_redis_store::fred::prelude::*;
 
+use tracing::Instrument as _;
+
 use crate::dataset::{auto_reason, clean_values, dataset, is_roll_id, shares, Capture};
 use crate::rolls::{arcane_user, origin_allowed, Denied, RollHub};
 
@@ -87,6 +89,9 @@ pub struct CaptureJob {
     pub roll: String,
     pub frame: Option<String>,
     pub jpeg: Option<Bytes>,
+    /// Made where the roll was read (`api::detached_span!`), so the work on it shows
+    /// in the camera session's trace.
+    pub span: tracing::Span,
 }
 
 impl RollHub {
@@ -99,51 +104,57 @@ impl RollHub {
             let mut paused_until: Option<Instant> = None;
             let mut last_counted = String::new();
             while let Some(job) = rx.recv().await {
-                let Ok(roll) = serde_json::from_str::<Value>(&job.roll) else { continue };
-                let Some(roll_id) = roll.get("roll_id").and_then(Value::as_str).filter(|r| is_roll_id(r))
-                else {
-                    continue;
-                };
-                // Nothing is kept unless the store is configured.
-                let Some(ds) = dataset() else { continue };
-                let Some(jpeg) = job.jpeg.filter(|j| is_image(j)) else {
-                    tracing::debug!(roll_id, "roll picture missing or not an image; not kept");
-                    continue;
-                };
-                let capture = Capture {
-                    roll_id: roll_id.to_string(),
-                    frame: job.frame.and_then(|f| serde_json::from_str(&f).ok()),
-                    roll: roll.clone(),
-                    jpeg: jpeg.to_vec(),
-                };
-                hub.hold(&user, &capture).await;
+                let span = job.span;
+                // One iteration per job; `return` skips to the next job.
+                async {
+                    let Ok(roll) = serde_json::from_str::<Value>(&job.roll) else { return };
+                    let Some(roll_id) = roll.get("roll_id").and_then(Value::as_str).filter(|r| is_roll_id(r))
+                    else {
+                        return;
+                    };
+                    // Nothing is kept unless the store is configured.
+                    let Some(ds) = dataset() else { return };
+                    let Some(jpeg) = job.jpeg.filter(|j| is_image(j)) else {
+                        tracing::debug!(roll_id, "roll picture missing or not an image; not kept");
+                        return;
+                    };
+                    let capture = Capture {
+                        roll_id: roll_id.to_string(),
+                        frame: job.frame.and_then(|f| serde_json::from_str(&f).ok()),
+                        roll: roll.clone(),
+                        jpeg: jpeg.to_vec(),
+                    };
+                    hub.hold(&user, &capture).await;
 
-                if paused_until.is_some_and(|t| Instant::now() < t) {
-                    continue;
-                }
-                // Decide first; only rolls that would be kept cost a consent lookup.
-                let Some(reason) = auto_reason(&capture.roll, roll_id, ds.sample_every()) else { continue };
-                match shares(&token).await {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "dataset consent lookup failed; pausing samples");
+                    if paused_until.is_some_and(|t| Instant::now() < t) {
+                        return;
+                    }
+                    // Decide first; only rolls that would be kept cost a consent lookup.
+                    let Some(reason) = auto_reason(&capture.roll, roll_id, ds.sample_every()) else { return };
+                    match shares(&token).await {
+                        Ok(true) => {}
+                        Ok(false) => return,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "dataset consent lookup failed; pausing samples");
+                            paused_until = Some(Instant::now() + ERROR_PAUSE);
+                            return;
+                        }
+                    }
+                    // Re-emissions of the same roll refresh it without counting again.
+                    if last_counted != roll_id {
+                        let n = hub.count_in_window(&format!("arcane:auto_count:{user}"), 86_400).await;
+                        if n.is_none_or(|n| n > AUTO_SAMPLES_PER_DAY) {
+                            return;
+                        }
+                        last_counted = roll_id.to_string();
+                    }
+                    if let Err(e) = ds.save(&user, &capture, Some(reason), None).await {
+                        tracing::warn!(error = %e, "saving dataset sample failed; pausing samples");
                         paused_until = Some(Instant::now() + ERROR_PAUSE);
-                        continue;
                     }
                 }
-                // Re-emissions of the same roll refresh it without counting again.
-                if last_counted != roll_id {
-                    let n = hub.count_in_window(&format!("arcane:auto_count:{user}"), 86_400).await;
-                    if n.is_none_or(|n| n > AUTO_SAMPLES_PER_DAY) {
-                        continue;
-                    }
-                    last_counted = roll_id.to_string();
-                }
-                if let Err(e) = ds.save(&user, &capture, Some(reason), None).await {
-                    tracing::warn!(error = %e, "saving dataset sample failed; pausing samples");
-                    paused_until = Some(Instant::now() + ERROR_PAUSE);
-                }
+                .instrument(span)
+                .await;
             }
         });
         tx

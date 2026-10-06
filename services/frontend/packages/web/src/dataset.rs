@@ -182,7 +182,7 @@ pub struct Dataset {
 }
 
 struct Inner {
-    http: reqwest::Client,
+    http: api::trace::TracedClient,
     /// Server base URL (`SURREAL_URL`).
     url: String,
     rpc_url: String,
@@ -216,7 +216,7 @@ impl Dataset {
             .unwrap_or(DEFAULT_SAMPLE_EVERY);
         Some(Self {
             inner: Arc::new(Inner {
-                http: reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?,
+                http: api::trace::client(reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?),
                 rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
                 url,
                 user: var("SURREAL_USER")?,
