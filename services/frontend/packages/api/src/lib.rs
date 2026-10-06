@@ -9,6 +9,26 @@ pub use ui::data_dir::{
 
 pub mod trace;
 
+/// Preserve an expected auth rejection; upstream failures remain gateway errors.
+pub fn auth_error(status: u16, message: impl Into<String>) -> ServerFnError {
+    ServerFnError::ServerError {
+        message: message.into(),
+        code: if (400..500).contains(&status) { status } else { 502 },
+        details: None,
+    }
+}
+
+#[cfg(feature = "server")]
+fn password_login_error(status: u16, body: &str) -> ServerFnError {
+    // Auth also uses 401 for a bad BFF service secret. That is an outage, not
+    // a user's mistyped password, so only its credential rejection is a 4xx.
+    if matches!(status, 401 | 403) && body == "Invalid credentials" {
+        auth_error(status, "Invalid credentials")
+    } else {
+        auth_error(502, "Login is unavailable right now. Try again later.")
+    }
+}
+
 // ---- Session helpers (server-only) ----
 
 #[cfg(feature = "server")]
@@ -161,12 +181,24 @@ pub async fn login_password(
         .json(&Req { username: username.clone(), password })
         .send()
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "password login failed: reaching auth failed");
+            metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "error").increment(1);
+            auth_error(502, "Login is unavailable right now. Try again later.")
+        })?;
 
     if !resp.status().is_success() {
-        tracing::warn!(username = %username, "password login failed: invalid credentials");
-        metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "failure").increment(1);
-        return Err(ServerFnError::new("Invalid credentials"));
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        let error = password_login_error(status, &body);
+        let expected = http::StatusCode::from(error.clone()).is_client_error();
+        if expected {
+            tracing::warn!(username = %username, "password login failed: invalid credentials");
+        } else {
+            tracing::error!(status, "password login failed: auth unavailable");
+        }
+        metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => if expected { "failure" } else { "error" }).increment(1);
+        return Err(error);
     }
 
     let data: Resp = resp
@@ -294,7 +326,7 @@ pub async fn register_password(
         let body = resp.text().await.unwrap_or_default();
         tracing::warn!(username = %username, reason = %body, "registration conflict");
         metrics::counter!("bff_register_attempts_total", "status" => "conflict").increment(1);
-        return Err(ServerFnError::new(body));
+        return Err(auth_error(409, body));
     }
 
     if resp.status() == reqwest::StatusCode::BAD_REQUEST {
@@ -303,7 +335,7 @@ pub async fn register_password(
         let body = resp.text().await.unwrap_or_default();
         metrics::counter!("bff_register_attempts_total", "status" => "invalid").increment(1);
         let known = body == "Invalid email address" || body.starts_with("Password must be at least");
-        return Err(ServerFnError::new(if known { body.as_str() } else { "Registration failed" }));
+        return Err(auth_error(400, if known { body.as_str() } else { "Registration failed" }));
     }
 
     if !resp.status().is_success() {
@@ -1070,6 +1102,70 @@ pub async fn admin_revoke_invite(invite_id: i32) -> Result<(), ServerFnError> {
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::PendingInvite;
+
+    #[test]
+    fn auth_rejections_keep_their_http_status() {
+        use axum::response::IntoResponse;
+        for status in [400, 401, 403, 404, 409, 429] {
+            let error = super::auth_error(status, "Try again");
+            assert_eq!(error.into_response().status().as_u16(), status);
+        }
+        for status in [302, 500, 503] {
+            assert_eq!(super::auth_error(status, "Unavailable").into_response().status().as_u16(), 502);
+        }
+    }
+
+    #[test]
+    fn password_rejections_distinguish_credentials_from_outages() {
+        use axum::response::IntoResponse;
+        for status in [401, 403] {
+            assert_eq!(super::password_login_error(status, "Invalid credentials").into_response().status().as_u16(), status);
+        }
+        for (status, body) in [(401, "Invalid service token"), (500, "internal"), (503, ""), (400, "malformed")] {
+            assert_eq!(super::password_login_error(status, body).into_response().status().as_u16(), 502);
+        }
+    }
+
+    #[tokio::test]
+    async fn password_login_preserves_rejections_over_http() {
+        use axum::response::IntoResponse;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let old_url = std::env::var_os("AUTH_SERVICE_URL");
+        let old_secret = std::env::var_os("BFF_SERVICE_SECRET");
+        std::env::set_var("AUTH_SERVICE_URL", format!("http://{address}"));
+        std::env::set_var("BFF_SERVICE_SECRET", "test-only");
+
+        for (status, body, expected) in [
+            (401, "Invalid credentials", 401),
+            (403, "Invalid credentials", 403),
+            (401, "Invalid service token", 502),
+            (503, "unavailable", 502),
+        ] {
+            let request = super::login_password("tester".into(), "wrong-password".into());
+            let upstream = async {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 4096];
+                socket.read(&mut buf).await.unwrap();
+                socket.write_all(format!(
+                    "HTTP/1.1 {status} Rejected\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                ).as_bytes()).await.unwrap();
+            };
+            let (result, ()) = tokio::join!(request, upstream);
+            assert_eq!(result.unwrap_err().into_response().status().as_u16(), expected);
+        }
+        drop(listener);
+        let result = super::login_password("tester".into(), "wrong-password".into()).await;
+        assert_eq!(result.unwrap_err().into_response().status().as_u16(), 502);
+        for (name, old) in [("AUTH_SERVICE_URL", old_url), ("BFF_SERVICE_SECRET", old_secret)] {
+            match old {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
 
     #[test]
     fn pending_invites_wait_an_hour() {

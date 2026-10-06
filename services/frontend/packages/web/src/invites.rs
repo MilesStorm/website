@@ -79,9 +79,9 @@ mod server {
 
     pub(super) fn message(r: Refused) -> ServerFnError {
         match r {
-            Refused::Invalid => ServerFnError::new(INVALID),
-            Refused::LoggedOut => ServerFnError::new(crate::emails::server::LOGGED_OUT),
-            Refused::Removed => ServerFnError::new(
+            Refused::Invalid => api::auth_error(404, INVALID),
+            Refused::LoggedOut => api::auth_error(401, crate::emails::server::LOGGED_OUT),
+            Refused::Removed => api::auth_error(403,
                 "You joined through this link before, but that access has since been removed. Ask whoever sent it.",
             ),
             Refused::Other(e) => e,
@@ -97,7 +97,7 @@ pub async fn open_invite(code: String) -> Result<Opened, ServerFnError> {
 
     let (session, _) = crate::emails::server::request()?;
     if !code_ok(&code) {
-        return Err(ServerFnError::new(server::INVALID));
+        return Err(api::auth_error(400, server::INVALID));
     }
     if let Ok(token) = crate::emails::server::token(&session).await {
         match call("/internal/invite/redeem", serde_json::json!({ "code": code, "token": token })).await {

@@ -90,7 +90,7 @@ pub(crate) mod server {
                 OFFLINE
             }
         };
-        Err(ServerFnError::new(message))
+        Err(api::auth_error(status, message))
     }
 
     pub(super) fn text(reply: &Value, key: &str) -> String {
