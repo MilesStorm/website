@@ -16,8 +16,10 @@
   'use strict';
   if (globalThis.__msTrace) return;
 
-  // Requests that never join an interaction: telemetry, the WebSocket, the live dice feed.
-  var IGNORE = [/\/faro\//, /\/ws\//, /\/api\/arcane\/rolls/];
+  // Requests that never join an interaction: telemetry (ours, and Cloudflare's /cdn-cgi/rum beacon,
+  // which Faro's XHR instrumentation would otherwise trace as a root span per page view), the
+  // WebSocket, the live dice feed.
+  var IGNORE = [/\/faro\//, /\/cdn-cgi\//, /\/ws\//, /\/api\/arcane\/rolls/];
   var QUIET_MS = 300;
   // Hydration-time server calls can start well after the WASM fetch settles.
   var PAGE_QUIET_MS = 1500;

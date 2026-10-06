@@ -245,9 +245,11 @@ test('ignored URLs are neither parented nor counted', async () => {
   h.click(el('button', {}, 'Go'));
   await h.win.fetch('https://milesstorm.com/faro/collect', { method: 'POST' });
   await h.win.fetch(new URL('https://milesstorm.com/api/arcane/rolls'));
+  await h.win.fetch('https://milesstorm.com/cdn-cgi/rum', { method: 'POST' });
   assert.equal(h.spans.length, 0);
   assert.equal(h.calls[0].parent, undefined);
   assert.equal(h.calls[1].parent, undefined);
+  assert.equal(h.calls[2].parent, undefined);
   assert.equal(h.tracer.pending().inflight, 0);
   assert.equal(h.tracer.current(), null);
 });
