@@ -15,10 +15,10 @@ jsonwebtoken = { workspace = true }
 http = "1"
 tracing = { workspace = true }
 tower-sessions = { workspace = true, optional = true }
-reqwest-middleware = { version = "0.5", features = ["json"], optional = true }
-opentelemetry = { version = "0.27", optional = true }
-tracing-opentelemetry = { version = "0.28", optional = true }
-async-trait = { version = "0.1", optional = true }
+reqwest-middleware = { workspace = true, optional = true }
+reqwest-tracing = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 metrics = { version = "0.24", optional = true }
 
 [features]
@@ -26,8 +26,13 @@ server = [
     "dioxus/server",
     "dep:tower-sessions",
     "dep:reqwest-middleware",
+    "dep:reqwest-tracing",
     "dep:opentelemetry",
     "dep:tracing-opentelemetry",
-    "dep:async-trait",
     "dep:metrics",
 ]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
+tracing-subscriber = { workspace = true }
+opentelemetry_sdk = { workspace = true }

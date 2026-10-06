@@ -135,7 +135,8 @@ impl Auth {
             .layer(auth_layer)
             .layer(axum::middleware::from_fn(record_trace_id))   // ← now runs after OtelAxumLayer
             .layer(OtelInResponseLayer)
-            .layer(OtelAxumLayer::default())
+            // Prometheus scrapes every 15s; a trace each would bury the real ones.
+            .layer(OtelAxumLayer::default().filter(|path| path != "/metrics"))
             .layer(prometheus_layer);
 
         let listener = match tokio::net::TcpListener::bind(format!(

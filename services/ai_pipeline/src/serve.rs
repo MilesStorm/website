@@ -7,8 +7,11 @@ use burn::backend::cuda::CudaDevice;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::accept_async;
+use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+use tracing::Instrument as _;
+use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
 use crate::model::inferance::{Detection, DicePipeline, class_value};
 use crate::roll::{Observation, RollTracker};
@@ -138,13 +141,45 @@ pub async fn serve(addr: &str, head_path: PathBuf, dice_threshold: f32) -> anyho
     }
 }
 
+#[expect(clippy::result_large_err, reason = "the handshake callback's error type is tungstenite's")]
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     handle: Arc<InferHandle>,
     dice_threshold: f32,
     model: String,
 ) -> anyhow::Result<()> {
-    let ws = accept_async(stream).await?;
+    // The frontend's camera session sends its `traceparent` on the handshake, so this
+    // connection's span joins the visitor's trace.
+    let mut parent = opentelemetry::Context::new();
+    let ws = accept_hdr_async(stream, |req: &Request, resp: Response| {
+        parent = opentelemetry::global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(req.headers())));
+        Ok(resp)
+    })
+    .await?;
+    let span = tracing::info_span!("arcane.ws_connection", otel.kind = "server", model = %model);
+    span.set_parent(parent);
+    run_session(ws, handle, dice_threshold, model).instrument(span).await;
+    Ok(())
+}
+
+struct HeaderExtractor<'a>(&'a tokio_tungstenite::tungstenite::http::HeaderMap);
+
+impl opentelemetry::propagation::Extractor for HeaderExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|k| k.as_str()).collect()
+    }
+}
+
+async fn run_session(
+    ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    handle: Arc<InferHandle>,
+    dice_threshold: f32,
+    model: String,
+) {
     let (mut sink, stream) = ws.split();
 
     // Decouple socket reading from inference. The previous loop awaited each
@@ -194,7 +229,10 @@ async fn handle_connection(
             continue;
         };
 
-        let Some(result) = handle.infer(frame).await else {
+        // Debug level: a camera session runs several frames a second, so these are off
+        // under RUST_LOG=info and the session's trace stays readable.
+        let infer_span = tracing::debug_span!("infer", frame_seq = seq);
+        let Some(result) = handle.infer(frame).instrument(infer_span).await else {
             continue; // dropped under backpressure
         };
         let mut replies = Vec::with_capacity(2);
@@ -226,5 +264,4 @@ async fn handle_connection(
     }
 
     reader.abort();
-    Ok(())
 }

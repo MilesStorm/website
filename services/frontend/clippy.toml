@@ -6,3 +6,8 @@ await-holding-invalid-types = [
   "dioxus_signals::WriteLock",
   { path = "dioxus_signals::WriteLock", reason = "Write should not be held over an await point. This will cause any reads or writes to fail while the await is pending since the write borrow is still active." },
 ]
+
+disallowed-methods = [
+  { path = "dioxus_fullstack_core::server_future::use_server_future", reason = "use api::trace::use_server_future, which keeps SSR server futures in the page request's trace (TRACING.md)" },
+  { path = "dioxus_fullstack_core::loader::use_loader", reason = "SSR futures need the page request's trace: add an api::trace::use_loader wrapper like api::trace::use_server_future (TRACING.md)" },
+]
