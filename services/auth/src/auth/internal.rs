@@ -121,13 +121,20 @@ async fn exchange_password(
     State(state): State<InternalState>,
     Json(req): Json<ExchangePasswordReq>,
 ) -> impl IntoResponse {
-    let user: Option<UserRow> = sqlx::query_as(
+    let user: Option<UserRow> = match sqlx::query_as(
         "SELECT id, username, password FROM users WHERE username = $1 AND password IS NOT NULL",
     )
     .bind(&req.username)
     .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
+    .await {
+        Ok(user) => user,
+        Err(e) => {
+            tracing::error!(error = %e, "password login failed: database unavailable");
+            telemetry::login_attempt("password", "error");
+            telemetry::token_operation("exchange", "error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     let Some(user) = user else {
         return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
@@ -136,9 +143,15 @@ async fn exchange_password(
     let password_hash = user.password.clone().unwrap_or_default();
     let input = req.password.clone();
 
-    let valid = task::spawn_blocking(move || verify_password(input, &password_hash).is_ok())
-        .await
-        .unwrap_or(false);
+    let valid = match task::spawn_blocking(move || verify_password(input, &password_hash).is_ok()).await {
+        Ok(valid) => valid,
+        Err(e) => {
+            tracing::error!(error = %e, "password verification failed");
+            telemetry::login_attempt("password", "error");
+            telemetry::token_operation("exchange", "error");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     if !valid {
         tracing::warn!(username = %req.username, "password login failed: invalid credentials");
