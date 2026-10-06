@@ -1,24 +1,80 @@
 # Tracing
 
-Every browser request is one trace in Tempo:
+A user interaction is one trace in Tempo, from the click to the database:
 
 ```
-public-istio.istio-ingress  (Gateway, starts the trace)
-└─ frontend  GET /page  or  POST /bff/<server fn>
+milesstorm-web  submit Log In                         (browser, root)
+└─ POST /bff/login_password                          (browser fetch, CLIENT)
+   └─ public-istio.istio-ingress                     (Gateway)
+      └─ frontend  POST /bff/login_password
+         └─ bff.login_password
+            ├─ POST /internal/token/exchange         (CLIENT span)
+            │  └─ waypoint.auth                      (SERVER, then CLIENT to auth)
+            │     └─ auth  POST /internal/token/exchange
+            │        └─ sqlx.fetch_optional …        (postgres, CLIENT)
+            └─ redis session.save                    (redis, CLIENT)
+```
+
+A page load is the server's trace, and the browser joins it: the server writes its span into
+`<meta name="traceparent">`, and the browser's `page load <path>` span (with the WASM download
+and hydration-time server calls under it) is a child of that span:
+
+```
+public-istio.istio-ingress
+└─ frontend  GET <Route>
    ├─ ssr.server_future  check_login_status        (SSR only)
    │  └─ bff.check_login_status
-   │     └─ POST /internal/token/introspect         (CLIENT span)
-   │        └─ waypoint.auth
-   │           └─ auth  POST /internal/token/introspect
-   └─ get_record / save                            (session store)
+   │     └─ POST /internal/token/introspect         (CLIENT span) → waypoint.auth → auth → postgres
+   ├─ redis session.load
+   └─ milesstorm-web  page load /path               (browser)
+      └─ GET /assets/…wasm, POST /bff/…
 ```
 
 A camera session adds `arcane.ws_session`, with ai_pipeline's `arcane.ws_connection` and one
-`arcane.capture` per roll under it.
+`arcane.capture` per roll under it. Browsers can't set headers on a WebSocket, so the session's
+trace starts at the Gateway, not at a click. A roll stream (`/api/arcane/rolls`, server-sent
+events) adds `arcane.rolls_stream`, with its once-a-minute permission rechecks under it.
 
-Spans go from the services to Alloy over OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`). Istio sends its
-spans to Tempo directly. The Gateway makes the sampling decision (`istio/manifests/telemetry.yaml`
-in the homelab repo), and the services follow it.
+The services send spans to Alloy over OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`). Istio sends its spans to
+Tempo directly. The browser sends its spans (and errors, web vitals) through Grafana Faro to
+`https://milesstorm.com/faro/collect`, which the homelab routes to Alloy's `faro.receiver`
+(`monitor/alloy.yaml`, `monitor/manifests/routes.yaml`).
+
+Sampling: the first traced hop decides and everything after follows the `traceparent` flag. For
+browser traffic that is Faro (session sampling, `sessionTracking.samplingRate`, default all); for
+everything else the Gateway (`istio/manifests/telemetry.yaml` in the homelab repo, 100%). Lowering
+one without the other leaves the other's traces at full volume. A client can send its own
+`traceparent`; Faro's uploads use that to opt out (below).
+
+## Browser
+
+`packages/web/assets/trace.js` runs after the Faro bundles (`packages/web/assets/vendor/`, copied
+from `node_modules` by `npm run vendor`; the Dockerfile does this before `dx bundle`). The App
+component loads all three in `<head>`, before the WASM. The script:
+
+- starts a span on a click or form submit and makes every fetch it causes a child of it. The span
+  is only created when a server call happens, so clicks that stay in the browser make no trace. It
+  ends 300 ms after its last fetch (at most 10 s).
+- names the span from `data-trace-name`, then `aria-label`, then the button's text (links: their
+  path). Give a button `data-trace-name="…"` when its text isn't a good name or holds user data.
+- links the page load to the server's trace through `<meta name="traceparent">`
+  (`api::trace::traceparent()`). This needs HTML rendered per request: no Dioxus incremental
+  rendering and no Cloudflare cache rule for pages, or page loads join someone else's trace.
+- ends the page-load span once the page has loaded and no server call has run for 1.5 s (at most
+  15 s), so calls made during hydration land under it. A click that calls the server ends it.
+- only starts Faro on milesstorm.com, so `dx serve` sends nothing.
+
+Faro's fetch instrumentation sends `traceparent` on same-origin requests only. It ignores `/faro/`,
+`/ws/` and `/api/arcane/rolls`. Faro's own uploads send an unsampled `traceparent` (flags `00`):
+the Gateway traces everything else, and would start a trace per upload. Only Faro's errors, web
+vitals, session, view and tracing instrumentations are on; performance, user-action, navigation and
+console are off (volume, and they record URLs whose query strings hold reset and invite codes).
+
+`/faro/collect` is public, so its input is untrusted (homelab repo): the Gateway rejects compressed
+or non-JSON bodies and bodies over 64 KiB (`istio/manifests/faro-guard.yaml`); Alloy caps the rate,
+never downloads source maps, sets `service.name` to `milesstorm-web`, keeps only INTERNAL and CLIENT
+spans, drops attributes that would add service-graph nodes and strips query strings
+(`monitor/alloy.yaml`); Tempo leaves browser spans out of span-metrics (`monitor/tempo.yaml`).
 
 ## Rules for new code
 
@@ -27,7 +83,9 @@ in the homelab repo), and the services follow it.
 | An axum service | Layer `OtelAxumLayer::default().filter(\|p\| p != "/metrics")` and register the W3C `TraceContextPropagator` at startup. Copy `auth/src/main.rs`. |
 | An outbound HTTP call (frontend) | Build the client with `api::trace::client(reqwest::Client)`. A plain `reqwest::Client` sends no `traceparent`, so the callee starts its own trace. |
 | A `use_server_future` or `use_loader` | Use `api::trace::use_server_future("name", f)`; add a matching `use_loader` wrapper when first needed. Clippy warns on the plain hooks (`services/frontend/clippy.toml`). |
-| Work that outlives the request: `tokio::spawn`, a queue, a WebSocket | Run it in `api::detached_span!("name")`. Neither `.in_current_span()` nor a plain child span works: they keep the request's span open until the work ends. |
+| Work that outlives the request: `tokio::spawn`, a queue, a WebSocket, a streamed response body | Run it in `api::detached_span!("name")` (auth: `telemetry::detached_span`). Neither `.in_current_span()` nor a plain child span works: they keep the request's span open until the work ends. |
+| A database or cache client | Its calls need CLIENT spans with `peer.service` (that names the node in the service graph). Postgres in auth: use the `Db` pool (sqlx-tracing). A session store: wrap it in `api::trace::TracedStore`. HTTP to a database (SurrealDB): add `.with_extension(api::trace::Peer { .. })`. |
+| A background loop (metrics poller, cleanup) | Keep it on untraced clients (auth's raw `PgPool`). Every tick would start a root trace. |
 | A non-HTTP hop (WebSocket, queue message) | Send the context with `api::trace::inject(&span, headers)` and extract it on the other side, as ai_pipeline's `accept_hdr_async` does. |
 
 ### Why these rules exist
@@ -44,7 +102,11 @@ in the homelab repo), and the services follow it.
   and never enable its `rt-tracing-exec-force` feature. `client_propagates_and_releases_the_callers_span`
   in `api/src/trace.rs` fails if either happens.
 - **Log level.** `RUST_LOG` filters spans as well as logs. At `warn`, no request or client spans exist,
-  so nothing is propagated.
+  so nothing is propagated. At plain `info`, library spans with no request around them (Dioxus
+  signals, tower-sessions, axum-login) become thousands of one-span traces. The defaults in the
+  frontend's and auth's `main.rs` keep the services' own logs at `info` and those libraries at
+  `warn` (ai_pipeline's libraries make no such spans); the deployments don't set `RUST_LOG`. Targets match by prefix: `sqlx=warn` also hides `sqlx_tracing`,
+  so auth adds `sqlx_tracing=info`.
 
 ## Checks
 
@@ -53,8 +115,11 @@ to dependencies or tracing code:
 
 ```sh
 cd services/frontend
+npm install && npm run vendor                 # asset! needs the vendored Faro bundles
 cargo clippy -p web --features server -- -D clippy::disallowed-methods
 cargo test -p api -p web --features web/server
+npm run test:trace                            # browser script
+cd ../auth && cargo clippy && cargo test
 ```
 
 ## Upgrading OpenTelemetry
@@ -70,16 +135,50 @@ auth and ai_pipeline pin their own copies. Upgrade them together:
 3. Run `cargo test -p api -p web --features web/server`. If the versions are mismatched, the build
    still passes but propagation silently stops, and the trace tests are what catch it.
 
+## Upgrading Faro
+
+Bump `@grafana/faro-web-sdk` and `@grafana/faro-web-tracing` together (exact versions in
+`services/frontend/package.json`). `trace.js` depends on these Faro surfaces:
+
+- `faro.api.getOTEL()` (the standard `@opentelemetry/api` `trace` and `context`), and Faro patching
+  `window.fetch` while `initializeFaro` runs, before `trace.js` wraps it;
+- `FetchTransport`'s `requestOptions.headers` (the unsampled `traceparent` on uploads);
+- the fetch instrumentation's `requestHook`, reading `http.request.method` and `url.full` from the
+  span to name it;
+- the instrumentation class names on the `GrafanaFaroWebSdk` and `GrafanaFaroWebTracing` globals.
+
+After a bump, run `npm run test:trace`, then check on the site that `/faro/collect` uploads carry a
+`traceparent` ending in `-00`, and in Tempo that a click still roots its trace and fetch spans are
+named like `POST /bff/login_password`.
+
 ## Checking traces in Tempo
 
+- **Clicks root their trace.** `{ resource.service.name = "milesstorm-web" && name =~ "click.*|submit.*" }`:
+  the trace should reach `frontend`, and `auth` when the click needed it.
 - **Page loads have one root.** `{ resource.service.name = "frontend" && name =~ "bff.*" }`: the root
-  service should be `public-istio.istio-ingress`, never `frontend`.
-- **No orphans.** The trace view shows no "root span not yet received". Camera sessions are the
-  exception while they run. `arcane.ws_session` and ai_pipeline's `arcane.ws_connection` are exported
-  only when the session ends, and if a pod restarts mid-session they are lost.
+  service should be `public-istio.istio-ingress` or `milesstorm-web`, never `frontend` or `auth`.
+- **Service graph.** In VictoriaMetrics,
+  `sum by (client, server) (increase(traces_service_graph_request_total[15m]))` should show
+  milesstorm-web → public-istio.istio-ingress → frontend → waypoint.auth → auth, and auth → postgres,
+  frontend → redis, frontend → surrealdb. An edge from `user` means a SERVER span had no parent:
+  metrics scrapes are filtered out, so look for whatever else is calling.
+- **No orphans.** The trace view shows no "root span not yet received". Expected exceptions:
+  - camera sessions and roll streams while they run: `arcane.ws_session`, ai_pipeline's
+    `arcane.ws_connection` and `arcane.rolls_stream` are exported only when they end, and lost if
+    a pod restarts meanwhile;
+  - browsers that never send their spans (an ad blocker blocks `/faro/collect`, or the tab closed
+    within Faro's 1 s batch): the request still carries the browser's `traceparent`, so the
+    `milesstorm-web` root is missing.
 
 ## Not covered yet
 
+- **auth's session store.** tower-sessions-sqlx-store needs a raw `PgPool`, so its queries have no
+  spans. The BFF calls auth with tokens, not sessions, so this only affects auth's own pages.
+- **Redis outside the session layer.** The roll hub's calls (PUBLISH/GET, and its own session reads)
+  have no spans.
+- **Query strings in server spans.** Reset, verification, deletion and invite links carry their code
+  in the query string. Browser spans are scrubbed, but the Gateway's `http.url` and the frontend's
+  `url.query` record it. Moving the codes to the URL fragment would keep them off the wire.
 - **auth's own outbound calls.** These are OAuth, Resend and ark. They carry no client spans, because
   auth uses reqwest 0.12 and reqwest-tracing 0.7 needs reqwest 0.13. The ark calls do forward
   `traceparent`.

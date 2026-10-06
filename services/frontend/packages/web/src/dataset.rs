@@ -83,7 +83,9 @@ pub async fn start(store: Dataset, redis: Pool) {
                 continue;
             }
         }
-        match lock.hold_while(tokio::time::timeout(SCHEMA_ATTEMPT_LIMIT, store.apply_schema())).await {
+        // One trace per attempt: the loop itself may wait for hours while SurrealDB is down.
+        let attempt = tracing::Instrument::instrument(store.apply_schema(), tracing::info_span!("dataset.apply_schema"));
+        match lock.hold_while(tokio::time::timeout(SCHEMA_ATTEMPT_LIMIT, attempt)).await {
             Ok(Ok(())) => {
                 lock.release().await;
                 break;
@@ -262,6 +264,7 @@ impl Dataset {
         let resp = i
             .http
             .post(&i.rpc_url)
+            .with_extension(api::trace::Peer { service: "surrealdb", system: "surrealdb" })
             .basic_auth(&i.user, Some(&i.pass))
             .header("Accept", "application/json")
             .header("surreal-ns", &i.ns)

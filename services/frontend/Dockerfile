@@ -23,9 +23,11 @@ RUN rustup target add wasm32-unknown-unknown
 
 COPY . .
 
-# Generate Tailwind CSS before dx bundle — the asset! macro checks file existence at compile time
+# Generate Tailwind CSS and vendor the Faro bundles before dx bundle — the asset! macro checks
+# file existence at compile time
 WORKDIR /app
 RUN npm install && \
+    npm run vendor && \
     node_modules/.bin/tailwindcss -i packages/ui/tailwind.css -o packages/ui/assets/styling/tailwind.css --minify
 
 # Run dx bundle from the package directory so Dioxus.toml is picked up
@@ -53,7 +55,6 @@ COPY --from=builder /app/packages/web/dist/public ./public
 
 USER appuser
 
-ENV RUST_LOG=info
 ENV IP=0.0.0.0
 ENV PORT=80
 

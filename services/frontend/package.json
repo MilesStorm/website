@@ -1,7 +1,13 @@
 {
   "dependencies": {
+    "@grafana/faro-web-sdk": "2.12.1",
+    "@grafana/faro-web-tracing": "2.12.1",
     "@tailwindcss/cli": "^4.2.2",
     "daisyui": "^5.5.19",
     "tailwindcss": "^4.2.2"
+  },
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "test:trace": "node --test packages/web/assets/"
   }
 }

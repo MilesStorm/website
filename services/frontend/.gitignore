@@ -15,3 +15,6 @@ node_modules
 
 # generated tailwind output (produced by dx build/serve/bundle)
 packages/ui/assets/styling/tailwind.css
+
+# vendored Grafana Faro bundles (produced by `npm run vendor`)
+packages/web/assets/vendor/

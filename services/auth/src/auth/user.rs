@@ -184,7 +184,7 @@ impl From<sqlx::Error> for BackendError {
 
 #[derive(Debug, Clone)]
 pub struct Backend {
-    pub db: sqlx::PgPool,
+    pub db: super::Db,
     client: BasicClientSet,
     g_client: BasicClientSet,
     http_client: Client,
@@ -194,7 +194,7 @@ pub type BasicClientSet =
     BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 impl Backend {
-    pub fn new(db: sqlx::PgPool, client: BasicClientSet, g_client: BasicClientSet) -> Self {
+    pub fn new(db: super::Db, client: BasicClientSet, g_client: BasicClientSet) -> Self {
         let http_client = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
             .build()

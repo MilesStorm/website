@@ -138,6 +138,8 @@ fn server_launch() -> ! {
     // then fail silently and our subscriber (JSON + OTel) wins.
     // The OTel log bridge additionally ships log events via OTLP so Loki entries carry
     // trace_id/span_id, enabling Tempo → Loki correlation.
+    // The filter also decides which spans exist (TRACING.md, "Log level"); `dioxus=warn`
+    // keeps per-signal spans (dioxus_signals) from becoming root traces of their own.
     tracing_subscriber::registry()
         .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
             |_| "info,dioxus=warn,tower_sessions=warn".into(),
@@ -194,7 +196,7 @@ fn server_launch() -> ! {
             let roll_hub = rolls::RollHub::connect(roll_config, roll_con_conf, pool.clone())
                 .await
                 .expect("failed to start the arcane roll subscriber");
-            let session_store = RedisStore::new(pool);
+            let session_store = api::trace::TracedStore::new(RedisStore::new(pool), "redis");
 
             let layer = SessionManagerLayer::new(session_store)
                 .with_secure(!cfg!(debug_assertions))
@@ -226,6 +228,7 @@ fn server_launch() -> ! {
                 .layer(axum::Extension(roll_hub))
                 .layer(layer)
                 .layer(axum::middleware::from_fn(api::trace::capture_request_context))
+                .layer(axum::middleware::from_fn(name_page_span))
                 .layer(OtelInResponseLayer)
                 // Prometheus scrapes every 15s; a trace each would bury the real ones.
                 .layer(OtelAxumLayer::default().filter(|path| path != "/metrics"))
@@ -233,6 +236,34 @@ fn server_launch() -> ! {
             Ok(router)
         }
     })
+}
+
+/// Page requests reach Dioxus's fallback, which has no `MatchedPath`, so `OtelAxumLayer`
+/// names their span just `GET`. Names it after the page's `Route` variant instead: a
+/// bounded set, unlike raw paths (span names become Tempo span-metrics labels).
+#[cfg(not(target_arch = "wasm32"))]
+async fn name_page_span(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::http::Method;
+    let method = req.method();
+    if (method == Method::GET || method == Method::HEAD)
+        && req.extensions().get::<axum::extract::MatchedPath>().is_none()
+    {
+        let page = page_name(req.uri().path());
+        let span = tracing::Span::current();
+        span.record("otel.name", format!("{method} {page}"));
+    }
+    next.run(req).await
+}
+
+/// The `Route` variant `path` renders (`NotFound` for anything unknown).
+#[cfg(not(target_arch = "wasm32"))]
+fn page_name(path: &str) -> String {
+    // The variant name is what Debug prints before the fields.
+    let route = path.parse::<Route>().map(|r| format!("{r:?}")).unwrap_or_default();
+    match route.split(|c: char| !c.is_alphanumeric()).next() {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => "NotFound".to_string(),
+    }
 }
 
 // ---- Arcane WebSocket proxy ----
@@ -492,6 +523,7 @@ async fn oauth_callback(
 
 // ---- Dioxus app ----
 
+// `page_name` (span names) reads the variant name from the derived Debug.
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 enum Route {
@@ -557,7 +589,19 @@ fn App() -> Element {
 
     setup_mode();
 
+    // Browser tracing (TRACING.md, "Browser"): the page request's trace for the browser to
+    // continue, then the tracer, as classic scripts that run before the WASM module loads.
+    // The meta is rendered on the client too (as `None`, inserting nothing) so the tree
+    // hydrates the same. Copied as-is (`with_minify(false)`): the bundles come minified, and
+    // dx's esbuild pass turns a file it takes for an ES module into ESM, hiding the
+    // top-level `var GrafanaFaroWebSdk` the other scripts need.
+    let traceparent = use_hook(api::trace::traceparent);
+
     rsx! {
+        document::Meta { name: "traceparent", content: traceparent }
+        document::Script { src: asset!("/assets/vendor/faro-web-sdk.iife.js", AssetOptions::js().with_minify(false)) }
+        document::Script { src: asset!("/assets/vendor/faro-web-tracing.iife.js", AssetOptions::js().with_minify(false)) }
+        document::Script { src: asset!("/assets/trace.js", AssetOptions::js().with_minify(false)) }
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: TAILWIND }
 
@@ -591,5 +635,16 @@ fn WebNavbar() -> Element {
             has_admin: perms.contains_key("manage_permissions"),
         }
         Outlet::<Route> {}
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    #[test]
+    fn pages_are_named_by_route() {
+        assert_eq!(super::page_name("/"), "Landing");
+        assert_eq!(super::page_name("/login"), "Login");
+        assert_eq!(super::page_name("/admin"), "AdminPanel");
+        assert_eq!(super::page_name("/some/1234/thing"), "NotFound");
     }
 }

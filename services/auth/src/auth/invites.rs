@@ -275,13 +275,13 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
              FROM invites i JOIN roles r ON r.id = i.role_id WHERE i.code_hash = $1 FOR UPDATE OF i"
         ))
         .bind(hash(&req.code))
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut tx.executor())
         .await?;
         let Some(invite) = invite else { return Ok(Redeemed::Invalid) };
         let user: Option<(i64,)> =
             sqlx::query_as("SELECT user_id FROM bff_tokens WHERE token = $1 AND expires_at > NOW()")
                 .bind(&req.token)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut tx.executor())
                 .await?;
         let Some((user_id,)) = user else { return Ok(Redeemed::LoggedOut) };
         // Opening the link again after joining (e.g. the page after signing up).
@@ -290,7 +290,7 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
         )
         .bind(invite.id)
         .bind(user_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut tx.executor())
         .await?;
         if already {
             // Joined before, but an admin has since taken the role away: that stands.
@@ -299,7 +299,7 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
             )
             .bind(user_id)
             .bind(invite.role_id)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut tx.executor())
             .await?;
             return Ok(if has_role { Redeemed::Joined(invite.role, false) } else { Redeemed::Removed });
         }
@@ -309,19 +309,19 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
         let granted = sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(user_id)
             .bind(invite.role_id)
-            .execute(&mut *tx)
+            .execute(&mut tx.executor())
             .await?
             .rows_affected();
         sqlx::query("INSERT INTO invite_redemptions (invite_id, user_id) VALUES ($1, $2)")
             .bind(invite.id)
             .bind(user_id)
-            .execute(&mut *tx)
+            .execute(&mut tx.executor())
             .await?;
         // Someone who already had the role doesn't use up a place.
         if granted > 0 {
             sqlx::query("UPDATE invites SET uses = uses + 1 WHERE id = $1")
                 .bind(invite.id)
-                .execute(&mut *tx)
+                .execute(&mut tx.executor())
                 .await?;
         }
         tx.commit().await?;

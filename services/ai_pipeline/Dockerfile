@@ -83,7 +83,6 @@ ADD --chown=appuser:appuser --chmod=0644 --checksum=sha256:6b6e71693e5b9b667c2d0
 
 USER appuser
 
-ENV RUST_LOG=info
 ENV YOLO_MODEL_PATH=/app/models/yolo26s.bpk
 ENV DICE_HEAD_PATH=/app/models/dice_head_resnet18.safetensors
 # Minimum averaged confidence to report a die's value; below it the die is

@@ -311,6 +311,9 @@ struct RollStream {
     session_id: Option<Id>,
     user: String,
     hub: RollHub,
+    /// The stream outlives its request's span (the body is polled after the handler
+    /// returns); rechecks run in this span so they stay in the request's trace.
+    span: tracing::Span,
 }
 
 /// `GET /api/arcane/rolls`: server-sent events, one `roll` event per settled roll,
@@ -339,6 +342,7 @@ pub async fn arcane_rolls(
         sent: None,
         recheck: interval_at(Instant::now() + RECHECK, RECHECK),
         session_id: session.id(),
+        span: api::detached_span!("arcane.rolls_stream", user = %user),
         user,
         hub,
     };
@@ -354,7 +358,8 @@ pub async fn arcane_rolls(
                         Err(RecvError::Closed) => return None,
                     },
                     _ = st.recheck.tick() => {
-                        if st.hub.still_allowed(st.session_id, &st.user).await {
+                        let allowed = st.hub.still_allowed(st.session_id, &st.user);
+                        if tracing::Instrument::instrument(allowed, st.span.clone()).await {
                             continue;
                         }
                         // Logged out or permission removed: end the stream; the

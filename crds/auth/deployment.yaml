@@ -74,8 +74,6 @@ spec:
             value: "https://milesstorm.com"
           - name: SERVER_IP
             value: "0.0.0.0"
-          - name: RUST_LOG
-            value: "info"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: "http://alloy.monitoring.svc.cluster.local:4317"
       imagePullSecrets:

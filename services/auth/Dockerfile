@@ -31,7 +31,6 @@ COPY --from=builder /app/target/release/auth /usr/local/bin/auth
 
 
 ENV SERVER_IP=
-ENV RUST_LOG=info
 ENV DATABASE_URL=
 ENV CLIENT_ID=
 ENV CLIENT_SECRET=
