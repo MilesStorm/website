@@ -85,7 +85,8 @@ function setup({ meta = null, readyState = 'loading' } = {}) {
   const api = sandbox.__msTrace;
   const tracer = api.create({
     otel, window: win, document: doc, now: clk.now, setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
-    performance: { timeOrigin: 500_000, getEntriesByType: () => [{ responseStart: 20 }] },
+    // timeOrigin lags the wall clock, as after the machine sleeps; only now() - responseStart counts.
+    performance: { timeOrigin: 500_000, now: () => 30, getEntriesByType: () => [{ responseStart: 20 }] },
   });
   tracer.install();
   return {
@@ -268,7 +269,7 @@ test('page load span is a child of the meta traceparent and parents fetches unti
   const [span] = h.spans;
   assert.equal(span.name, 'page load /login');
   assert.deepEqual({ ...span.parent.remote }, { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1, isRemote: true });
-  assert.equal(span.opts.startTime, 500_020);
+  assert.equal(span.opts.startTime, 999_990);
   await h.win.fetch('/assets/web.wasm');
   await tick();
   assert.equal(h.calls[0].parent, span);

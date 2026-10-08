@@ -209,7 +209,9 @@
       if (!parent) return;
       var perf = deps.performance;
       var nav = perf && perf.getEntriesByType && perf.getEntriesByType('navigation')[0];
-      var startTime = nav && perf.timeOrigin && nav.responseStart ? perf.timeOrigin + nav.responseStart : now();
+      // Elapsed time from the monotonic clock, anchored to now(): timeOrigin can lag the wall clock
+      // by days after the machine sleeps.
+      var startTime = nav && nav.responseStart && perf.now ? now() - Math.max(0, perf.now() - nav.responseStart) : now();
       var it = current = { name: 'page load ' + templatePath(win.location.pathname), waitLoad: true, inflight: 0 };
       it.span = tracer.startSpan(it.name, { startTime: startTime, attributes: { 'ui.event': 'load' } },
         otel.trace.setSpanContext(otel.context.active(), parent));
