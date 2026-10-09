@@ -149,6 +149,9 @@ fn server_launch() -> ! {
         .with(otel_log_layer)
         .init();
 
+    // Startup work stays out of requests (TRACING.md, "Rules for new code").
+    api::init_http_client();
+
     let store = dataset::Dataset::from_env();
     if store.is_none() {
         tracing::warn!("SURREAL_URL/SURREAL_USER/SURREAL_PASS not set: roll sharing and flagging are off");
