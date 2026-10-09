@@ -219,6 +219,27 @@ pub struct Capture {
     pub jpeg: Vec<u8>,
 }
 
+/// When to renew a SurrealDB token: a minute before its `exp` claim (read, not
+/// verified: it only schedules), at least 10 s from `now`, and in an hour if the
+/// token has no readable expiry.
+fn token_refresh_in(token: &str, now: std::time::SystemTime) -> Duration {
+    const MARGIN: Duration = Duration::from_secs(60);
+    const MIN: Duration = Duration::from_secs(10);
+    let exp = token
+        .split('.')
+        .nth(1)
+        .and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p).ok())
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|c| c.get("exp")?.as_u64());
+    let Some(at) = exp.and_then(|e| std::time::UNIX_EPOCH.checked_add(Duration::from_secs(e))) else {
+        return Duration::from_secs(3600);
+    };
+    at.duration_since(now)
+        .unwrap_or_default()
+        .saturating_sub(MARGIN)
+        .max(MIN)
+}
+
 /// The start of a SurrealDB reply, for an error message.
 fn truncate(body: &str) -> &str {
     let mut end = body.len().min(200);
@@ -315,12 +336,67 @@ impl Dataset {
             .map_err(|_| anyhow::anyhow!("surrealdb signin: timed out"))?
     }
 
+    /// Signs in at startup and again a minute before each token expires, so requests
+    /// find a valid token and never pay for the sign-in (TRACING.md, "Rules for new
+    /// code"). A token SurrealDB rejects early is still replaced by [`Self::query`].
+    ///
+    /// Renewals sign in without holding the token lock: queries keep using the current
+    /// token (still valid for a minute) instead of waiting on the sign-in.
+    pub async fn keep_signed_in(self) {
+        let mut retry = Duration::from_secs(1);
+        loop {
+            // A root span by design: it runs on a timer, not for a request.
+            let signed_in = tracing::Instrument::instrument(
+                async {
+                    if self.inner.token.lock().await.is_none() {
+                        // Startup: queries arriving now wait for this one sign-in.
+                        return self.token(None).await;
+                    }
+                    let t = tokio::time::timeout(REQUEST_TIMEOUT, self.sign_in())
+                        .await
+                        .map_err(|_| anyhow::anyhow!("surrealdb signin: timed out"))??;
+                    *self.inner.token.lock().await = Some(t.clone());
+                    Ok(t)
+                },
+                tracing::info_span!("surrealdb.token_refresh", purpose = "background: renew the SurrealDB token before it expires"),
+            )
+            .await;
+            let wait = match signed_in {
+                Ok(t) => {
+                    retry = Duration::from_secs(1);
+                    let wait = token_refresh_in(&t, std::time::SystemTime::now());
+                    if wait <= Duration::from_secs(10) {
+                        // Expiry under 70 s away right after signing in: SurrealDB's clock is
+                        // ahead of ours, or tokens are very short-lived. Renewing every 10 s.
+                        tracing::warn!(wait_s = wait.as_secs(), "surrealdb token expires almost at once");
+                    }
+                    wait
+                }
+                Err(e) => {
+                    tracing::warn!(error = %format!("{e:#}"), retry_in = ?retry, "surrealdb sign-in failed");
+                    let wait = retry;
+                    retry = (retry * 2).min(SCHEMA_RETRY_MAX);
+                    wait
+                }
+            };
+            tokio::time::sleep(wait).await;
+        }
+    }
+
     async fn sign_in_unless_done(&self, stale: Option<&str>) -> anyhow::Result<String> {
         let i = &self.inner;
         let mut token = i.token.lock().await;
         if let Some(t) = token.as_deref().filter(|t| Some(*t) != stale) {
             return Ok(t.to_string());
         }
+        let t = self.sign_in().await?;
+        *token = Some(t.clone());
+        Ok(t)
+    }
+
+    /// One sign-in; the caller stores the token.
+    async fn sign_in(&self) -> anyhow::Result<String> {
+        let i = &self.inner;
         let resp = i
             .http
             .post(format!("{}/signin", i.url.trim_end_matches('/')))
@@ -335,7 +411,6 @@ impl Dataset {
             .ok()
             .and_then(|b| b.get("token")?.as_str().map(str::to_string))
             .ok_or_else(|| anyhow::anyhow!("surrealdb signin {status}: {}", truncate(&body)))?;
-        *token = Some(t.clone());
         Ok(t)
     }
 
@@ -705,6 +780,55 @@ mod auth_tests {
         let err = ds.query("RETURN 1", json!({})).await.unwrap_err().to_string();
         assert!(err.contains("signin 401") && err.contains("Authentication failed"), "{err}");
         assert!(fake.lock().unwrap().auth_seen.is_empty());
+    }
+
+    fn jwt(claims: Value) -> String {
+        let b64 = |v: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v);
+        format!("{}.{}.sig", b64(br#"{"alg":"HS512"}"#), b64(claims.to_string().as_bytes()))
+    }
+
+    #[test]
+    fn token_is_renewed_a_minute_before_it_expires() {
+        let now = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        assert_eq!(token_refresh_in(&jwt(json!({"exp": 1_003_600})), now), Duration::from_secs(3540));
+        // Already (nearly) expired, and no readable expiry.
+        assert_eq!(token_refresh_in(&jwt(json!({"exp": 1_000_030})), now), Duration::from_secs(10));
+        assert_eq!(token_refresh_in(&jwt(json!({"exp": 999_000})), now), Duration::from_secs(10));
+        assert_eq!(token_refresh_in(&jwt(json!({})), now), Duration::from_secs(3600));
+        assert_eq!(token_refresh_in("token-1", now), Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn an_absurd_expiry_is_treated_as_unreadable() {
+        let now = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        assert_eq!(token_refresh_in(&jwt(json!({"exp": u64::MAX})), now), Duration::from_secs(3600));
+    }
+
+    #[tokio::test]
+    async fn a_renewal_swaps_in_the_new_token() {
+        let (ds, fake) = serve("pw").await;
+        ds.query("RETURN 1", json!({})).await.unwrap();
+        // Renewal path: the lock is only taken to store the new token.
+        let renewed = ds.sign_in().await.unwrap();
+        *ds.inner.token.lock().await = Some(renewed);
+        ds.query("RETURN 2", json!({})).await.unwrap();
+        let f = fake.lock().unwrap();
+        assert_eq!(f.signins, 2);
+        assert_eq!(f.auth_seen, vec!["Bearer token-1", "Bearer token-2"]);
+    }
+
+    #[tokio::test]
+    async fn keeping_signed_in_takes_the_sign_in_out_of_queries() {
+        let (ds, fake) = serve("pw").await;
+        let refresher = tokio::spawn(ds.clone().keep_signed_in());
+        while fake.lock().unwrap().signins == 0 {
+            tokio::task::yield_now().await;
+        }
+        ds.query("RETURN 1", json!({})).await.unwrap();
+        refresher.abort();
+        let f = fake.lock().unwrap();
+        assert_eq!(f.signins, 1);
+        assert_eq!(f.auth_seen, vec!["Bearer token-1"]);
     }
 }
 

@@ -114,6 +114,118 @@
     return item;
   }
 
+  // Browser clock correction (NTP's offset estimate; see TRACING.md, "Browser clock"). The device
+  // clock is often tens of ms (sometimes seconds) off the servers', which draws server spans outside
+  // the browser span that caused them and leaves Grafana's critical path stuck at the browser span.
+  // The Gateway stamps each response `Server-Timing: gateway;dur=<ms>;desc="<epoch ms received>"`;
+  // with the browser's requestStart/responseStart for the same request that gives
+  //   offset = ((t2 - t1) + (t3 - t4)) / 2, error <= delay / 2, delay = (t4 - t1) - (t3 - t2).
+  // Only responses no cache can replay count: the page's own navigation and /bff/ server calls
+  // (POSTs, never cached by the browser or Cloudflare). A replayed stamp would be hours old. HTML
+  // must therefore stay uncached at Cloudflare (it is today: cf-cache-status DYNAMIC).
+  // The lowest-delay of the last CLOCK_SAMPLES wins (NTP's clock filter). Each trace keeps the
+  // estimate it was first sent with, so all its spans move together; beforeSend adds the offset
+  // to every browser span and records it on the span, so the raw time stays readable.
+  var CLOCK_SAMPLES = 8;
+  var CLOCK_MAX_OFFSET_MS = 3600000;
+  var CLOCK_TRACES = 200;
+
+  function clockSync(deps) {
+    var samples = [];
+    var byTrace = {};
+    var traceOrder = [];
+
+    function usable(entry) {
+      if (entry.entryType === 'navigation') return true;
+      if (entry.initiatorType !== 'fetch') return false;
+      try { return new URL(entry.name).pathname.indexOf('/bff/') === 0; } catch (e) { return false; }
+    }
+
+    // An entry's times are on the monotonic clock; they're moved onto now()'s (the clock spans
+    // use) by their distance from performance.now(), not via timeOrigin, which drifts on sleep.
+    function addEntry(entry) {
+      if (!usable(entry) || entry.transferSize === 0) return;
+      var timing = (entry.serverTiming || []).filter(function (t) { return t.name === 'gateway'; })[0];
+      var t2 = timing && Number(timing.description);
+      if (!t2 || !(entry.requestStart > 0) || !(entry.responseStart >= entry.requestStart)) return;
+      var base = deps.now() - deps.performance.now();
+      var t1 = base + entry.requestStart;
+      var t4 = base + entry.responseStart;
+      var t3 = t2 + (Number(timing.duration) || 0);
+      var delay = (t4 - t1) - (t3 - t2);
+      var offset = ((t2 - t1) + (t3 - t4)) / 2;
+      // Negative delay (beyond ms rounding) or an absurd offset means the stamp isn't from this request.
+      if (delay < -2 || Math.abs(offset) > CLOCK_MAX_OFFSET_MS) return;
+      samples.push({ offset: offset, delay: Math.max(0, delay) });
+      if (samples.length > CLOCK_SAMPLES) samples.shift();
+    }
+
+    function best() {
+      return samples.reduce(function (a, s) { return !a || s.delay < a.delay ? s : a; }, null);
+    }
+
+    // The estimate a trace was first sent with; the current best for a trace not seen yet. A trace
+    // first sent before any sample existed stays uncorrected (false), so it is never half shifted.
+    function forTrace(traceId) {
+      if (traceId in byTrace) return byTrace[traceId] || null;
+      var b = best() || false;
+      byTrace[traceId] = b;
+      traceOrder.push(traceId);
+      if (traceOrder.length > CLOCK_TRACES) delete byTrace[traceOrder.shift()];
+      return b || null;
+    }
+
+    function shift(nanos, by) {
+      if (nanos === undefined || nanos === null || nanos === '') return nanos;
+      var v = (BigInt(String(nanos)) + by).toString();
+      return typeof nanos === 'number' ? Number(v) : v;
+    }
+
+    function correct(span) {
+      var b = forTrace(span.traceId);
+      if (!b) return;
+      var by = BigInt(Math.round(b.offset * 1e6));
+      var start = shift(span.startTimeUnixNano, by);
+      var end = shift(span.endTimeUnixNano, by);
+      var events = (span.events || []).map(function (e) { return shift(e.timeUnixNano, by); });
+      span.startTimeUnixNano = start;
+      span.endTimeUnixNano = end;
+      (span.events || []).forEach(function (e, i) { e.timeUnixNano = events[i]; });
+      span.attributes = (span.attributes || []).concat([
+        { key: 'browser.clock_offset_ms', value: { doubleValue: Math.round(b.offset * 10) / 10 } },
+        { key: 'browser.clock_offset_error_ms', value: { doubleValue: Math.round(b.delay * 5) / 10 } },
+      ]);
+    }
+
+    // Faro beforeSend: shift trace payloads; other items pass through. Faro drops a whole batch if
+    // a hook throws, so a span that can't be corrected is sent as it is.
+    function apply(item) {
+      var payload = item && item.payload;
+      if (typeof BigInt !== 'function' || !payload || !payload.resourceSpans) return item;
+      payload.resourceSpans.forEach(function (rs) {
+        (rs.scopeSpans || []).forEach(function (ss) {
+          (ss.spans || []).forEach(function (span) {
+            try { correct(span); } catch (err) { /* left uncorrected */ }
+          });
+        });
+      });
+      return item;
+    }
+
+    // Requests made before this ran are in the buffer (`buffered`), the page's own document included.
+    function observe(Observer) {
+      ['navigation', 'resource'].forEach(function (type) {
+        try {
+          new Observer(function (list) {
+            list.getEntries().forEach(function (e) { try { addEntry(e); } catch (err) { /* skip */ } });
+          }).observe({ type: type, buffered: true });
+        } catch (err) { /* unsupported entry type */ }
+      });
+    }
+
+    return { addEntry: addEntry, apply: apply, observe: observe, best: best };
+  }
+
   function create(deps) {
     var otel = deps.otel;
     var win = deps.window;
@@ -287,6 +399,7 @@
     unsampledTraceparent: unsampledTraceparent,
     parseTraceparent: parseTraceparent,
     scrubItem: scrubItem,
+    clockSync: clockSync,
     isIgnored: isIgnored,
   };
 
@@ -294,6 +407,8 @@
     var sdk = globalThis.GrafanaFaroWebSdk;
     var tracing = globalThis.GrafanaFaroWebTracing;
     if (!sdk || !tracing || typeof document === 'undefined' || location.hostname !== 'milesstorm.com') return;
+    var clock = clockSync({ now: Date.now, performance: globalThis.performance });
+    if (typeof PerformanceObserver === 'function' && globalThis.performance) clock.observe(PerformanceObserver);
     var faro = sdk.initializeFaro({
       // Beacons carry an unsampled traceparent so the Gateway does not trace each one.
       transports: [new sdk.FetchTransport({
@@ -324,7 +439,10 @@
         }),
       ],
       ignoreUrls: IGNORE,
-      beforeSend: scrubItem,
+      beforeSend: function (item) {
+        item = scrubItem(item);
+        try { return clock.apply(item); } catch (err) { return item; }
+      },
     });
     var otel = faro && faro.api.getOTEL();
     if (!otel) return;

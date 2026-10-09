@@ -77,12 +77,38 @@ never downloads source maps, sets `service.name` to `milesstorm-web`, keeps only
 spans, drops attributes that would add service-graph nodes and strips query strings
 (`monitor/alloy.yaml`); Tempo leaves browser spans out of span-metrics (`monitor/tempo.yaml`).
 
+### Browser clock
+
+A visitor's clock is often tens of milliseconds off the servers' (seconds on some devices). Server
+spans are then drawn outside the browser span that caused them, and Grafana's critical path can't
+follow a child it doesn't find inside its parent, so it stops at the browser span. Grafana, Tempo
+and Faro don't correct this, so trace.js does it the way NTP does (a small piece of our own code:
+there is no standard one for browser traces):
+
+- The public Gateway stamps every response `Server-Timing: gateway;dur=<ms>;desc="<epoch ms>"`:
+  when it received the request and how long until the backend answered (homelab repo,
+  `istio/manifests/gateway-server-timing.yaml`).
+- Only responses no cache can replay are used: the page's own navigation and `/bff/` server calls
+  (POSTs). A sample whose round trip comes out negative, or whose offset is over an hour, is
+  dropped as not belonging to that request.
+- For each such request the browser has its own `requestStart` and `responseStart` (Resource
+  Timing). With the Gateway's two times that gives the offset, accurate to within half the network
+  round trip; the lowest-round-trip of the last 8 wins.
+- Before export, every browser span is moved by the offset its trace was first sent with (so all
+  of a trace's spans move together) and carries `browser.clock_offset_ms` (added to the browser's
+  own time) and `browser.clock_offset_error_ms` (the most it can be off). Server spans then land
+  inside their browser parent to within that error. A trace whose first spans were sent before
+  any sample existed stays uncorrected throughout, and its spans have no such attributes.
+
+After the correction, the part of a fetch span outside the Gateway span is time between the
+browser and the Gateway: the internet and Cloudflare.
+
 ## Rules for new code
 
 | You are adding | Do this |
 |---|---|
 | An axum service | Layer `OtelAxumLayer::default().filter(\|p\| p != "/metrics")` and register the W3C `TraceContextPropagator` at startup. Copy `auth/src/main.rs`. |
-| An HTTP client, connection pool, or anything that loads TLS certificates | Create it at startup and reuse it; keep pool connections open (auth: `min_connections`, no idle timeout or max lifetime). Loading the system CA bundle costs 30–100+ ms of CPU, which otherwise shows up as unexplained own time in whichever request comes first. |
+| An HTTP client, connection pool, login token, or anything that loads TLS certificates | Create it at startup and reuse it; keep pool connections open (auth: `min_connections`, no idle timeout or max lifetime); renew tokens in the background before they expire (frontend: `Dataset::keep_signed_in`, since a SurrealDB sign-in checks a slow password hash, ~40 ms). Loading the system CA bundle costs 30–100+ ms of CPU, which otherwise shows up as unexplained own time in whichever request comes first. |
 | An outbound HTTP call (frontend) | Build the client with `api::trace::client(reqwest::Client)`. A plain `reqwest::Client` sends no `traceparent`, so the callee starts its own trace. |
 | A `use_server_future` or `use_loader` | Use `api::trace::use_server_future("name", f)`; add a matching `use_loader` wrapper when first needed. Clippy warns on the plain hooks (`services/frontend/clippy.toml`). |
 | Work that outlives the request: `tokio::spawn`, a queue, a WebSocket, a streamed response body | Run it in `api::detached_span!("name")` (auth: `telemetry::detached_span`). Neither `.in_current_span()` nor a plain child span works: they keep the request's span open until the work ends. |
