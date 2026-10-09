@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-deployment
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: auth
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          env:
+            - {name: BFF_CALLBACK_URL, value: "https://staging.milesstorm.com"}
+            - {name: SITE_URL, value: "https://staging.milesstorm.com"}

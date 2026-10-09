@@ -1,0 +1,58 @@
+# Staging copy of the website at https://staging.milesstorm.com (Argo app website-staging in the
+# homelab repo, which follows the `staging` branch). Reuses the production manifests in ../ and
+# changes only what keeps staging away from production:
+# - everything in one namespace, website-staging, whose mesh policy admits only itself and the gateway
+# - its own Postgres DB/login, SurrealDB namespace/login and in-namespace Redis (secrets: homelab
+#   website-staging/manifests)
+# - *-staging images, built from the staging branch only
+# - no Cloudflare cache purge, no email (no RESEND_API_KEY), one replica each
+# - lowest priority: production pods may evict staging pods (e.g. for the GPU during a rollout)
+# The Argo project website-staging only lets this deploy Deployments, Services and ConfigMaps
+# into website-staging.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: website-staging
+resources:
+  - ../frontend
+  - ../auth
+  - ../ai-pipeline
+  - redis.yaml
+images:
+  - {name: ghcr.io/milesstorm/frontend, newName: ghcr.io/milesstorm/frontend-staging, newTag: latest}
+  - {name: ghcr.io/milesstorm/auth, newName: ghcr.io/milesstorm/auth-staging, newTag: latest}
+  - {name: ghcr.io/milesstorm/ai-pipeline, newName: ghcr.io/milesstorm/ai-pipeline-staging, newTag: latest}
+patches:
+  # The PostSync hook purges the production Cloudflare zone.
+  - target: {kind: Job, name: frontend-cloudflare-cache}
+    patch: |
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: frontend-cloudflare-cache
+  # The public route lives in the homelab repo (website-staging/manifests/route.yaml): the
+  # website-staging Argo project may not create routes, so this branch can't claim production hosts.
+  - target: {kind: HTTPRoute, name: frontend}
+    patch: |
+      $patch: delete
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: HTTPRoute
+      metadata:
+        name: frontend
+  # The *-staging images are public: no pull secret, so no GHCR token in this namespace.
+  - target: {kind: Deployment, name: "(frontend|auth|ai-pipeline)-deployment"}
+    patch: |
+      - op: remove
+        path: /spec/template/spec/imagePullSecrets
+  # Production pods (priority 0) preempt these when a node is full or a GPU is taken.
+  - target: {kind: Deployment}
+    patch: |
+      - op: add
+        path: /spec/template/spec/priorityClassName
+        value: staging-low
+  - path: frontend.yaml
+    target: {kind: Deployment, name: frontend-deployment}
+  - path: auth.yaml
+    target: {kind: Deployment, name: auth-deployment}
+  - path: ai-pipeline.yaml
+    target: {kind: Deployment, name: ai-pipeline-deployment}

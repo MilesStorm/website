@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: frontend
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          env:
+            - {name: AUTH_SERVICE_URL, value: "http://auth-service.website-staging.svc.cluster.local"}
+            - {name: PUBLIC_AUTH_URL, value: "https://staging.milesstorm.com"}
+            - {name: REDIS_HOST, value: "redis.website-staging.svc.cluster.local"}
+            - {name: AI_PIPELINE_SERVICE_URL, value: "ws://ai-pipeline-service.website-staging.svc.cluster.local:9000"}
+            - {name: SURREAL_USER, value: "dice_staging"}
+            - {name: SURREAL_NS, value: "milesstorm_staging"}
+            - {name: SURREAL_DB, value: "arcane"}

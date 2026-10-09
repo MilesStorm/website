@@ -1,0 +1,35 @@
+# Staging's own Redis (sessions, streams, locks). Memory only: a restart logs everyone out.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.2.2-alpine
+          args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no", "--maxmemory", "48mb"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: redis, key: redis-password}
+          ports:
+            - {containerPort: 6379, name: redis}
+          resources:
+            requests: {cpu: 5m, memory: 16Mi}
+            limits: {memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: {app: redis}
+  ports:
+    - {name: redis, port: 6379, targetPort: 6379}
