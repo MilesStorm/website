@@ -194,6 +194,7 @@ fn server_launch() -> ! {
                 .await
                 .expect("failed to connect to Redis");
             if let Some(store) = store {
+                tokio::spawn(store.clone().keep_signed_in());
                 tokio::spawn(dataset::start(store, pool.clone()));
             }
             let roll_hub = rolls::RollHub::connect(roll_config, roll_con_conf, pool.clone())

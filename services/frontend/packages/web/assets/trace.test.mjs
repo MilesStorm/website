@@ -446,3 +446,105 @@ test('beforeSend strips URLs from exception frames and messages', () => {
   assert.equal(item.payload.stacktrace.frames[1].filename, 'https://milesstorm.com/assets/web.js');
   assert.ok(!JSON.stringify(item).includes('s3cret'));
 });
+
+// Browser clock 60 ms behind the servers: the Gateway took the request at browser time 1_000_010
+// (server 1_000_070) and answered 5 ms later; the browser saw requestStart/responseStart 20 ms apart.
+function clockAt(nowMs = 1_000_100, perfNow = 100) {
+  const { clockSync } = setup().api;
+  return clockSync({ now: () => nowMs, performance: { now: () => perfNow } });
+}
+const gatewayEntry = (requestStart, responseStart, received, dur, extra = {}) => ({
+  entryType: 'resource', initiatorType: 'fetch', name: 'https://milesstorm.com/bff/get_account123',
+  transferSize: 300, requestStart, responseStart,
+  serverTiming: [{ name: 'gateway', duration: dur, description: String(received) }], ...extra,
+});
+const payloadOf = (...spans) => ({ payload: { resourceSpans: [{ scopeSpans: [{ spans }] }] } });
+
+test('clock offset is NTP\'s estimate from the Gateway Server-Timing stamp', () => {
+  const c = clockAt();
+  // base = now - perf.now = 1_000_000: t1 = 1_000_002, t4 = 1_000_022, t2 = 1_000_070, t3 = 1_000_075.
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5));
+  assert.deepEqual({ ...c.best() }, { offset: 60.5, delay: 15 });
+});
+
+test('clock sync keeps the lowest-delay sample and ignores entries without a gateway stamp', () => {
+  const c = clockAt();
+  c.addEntry(gatewayEntry(2, 102, 1_000_080, 5));
+  c.addEntry(gatewayEntry(2, 12, 1_000_065, 4));
+  c.addEntry(gatewayEntry(2, 5, 0, 1, { serverTiming: [{ name: 'cfOrigin', duration: 1, description: '' }] }));
+  c.addEntry(gatewayEntry(0, 5, 1_000_060, 1));
+  assert.deepEqual({ ...c.best() }, { offset: 60, delay: 6 });
+});
+
+test('clock sync only trusts responses no cache can replay', () => {
+  const c = clockAt();
+  // A day-old stamp replayed by a cache: negative delay, huge offset. Static assets, cache hits
+  // (transferSize 0) and non-/bff/ fetches are never sampled.
+  c.addEntry(gatewayEntry(2, 3, 1_000_070 - 86_400_000, 4));
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { transferSize: 0 }));
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/assets/web.wasm' }));
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { initiatorType: 'img' }));
+  c.addEntry(gatewayEntry(2, 4, 1_000_070, 5)); // delay -3 ms: not this request's stamp
+  assert.equal(c.best(), null);
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { entryType: 'navigation', initiatorType: 'navigation', name: 'https://milesstorm.com/login' }));
+  assert.equal(c.best().offset, 60.5);
+});
+
+test('beforeSend shifts browser spans by the offset and records it, leaving other items alone', () => {
+  const c = clockAt();
+  const untouched = payloadOf({ traceId: 't0', startTimeUnixNano: '5' });
+  assert.equal(c.apply(untouched).payload.resourceSpans[0].scopeSpans[0].spans[0].startTimeUnixNano, '5');
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5));
+  const span = { traceId: 't1', startTimeUnixNano: '1791537494592000001', endTimeUnixNano: 1000, events: [{ timeUnixNano: '0' }], attributes: [{ key: 'a', value: {} }] };
+  c.apply(payloadOf(span));
+  assert.equal(span.startTimeUnixNano, '1791537494652500001');
+  assert.equal(span.endTimeUnixNano, 60_501_000);
+  assert.equal(span.events[0].timeUnixNano, '60500000');
+  assert.deepEqual(span.attributes.map((a) => [a.key, a.value.doubleValue]),
+    [['a', undefined], ['browser.clock_offset_ms', 60.5], ['browser.clock_offset_error_ms', 7.5]]);
+  const log = { payload: { message: 'x' } };
+  assert.equal(c.apply(log), log);
+});
+
+test('every span of a trace gets the offset its trace was first sent with', () => {
+  const c = clockAt();
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5)); // offset 60.5
+  const first = { traceId: 't1', startTimeUnixNano: '0', endTimeUnixNano: '0' };
+  c.apply(payloadOf(first));
+  c.addEntry(gatewayEntry(2, 12, 1_000_065, 4)); // better sample: offset 60
+  const later = { traceId: 't1', startTimeUnixNano: '0', endTimeUnixNano: '0' };
+  const other = { traceId: 't2', startTimeUnixNano: '0', endTimeUnixNano: '0' };
+  c.apply(payloadOf(later, other));
+  assert.equal(first.startTimeUnixNano, '60500000');
+  assert.equal(later.startTimeUnixNano, '60500000');
+  assert.equal(other.startTimeUnixNano, '60000000');
+});
+
+test('a trace first sent before any sample stays uncorrected', () => {
+  const c = clockAt();
+  const early = { traceId: 't1', startTimeUnixNano: '0', endTimeUnixNano: '0' };
+  c.apply(payloadOf(early));
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5));
+  const late = { traceId: 't1', startTimeUnixNano: '0', endTimeUnixNano: '0' };
+  const next = { traceId: 't2', startTimeUnixNano: '0', endTimeUnixNano: '0' };
+  c.apply(payloadOf(late, next));
+  assert.deepEqual([early.startTimeUnixNano, late.startTimeUnixNano, late.attributes], ['0', '0', undefined]);
+  assert.equal(next.startTimeUnixNano, '60500000');
+});
+
+test('a span that cannot be corrected is sent unchanged and never throws', () => {
+  const c = clockAt();
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5));
+  const bad = { traceId: 't1', startTimeUnixNano: '1e+21', endTimeUnixNano: '7' };
+  const good = { traceId: 't2', startTimeUnixNano: '0', endTimeUnixNano: '0' };
+  assert.doesNotThrow(() => c.apply(payloadOf(bad, good)));
+  assert.deepEqual([bad.startTimeUnixNano, bad.endTimeUnixNano, bad.attributes], ['1e+21', '7', undefined]);
+  assert.equal(good.startTimeUnixNano, '60500000');
+});
+
+test('Faro beforeSend scrubs URLs and then corrects the clock', () => {
+  const sandbox = bootSandbox('milesstorm.com');
+  vm.runInContext(SRC, sandbox);
+  const item = sandbox.cfg.beforeSend({ meta: { page: { url: 'https://milesstorm.com/reset?code=abc' } }, payload: {} });
+  assert.equal(item.meta.page.url, 'https://milesstorm.com/reset');
+});
