@@ -200,9 +200,11 @@ are unaffected. OAuth callbacks still use query strings.
   spans. The BFF calls auth with tokens, not sessions, so this only affects auth's own pages.
 - **Redis outside the session layer.** The roll hub's calls (PUBLISH/GET, and its own session reads)
   have no spans.
-- **auth's own outbound calls.** These are OAuth, Resend and ark. They carry no client spans, because
-  auth uses reqwest 0.12 and reqwest-tracing 0.7 needs reqwest 0.13. The ark calls do forward
-  `traceparent`.
+- **auth's own outbound calls.** auth uses reqwest 0.12 and reqwest-tracing 0.7 needs reqwest 0.13,
+  so OAuth and Resend calls have no client spans (OAuth has the plain `oauth.code_exchange` and
+  `oauth.user_info` spans). The ark calls get a hand-made CLIENT span (`ark_get` in
+  `auth/src/auth/internal.rs`, `peer.service = "ark"`) and forward `traceparent`. Build reqwest
+  clients once and reuse them: `Client::new()` per request costs tens of ms of CPU.
 - **Shared telemetry crate.** Each service has its own telemetry setup. A shared crate becomes
   worthwhile with a fourth service or at the next OTel upgrade. It needs the CI Docker build context
   changed from `services/<svc>` to `services/`.

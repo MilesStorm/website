@@ -236,7 +236,7 @@ impl Backend {
                     .map_err(BackendError::OAuth2)?;
 
                 let user_info = async {
-                    reqwest::Client::new()
+                    self.http_client
                         .get("https://api.github.com/user")
                         .header(USER_AGENT.as_str(), "milesstorm-auth")
                         .header(
@@ -282,7 +282,7 @@ impl Backend {
                     .map_err(BackendError::OAuth2)?;
 
                 let user_info = async {
-                    reqwest::Client::new()
+                    self.http_client
                         .get("https://www.googleapis.com/oauth2/v2/userinfo")
                         .header(USER_AGENT.as_str(), "milesstorm-auth")
                         .header(

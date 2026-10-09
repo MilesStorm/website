@@ -11,6 +11,7 @@ use jsonwebtoken::{EncodingKey, Header, encode};
 use password_auth::verify_password;
 use serde::{Deserialize, Serialize};
 use tokio::task;
+use tracing::Instrument as _;
 use ulid::Ulid;
 
 use super::account_email;
@@ -27,6 +28,9 @@ pub struct InternalState {
     pub service_secret: String,
     pub backend: Backend,
     pub mailer: Mailer,
+    /// Shared client for the ark host. `Client::new()` per request cost 40–190 ms of CPU
+    /// (TLS setup and the system certificate store), more than the call itself.
+    pub ark_http: reqwest::Client,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -479,6 +483,33 @@ fn traceparent() -> Option<String> {
     carrier.remove("traceparent")
 }
 
+/// GET `http://192.168.1.21:9090/ark/<path>` as a CLIENT span (`peer.service` names the ark
+/// node in the service graph). The outer error is "unreachable", the inner one a bad body.
+async fn ark_get(
+    http: &reqwest::Client,
+    path: &str,
+) -> Result<Result<DockerRequestResponse, reqwest::Error>, reqwest::Error> {
+    let span = tracing::info_span!(
+        "ark.request",
+        otel.kind = "client",
+        otel.name = %format_args!("GET /ark/{path}"),
+        peer.service = "ark",
+        http.request.method = "GET",
+        http.response.status_code = tracing::field::Empty,
+    );
+    async {
+        let mut builder = http.get(format!("http://192.168.1.21:9090/ark/{path}"));
+        if let Some(tp) = traceparent() {
+            builder = builder.header("traceparent", tp);
+        }
+        let resp = builder.send().await?;
+        tracing::Span::current().record("http.response.status_code", resp.status().as_u16());
+        Ok(resp.json::<DockerRequestResponse>().await)
+    }
+    .instrument(span)
+    .await
+}
+
 // ---- Internal Ark operations ----
 
 #[derive(Deserialize)]
@@ -739,12 +770,8 @@ async fn ark_num_players(
     };
     tracing::debug!(user_id, "ark num_players request");
 
-    let mut builder = reqwest::Client::new().get("http://192.168.1.21:9090/ark/num_players");
-    if let Some(tp) = traceparent() {
-        builder = builder.header("traceparent", tp);
-    }
-    match builder.send().await {
-        Ok(resp) => match resp.json::<DockerRequestResponse>().await {
+    match ark_get(&state.ark_http, "num_players").await {
+        Ok(body) => match body {
             Ok(body) => {
                 telemetry::ark_command("num_players", "success");
                 Json(body).into_response()
@@ -786,12 +813,8 @@ async fn ark_command(
     };
     tracing::info!(user_id, cmd = %cmd, "ark command issued");
 
-    let mut builder = reqwest::Client::new().get(format!("http://192.168.1.21:9090/ark/{cmd}"));
-    if let Some(tp) = traceparent() {
-        builder = builder.header("traceparent", tp);
-    }
-    match builder.send().await {
-        Ok(resp) => match resp.json::<DockerRequestResponse>().await {
+    match ark_get(&state.ark_http, &cmd).await {
+        Ok(body) => match body {
             Ok(body) => {
                 telemetry::ark_command(&cmd, "success");
                 Json(body).into_response()

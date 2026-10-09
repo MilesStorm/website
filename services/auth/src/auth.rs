@@ -124,6 +124,7 @@ impl Auth {
             service_secret: env::var("BFF_SERVICE_SECRET").expect("BFF_SERVICE_SECRET must be set"),
             backend,
             mailer: mail::Mailer::from_env(),
+            ark_http: reqwest::Client::new(),
         };
 
         let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
