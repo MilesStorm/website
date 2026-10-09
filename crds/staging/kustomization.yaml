@@ -1,0 +1,41 @@
+# Staging copy of the website at https://staging.milesstorm.com (Argo app website-staging in the
+# homelab repo, which follows the `staging` branch). Reuses the production manifests in ../ and
+# changes only what keeps staging away from production:
+# - everything in one namespace, website-staging, whose mesh policy admits only itself and the gateway
+# - its own Postgres DB/login, SurrealDB namespace/login and in-namespace Redis (secrets: homelab
+#   website-staging/manifests)
+# - *-staging images, built from the staging branch only
+# - no Cloudflare cache purge, no email (no RESEND_API_KEY), one replica each
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: website-staging
+resources:
+  - ../frontend
+  - ../auth
+  - ../ai-pipeline
+  - redis.yaml
+images:
+  - {name: ghcr.io/milesstorm/frontend, newName: ghcr.io/milesstorm/frontend-staging, newTag: latest}
+  - {name: ghcr.io/milesstorm/auth, newName: ghcr.io/milesstorm/auth-staging, newTag: latest}
+  - {name: ghcr.io/milesstorm/ai-pipeline, newName: ghcr.io/milesstorm/ai-pipeline-staging, newTag: latest}
+patches:
+  # The PostSync hook purges the production Cloudflare zone.
+  - target: {kind: Job, name: frontend-cloudflare-cache}
+    patch: |
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: frontend-cloudflare-cache
+  # `replace` fails the build if the path is missing, so staging can never claim milesstorm.com.
+  - target: {kind: HTTPRoute, name: frontend}
+    patch: |
+      - op: replace
+        path: /spec/hostnames
+        value: [staging.milesstorm.com]
+  - path: frontend.yaml
+    target: {kind: Deployment, name: frontend-deployment}
+  - path: auth.yaml
+    target: {kind: Deployment, name: auth-deployment}
+  - path: ai-pipeline.yaml
+    target: {kind: Deployment, name: ai-pipeline-deployment}

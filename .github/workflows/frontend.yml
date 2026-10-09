@@ -8,6 +8,9 @@ on:
   push:
     branches:
       - main
+      # Builds from the staging branch go to separate *-staging images,
+      # which only the website-staging app (homelab repo) follows.
+      - staging
     paths:
     - services/frontend/**
     - .github/workflows/frontend.yml
@@ -34,7 +37,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/milesstorm/frontend
+          images: ${{ env.REGISTRY }}/milesstorm/frontend${{ github.ref_name == 'staging' && '-staging' || '' }}
           tags: | 
             type=raw,value=latest
             type=sha

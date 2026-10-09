@@ -1,0 +1,13 @@
+# Runs on eta's second GPU; production keeps the other one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-pipeline-deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: ai-pipeline
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {memory: 1536Mi, nvidia.com/gpu: "1"}
