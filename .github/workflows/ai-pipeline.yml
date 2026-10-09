@@ -8,8 +8,8 @@ on:
   push:
     branches:
       - main
-      # Builds from the staging branch go to separate *-staging images,
-      # which only the website-staging app (homelab repo) follows.
+      # Builds from any branch but main (pushes to staging, manual runs) go to separate
+      # *-staging images, which only the website-staging app (homelab repo) follows.
       - staging
     paths:
       - services/ai_pipeline/**
@@ -37,7 +37,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/milesstorm/ai-pipeline${{ github.ref_name == 'staging' && '-staging' || '' }}
+          images: ${{ env.REGISTRY }}/milesstorm/ai-pipeline${{ github.ref_name == 'main' && '' || '-staging' }}
           tags: |
             type=raw,value=latest
             type=sha
