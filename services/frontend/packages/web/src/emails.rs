@@ -130,6 +130,7 @@ pub(crate) mod server {
 
 /// Emails the logged-in user a link to confirm their address; returns the address.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.send_confirmation_email", skip_all)]
 pub async fn send_confirmation_email() -> Result<String, ServerFnError> {
     let (session, _) = server::request()?;
     let token = server::token(&session).await?;
@@ -139,6 +140,7 @@ pub async fn send_confirmation_email() -> Result<String, ServerFnError> {
 
 /// Confirms an address with the code from the emailed link; returns the username.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.confirm_email", skip_all)]
 pub async fn confirm_email(code: String) -> Result<String, ServerFnError> {
     server::request()?;
     let reply = server::call("/internal/email/verify/confirm", serde_json::json!({ "code": code })).await?;
@@ -148,6 +150,7 @@ pub async fn confirm_email(code: String) -> Result<String, ServerFnError> {
 /// Emails a password reset link, if `login` (username or email) is a password
 /// account with an address. Succeeds either way, to not tell who has an account.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.forgot_password", skip_all)]
 pub async fn forgot_password(login: String) -> Result<(), ServerFnError> {
     server::request()?;
     if login.trim().is_empty() {
@@ -160,6 +163,7 @@ pub async fn forgot_password(login: String) -> Result<(), ServerFnError> {
 /// Sets a new password with the code from the emailed link. The account is logged
 /// out everywhere, including here if this browser was logged in as it.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.reset_password", skip_all)]
 pub async fn reset_password(code: String, password: String) -> Result<Done, ServerFnError> {
     let (session, _) = server::request()?;
     let reply = server::call("/internal/password/reset", serde_json::json!({ "code": code, "password": password })).await?;
@@ -170,6 +174,7 @@ pub async fn reset_password(code: String, password: String) -> Result<Done, Serv
 
 /// Emails the logged-in user a link to delete their account; returns the address.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.request_account_deletion", skip_all)]
 pub async fn request_account_deletion() -> Result<String, ServerFnError> {
     let (session, _) = server::request()?;
     let token = server::token(&session).await?;
@@ -179,6 +184,7 @@ pub async fn request_account_deletion() -> Result<String, ServerFnError> {
 
 /// Which account a delete link is for, without using it.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.account_to_delete", skip_all)]
 pub async fn account_to_delete(code: String) -> Result<Deletion, ServerFnError> {
     server::request()?;
     let reply = server::call("/internal/account/delete/check", serde_json::json!({ "code": code })).await?;
@@ -187,6 +193,7 @@ pub async fn account_to_delete(code: String) -> Result<Deletion, ServerFnError> 
 
 /// Deletes the account a delete link is for.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.delete_account", skip_all)]
 pub async fn delete_account(code: String) -> Result<Done, ServerFnError> {
     let (session, hub) = server::request()?;
     let reply = server::call("/internal/account/delete/check", serde_json::json!({ "code": code })).await?;
@@ -211,6 +218,7 @@ pub async fn delete_account(code: String) -> Result<Done, ServerFnError> {
 /// email (GitHub logins, or an address that may be wrong), which a link might never
 /// reach; `confirm` must be the username.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.delete_account_without_email", skip_all)]
 pub async fn delete_account_without_email(confirm: String) -> Result<Done, ServerFnError> {
     let (session, hub) = server::request()?;
     let token = server::token(&session).await?;

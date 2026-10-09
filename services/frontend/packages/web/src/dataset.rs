@@ -357,6 +357,7 @@ impl Dataset {
     /// Delete every sample and picture the user shared or flagged; returns how many
     /// rolls. The deletion is logged (username and time only) so copies already
     /// pulled for training are removed too.
+    #[tracing::instrument(name = "dataset.delete_user_data", skip_all)]
     pub async fn delete_user_data(&self, user: &str) -> anyhow::Result<usize> {
         let r = self
             .query(
@@ -375,6 +376,7 @@ impl Dataset {
     /// Rules, enforced in the query: an automatic re-send of a roll never replaces a
     /// flagged or already reviewed sample, and nothing replaces the picture of a
     /// reviewed one (the owner's labels belong to that picture).
+    #[tracing::instrument(name = "dataset.save", skip_all, fields(auto = auto_reason.is_some(), flag = flag.is_some()))]
     pub async fn save(
         &self,
         user: &str,
@@ -426,6 +428,7 @@ impl Dataset {
 
     /// The account's profile picture (JPEG) and when it was last changed (ms since
     /// 1970, used to tell browsers a new one exists), if it has one.
+    #[tracing::instrument(name = "dataset.profile_picture", skip_all)]
     pub async fn profile_picture(&self, user_id: i64) -> anyhow::Result<Option<(Vec<u8>, i64)>> {
         let r = self
             .query(
@@ -449,6 +452,7 @@ impl Dataset {
 
     /// When the account's profile picture was last changed (see `profile_picture`),
     /// without loading it. `None` when it has none.
+    #[tracing::instrument(name = "dataset.profile_picture_version", skip_all)]
     pub async fn profile_picture_version(&self, user_id: i64) -> anyhow::Result<Option<i64>> {
         let r = self
             .query(
@@ -460,6 +464,7 @@ impl Dataset {
     }
 
     /// Replace the account's profile picture; returns its new version.
+    #[tracing::instrument(name = "dataset.set_profile_picture", skip_all)]
     pub async fn set_profile_picture(&self, user_id: i64, jpeg: &[u8]) -> anyhow::Result<i64> {
         let r = self
             .query(
@@ -476,6 +481,7 @@ impl Dataset {
             .ok_or_else(|| anyhow::anyhow!("surrealdb: no version returned"))
     }
 
+    #[tracing::instrument(name = "dataset.delete_profile_picture", skip_all)]
     pub async fn delete_profile_picture(&self, user_id: i64) -> anyhow::Result<()> {
         self.query(
             "DELETE type::record('profile_picture', $id) RETURN NONE;",

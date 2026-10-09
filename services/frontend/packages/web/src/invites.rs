@@ -92,6 +92,7 @@ mod server {
 /// Opens an invite link: joins right away when logged in, otherwise keeps the
 /// invite in the session for after logging in or signing up.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.open_invite", skip_all)]
 pub async fn open_invite(code: String) -> Result<Opened, ServerFnError> {
     use server::{call, code_ok, message, Refused};
 
@@ -119,6 +120,7 @@ pub async fn open_invite(code: String) -> Result<Opened, ServerFnError> {
 /// Where to go right after logging in or signing up: back to the invite page if
 /// that's where they came from, otherwise the start page.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.after_login_path", skip_all)]
 pub async fn after_login_path() -> Result<String, ServerFnError> {
     let (session, _) = crate::emails::server::request()?;
     let page: Option<String> = match session {

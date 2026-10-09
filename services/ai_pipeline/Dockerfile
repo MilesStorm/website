@@ -42,11 +42,12 @@ RUN find /app/target -name "yolo26s.bpk" -exec cp {} /app/yolo26s.bpk \;
 # Gather the only CUDA files the runtime needs. burn's CUDA backend compiles its
 # kernels while running, with NVRTC and the CUDA headers; the GPU driver itself
 # comes from the host through the NVIDIA container runtime. `cp -a` keeps the
-# library symlinks as symlinks.
+# library symlinks as symlinks. `--strip-debug` keeps the symbol table, so eBPF CPU
+# profiles show function names.
 RUN mkdir -p /cuda/lib64 \
  && cp -a /usr/local/cuda/lib64/libnvrtc.so* /usr/local/cuda/lib64/libnvrtc-builtins.so* /cuda/lib64/ \
  && cp -a /usr/local/cuda/targets/x86_64-linux/include /cuda/include \
- && strip /app/target/release/dice_detector
+ && strip --strip-debug /app/target/release/dice_detector
 
 
 # Plain Ubuntu plus the files above, instead of an NVIDIA image: none of the

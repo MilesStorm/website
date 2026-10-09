@@ -311,6 +311,9 @@
         new tracing.TracingInstrumentation({
           instrumentationOptions: {
             fetchInstrumentationOptions: {
+              // Faro turns these off. OTel's fetch span events (fetchStart, DNS, connect, TLS,
+              // requestStart, responseStart, responseEnd) are timestamps only: no URL or query.
+              ignoreNetworkEvents: false,
               // The request is a Request or a fetch init without a url, so read the span's attributes.
               requestHook: function (span) {
                 var attrs = span.attributes || {};

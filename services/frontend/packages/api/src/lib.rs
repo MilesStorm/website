@@ -57,6 +57,7 @@ mod session {
 /// fixation) would be logged in as whoever logs in there next. Call before storing
 /// the login; on failure, don't log in.
 #[cfg(feature = "server")]
+#[tracing::instrument(name = "bff.fresh_session_id", skip_all)]
 pub async fn fresh_session_id(sess: &tower_sessions::Session) -> Result<(), String> {
     sess.cycle_id().await.map_err(|e| {
         tracing::error!(error = %e, "giving the session a new ID on login failed");

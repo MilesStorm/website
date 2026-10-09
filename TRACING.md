@@ -88,6 +88,7 @@ spans, drops attributes that would add service-graph nodes and strips query stri
 | A database or cache client | Its calls need CLIENT spans with `peer.service` (that names the node in the service graph). Postgres in auth: use the `Db` pool (sqlx-tracing). A session store: wrap it in `api::trace::TracedStore`. HTTP to a database (SurrealDB): add `.with_extension(api::trace::Peer { .. })`. |
 | A background loop (metrics poller, cleanup) | Keep it on untraced clients (auth's raw `PgPool`). Every tick would start a root trace. |
 | A non-HTTP hop (WebSocket, queue message) | Send the context with `api::trace::inject(&span, headers)` and extract it on the other side, as ai_pipeline's `accept_hdr_async` does. |
+| A function that does real work on a request path (business logic, token or permission checks, hashing, encoding big payloads, store calls) | `#[tracing::instrument(name = "area.verb", skip_all)]`. Add `fields(..)` only for safe, low-cardinality values (counts, flags, which branch), never secrets, codes, emails or bodies; no `err` unless the error can't hold them (sqlx and Resend errors can). CPU work in `spawn_blocking` gets its span inside the closure: `let span = info_span!("password.hash"); spawn_blocking(move \|\| span.in_scope(\|\| ..))`. INFO level, in the service's own crate (the default filters keep it). Not on getters, trivial conversions, per-item or per-frame code (ai_pipeline's inference runs per frame: at most `debug_span!`), or background loops. |
 
 ### Why these rules exist
 
@@ -108,6 +109,15 @@ spans, drops attributes that would add service-graph nodes and strips query stri
   frontend's and auth's `main.rs` keep the services' own logs at `info` and those libraries at
   `warn` (ai_pipeline's libraries make no such spans); the deployments don't set `RUST_LOG`. Targets match by prefix: `sqlx=warn` also hides `sqlx_tracing`,
   so auth adds `sqlx_tracing=info`.
+
+## Profiles
+
+CPU profiles of frontend, auth and ai-pipeline are collected all the time by an eBPF profiler
+(homelab: Alloy `pyroscope.ebpf` → Pyroscope); the code needs nothing. Use them when a span's own
+time is large and no child span explains it: Explore → Pyroscope, `service_name` = the span's
+`service.name`, over the trace's time range. Spans have no "Profiles" link: Grafana only links spans
+that carry `pyroscope.profile.id`, which eBPF profiles can't provide. Keep the binaries' symbol tables
+(`strip --strip-debug`, never a full `strip`), or flame graphs show addresses.
 
 ## Checks
 
@@ -146,6 +156,8 @@ Bump `@grafana/faro-web-sdk` and `@grafana/faro-web-tracing` together (exact ver
 - `FetchTransport`'s `requestOptions.headers` (the unsampled `traceparent` on uploads);
 - the fetch instrumentation's `requestHook`, reading `http.request.method` and `url.full` from the
   span to name it;
+- the fetch instrumentation's `ignoreNetworkEvents` (Faro defaults it to `true`; `trace.js` sets
+  `false` so fetch spans carry OTel's DNS/connect/TLS/request/response timing events);
 - the instrumentation class names on the `GrafanaFaroWebSdk` and `GrafanaFaroWebTracing` globals.
 
 After a bump, run `npm run test:trace`, then check on the site that `/faro/collect` uploads carry a

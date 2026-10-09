@@ -131,6 +131,7 @@ impl From<sqlx::Error> for IssueError {
 }
 
 /// Creates a link code for the user, replacing any unused one of the same purpose.
+#[tracing::instrument(name = "email_code.issue", skip_all, fields(purpose = purpose.as_str()))]
 async fn issue(db: &Db, user_id: i64, purpose: Purpose, email: &str) -> Result<String, IssueError> {
     let mut tx = db.begin().await?;
     // One issuer per account at a time, so the limits below can't be raced.
@@ -182,6 +183,7 @@ async fn issue(db: &Db, user_id: i64, purpose: Purpose, email: &str) -> Result<S
 }
 
 /// Forgets a code whose email couldn't be sent, so asking again works right away.
+#[tracing::instrument(name = "email_code.withdraw", skip_all)]
 async fn withdraw(db: &Db, code: &str) {
     if let Err(e) = sqlx::query("DELETE FROM email_tokens WHERE token_hash = $1")
         .bind(hash(code))
@@ -194,6 +196,7 @@ async fn withdraw(db: &Db, code: &str) {
 
 /// The user and address a live code was issued for. With `consume`, the code is
 /// used up in the same statement, so it works only once.
+#[tracing::instrument(name = "email_code.redeem", skip_all, fields(purpose = purpose.as_str(), consume = consume))]
 async fn redeem<'e>(
     db: impl sqlx::PgExecutor<'e>,
     code: &str,
@@ -250,6 +253,7 @@ impl Account {
 const ACCOUNT_COLUMNS: &str = "u.id, u.username, u.display_name, u.email, u.email_verified_at";
 
 /// The account a session token belongs to.
+#[tracing::instrument(name = "account.by_token", skip_all)]
 async fn token_account(db: &Db, token: &str) -> Result<Option<Account>, sqlx::Error> {
     sqlx::query_as(&format!(
         "SELECT {ACCOUNT_COLUMNS} FROM bff_tokens t JOIN users u ON u.id = t.user_id \
@@ -260,6 +264,7 @@ async fn token_account(db: &Db, token: &str) -> Result<Option<Account>, sqlx::Er
     .await
 }
 
+#[tracing::instrument(name = "account.by_id", skip_all)]
 async fn account_by_id(db: &Db, id: i64) -> Result<Option<Account>, sqlx::Error> {
     sqlx::query_as(&format!("SELECT {ACCOUNT_COLUMNS} FROM users u WHERE u.id = $1"))
         .bind(id)
@@ -345,7 +350,8 @@ fn delete_letter(account: &Account, email: &str, code: &str) -> super::mail::Mai
 }
 
 /// Issues a code and emails it. Errors are ready-made responses.
-#[expect(clippy::result_large_err, reason = "the error is the HTTP response itself, returned once")]
+#[tracing::instrument(name = "email.issue_and_send", skip_all, fields(purpose = purpose.as_str()))]
+#[allow(clippy::result_large_err, reason = "the error is the HTTP response itself, returned once; `allow`: clippy skips lints in #[instrument] output")]
 async fn issue_and_send(
     db: &Db,
     mailer: &Mailer,
@@ -538,7 +544,8 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
         Err(e) => return db_error("checking a reset code", e),
     }
     let password = req.password;
-    let hashed = match task::spawn_blocking(move || password_auth::generate_hash(password)).await {
+    let span = tracing::info_span!("password.hash");
+    let hashed = match task::spawn_blocking(move || span.in_scope(|| password_auth::generate_hash(password))).await {
         Ok(h) => h,
         Err(e) => {
             tracing::error!(error = %e, "password hashing failed");

@@ -187,6 +187,7 @@ mod get {
         ark_handle(auth_session, Operation::Start).await
     }
 
+    #[tracing::instrument(name = "ark.handle", skip_all, fields(op = %op))]
     async fn ark_handle(
         auth_session: axum_login::AuthSession<Backend>,
         op: Operation,
@@ -244,6 +245,7 @@ mod get {
 impl AuthzBackend for Backend {
     type Permission = Permission;
 
+    #[tracing::instrument(name = "user.group_permissions", skip_all)]
     async fn get_group_permissions(
         &self,
         user: &Self::User,

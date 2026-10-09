@@ -75,6 +75,7 @@ impl Mailer {
     }
 
     /// Sends `mail`. `kind` names it in logs and metrics.
+    #[tracing::instrument(name = "email.send", skip_all, fields(kind = kind))]
     pub async fn send(&self, kind: &str, mail: &Mail) -> Result<(), String> {
         let result = self.deliver(kind, mail).await;
         super::telemetry::email(kind, if result.is_ok() { "sent" } else { "failed" });
