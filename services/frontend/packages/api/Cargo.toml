@@ -40,3 +40,4 @@ axum = { workspace = true }
 tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
 tracing-subscriber = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+axum-tracing-opentelemetry = { workspace = true }

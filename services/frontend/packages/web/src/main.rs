@@ -53,13 +53,8 @@ fn server_launch() -> ! {
     use axum_prometheus::PrometheusMetricLayer;
     use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry::KeyValue;
-    use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::{
-        logs::LoggerProvider as SdkLoggerProvider, runtime::Tokio as OtelTokio,
-        trace::TracerProvider as SdkTracerProvider, Resource,
-    };
+    use opentelemetry_sdk::{logs::SdkLoggerProvider, trace::SdkTracerProvider};
     use tower_sessions::cookie::time::Duration;
     use tower_sessions::cookie::SameSite;
     use tower_sessions::{Expiry, SessionManagerLayer};
@@ -77,8 +72,9 @@ fn server_launch() -> ! {
         None => format!("redis://{redis_host}:{redis_port}"),
     };
 
-    // Dedicated runtime for the OTel batch exporter. Lives for the process lifetime
-    // because server_launch() is `-> !` and never returns, so _otel_rt is never dropped.
+    // Runtime for the OTLP (tonic) exporters, which the batch processors' own threads call
+    // into. Lives for the process lifetime because server_launch() is `-> !` and never
+    // returns, so _otel_rt is never dropped.
     let _otel_rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -103,8 +99,8 @@ fn server_launch() -> ! {
                         .expect("failed to build OTLP exporter");
 
                     let provider = SdkTracerProvider::builder()
-                        .with_batch_exporter(exporter, OtelTokio)
-                        .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
+                        .with_batch_exporter(exporter)
+                        .with_resource(otel_resource())
                         .build();
 
                     let tracer = provider.tracer("web");
@@ -117,8 +113,8 @@ fn server_launch() -> ! {
                         .expect("failed to build OTLP log exporter");
 
                     let log_provider = SdkLoggerProvider::builder()
-                        .with_batch_exporter(log_exporter, OtelTokio)
-                        .with_resource(Resource::new([KeyValue::new("service.name", "frontend")]))
+                        .with_batch_exporter(log_exporter)
+                        .with_resource(otel_resource())
                         .build();
 
                     (
@@ -130,9 +126,7 @@ fn server_launch() -> ! {
             }
         });
 
-    let otel_log_layer = _otel_log_provider
-        .as_ref()
-        .map(OpenTelemetryTracingBridge::new);
+    let otel_log_layer = _otel_log_provider.as_ref().map(otel_log_bridge);
 
     // Init subscriber before dioxus::serve — Dioxus's own try_init().ok() will
     // then fail silently and our subscriber (JSON + OTel) wins.
@@ -142,7 +136,7 @@ fn server_launch() -> ! {
     // keeps per-signal spans (dioxus_signals) from becoming root traces of their own.
     tracing_subscriber::registry()
         .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
-            |_| "info,dioxus=warn,tower_sessions=warn".into(),
+            |_| "info,dioxus=warn,tower_sessions=warn,opentelemetry=warn".into(),
         )))
         .with(tracing_subscriber::fmt::layer().json())
         .with(otel_layer)
@@ -240,6 +234,32 @@ fn server_launch() -> ! {
             Ok(router)
         }
     })
+}
+
+/// `service.version` is the commit the image was built from (Dockerfile `GIT_SHA`).
+/// `OTEL_RESOURCE_ATTRIBUTES` adds the rest (`deployment.environment.name`).
+#[cfg(not(target_arch = "wasm32"))]
+fn otel_resource() -> opentelemetry_sdk::Resource {
+    opentelemetry_sdk::Resource::builder()
+        .with_service_name("frontend")
+        .with_attribute(opentelemetry::KeyValue::new(
+            "service.version",
+            std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".into()),
+        ))
+        .build()
+}
+
+/// The OTLP log bridge. Log records take their trace_id/span_id from the OTel context
+/// tracing-opentelemetry activates with each span. The SDK's own logs (its warnings, such as
+/// dropped spans, go to stdout at `warn`) stay out: exporting them would log more.
+#[cfg(not(target_arch = "wasm32"))]
+fn otel_log_bridge<S>(provider: &opentelemetry_sdk::logs::SdkLoggerProvider) -> impl tracing_subscriber::Layer<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    use tracing_subscriber::Layer as _;
+    opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(provider)
+        .with_filter(tracing_subscriber::filter::filter_fn(|meta| !meta.target().starts_with("opentelemetry")))
 }
 
 /// Page requests reach Dioxus's fallback, which has no `MatchedPath`, so `OtelAxumLayer`
@@ -661,6 +681,11 @@ fn WebNavbar() -> Element {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
+    use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
     #[test]
     fn server_function_spans_leave_out_the_hash() {
         use super::server_fn_route;
@@ -714,5 +739,31 @@ mod tests {
         assert_eq!(super::page_name("/login"), "Login");
         assert_eq!(super::page_name("/admin"), "AdminPanel");
         assert_eq!(super::page_name("/some/1234/thing"), "NotFound");
+    }
+
+    /// Log records carry the trace and span of the span they were written in (I8), and
+    /// the SDK's own logs stay out of the bridge.
+    #[test]
+    fn log_records_carry_the_span_and_skip_sdk_logs() {
+        let exporter = InMemoryLogExporter::default();
+        let logs = SdkLoggerProvider::builder().with_simple_exporter(exporter.clone()).build();
+        let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder().build().tracer("test");
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .with(super::otel_log_bridge(&logs));
+
+        let sc = tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("request");
+            let _entered = span.enter();
+            tracing::info!("in a span");
+            tracing::warn!(target: "opentelemetry_sdk", "sdk warning");
+            span.context().span().span_context().clone()
+        });
+
+        let records = exporter.get_emitted_logs().unwrap();
+        let [record] = &records[..] else { panic!("{} records", records.len()) };
+        let tc = record.record.trace_context().expect("no trace context");
+        assert_eq!(tc.trace_id, sc.trace_id());
+        assert_eq!(tc.span_id, sc.span_id());
     }
 }
