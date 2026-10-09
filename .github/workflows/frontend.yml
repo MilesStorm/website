@@ -37,7 +37,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/milesstorm/frontend${{ github.ref_name == 'main' && '' || '-staging' }}
+          images: ${{ env.REGISTRY }}/milesstorm/frontend${{ github.ref_name != 'main' && '-staging' || '' }}
           tags: | 
             type=raw,value=latest
             type=sha

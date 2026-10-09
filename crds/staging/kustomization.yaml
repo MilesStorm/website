@@ -39,6 +39,11 @@ patches:
       kind: HTTPRoute
       metadata:
         name: frontend
+  # The *-staging images are public: no pull secret, so no GHCR token in this namespace.
+  - target: {kind: Deployment, name: "(frontend|auth|ai-pipeline)-deployment"}
+    patch: |
+      - op: remove
+        path: /spec/template/spec/imagePullSecrets
   # Production pods (priority 0) preempt these when a node is full or a GPU is taken.
   - target: {kind: Deployment}
     patch: |
