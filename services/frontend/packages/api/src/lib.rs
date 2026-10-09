@@ -23,7 +23,7 @@ fn password_login_error(status: u16, body: &str) -> ServerFnError {
     // Auth also uses 401 for a bad BFF service secret. That is an outage, not
     // a user's mistyped password, so only its credential rejection is a 4xx.
     if matches!(status, 401 | 403) && body == "Invalid credentials" {
-        auth_error(status, "Invalid credentials")
+        auth_error(status, "Incorrect username or password.")
     } else {
         auth_error(502, "Login is unavailable right now. Try again later.")
     }

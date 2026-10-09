@@ -27,7 +27,7 @@ pub fn Login(error: String) -> Element {
                     }
                     navigator().push(next_page().await);
                 }
-                Err(e) => login_error.set(e.to_string()),
+                Err(e) => login_error.set(server_message(e)),
             }
         });
     };

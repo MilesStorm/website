@@ -58,8 +58,8 @@ fn AdminPanelInner() -> Element {
         Some((Ok(r), Ok(p))) => (r, p, None),
         Some((r, p)) => {
             let mut errs = Vec::new();
-            if let Err(e) = &r { errs.push(format!("roles: {e}")); }
-            if let Err(e) = &p { errs.push(format!("permissions: {e}")); }
+            if let Err(e) = &r { errs.push(format!("Roles: {}", server_message(e.clone()))); }
+            if let Err(e) = &p { errs.push(format!("Permissions: {}", server_message(e.clone()))); }
             (r.unwrap_or_default(), p.unwrap_or_default(), Some(errs))
         }
     };
@@ -134,7 +134,7 @@ fn UsersTab(all_roles: Vec<AdminRole>) -> Element {
             (r.items, r.total)
         }
         Some(Err(e)) => {
-            load_error.set(Some(e.to_string()));
+            load_error.set(Some(server_message(e)));
             (vec![], 0i64)
         }
     };
@@ -293,7 +293,7 @@ fn RolesTab(all_permissions: Vec<AdminPermission>) -> Element {
             (r.items, r.total)
         }
         Some(Err(e)) => {
-            load_error.set(Some(e.to_string()));
+            load_error.set(Some(server_message(e)));
             (vec![], 0i64)
         }
     };
@@ -587,9 +587,10 @@ fn InvitesTab(all_roles: Vec<AdminRole>) -> Element {
                 None => rsx! {
                     div { class: "flex justify-center p-12", span { class: "loading loading-spinner loading-lg" } }
                 },
-                Some(Err(e)) => rsx! {
-                    div { class: "alert alert-error text-sm font-mono", "{e}" }
-                },
+                Some(Err(e)) => {
+                    let e = server_message(e);
+                    rsx! { div { class: "alert alert-error text-sm", "{e}" } }
+                }
                 Some(Ok(invites)) if invites.is_empty() => rsx! {
                     p { class: "text-sm opacity-60", "No invite links yet." }
                 },
