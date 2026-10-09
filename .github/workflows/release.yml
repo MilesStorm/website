@@ -2,9 +2,9 @@ name: release
 
 # One run per merge to main. It builds every service whose files changed (all of them on a manual
 # run) and pushes each as sha-<commit>; staging.milesstorm.com follows those tags on its own.
-# Approving the "Promote to production" job then sends everything this run built to production
-# (tags prod-sha-<commit>, the only tags production follows: homelab argo/apps).
-# To send only some services, leave that job waiting and run the promote workflow instead.
+# The run then waits on one approval per service (GitHub environment production-<service>); the
+# Review deployments dialog lists them all, so tick every one for a full release or only some.
+# Approving tags that build prod-sha-<commit>, the only tags production follows (homelab argo/apps).
 
 env:
   REGISTRY: ghcr.io
@@ -35,8 +35,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Keep the directories in step with promote.yml, which finds each service's latest build
-      # from the last commit that touched them.
       - name: pick services to build
         id: pick
         env:
@@ -124,16 +122,20 @@ jobs:
           docker image prune -f
           docker builder prune -f --keep-storage 20GB
 
-  # Approve once the build checks out on staging.milesstorm.com: tags the same images
+  # Approve once the build checks out on staging.milesstorm.com: tags the same image
   # prod-sha-<commit> (and latest). Runs only if every build in this run succeeded.
   promote:
     needs: [changes, build]
     if: github.ref == 'refs/heads/main' && needs.changes.outputs.names != ''
-    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    environment: production-${{ matrix.name }}
     permissions:
       contents: read
       packages: write
-    name: Promote to production
+    name: Promote ${{ matrix.name }} to production
     runs-on: [self-hosted, eta]
     steps:
       - name: Log in to container registry
@@ -144,13 +146,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
           logout: false
 
-      - name: tag the tested images for production
+      - name: tag the tested image for production
         env:
-          NAMES: ${{ needs.changes.outputs.names }}
+          NAME: ${{ matrix.name }}
         run: |
           tag=sha-${GITHUB_SHA::7}
-          for name in $NAMES; do
-            image=$REGISTRY/milesstorm/$name
-            docker buildx imagetools create -t "$image:prod-$tag" -t "$image:latest" "$image:$tag"
-            echo "$name: $tag → production"
-          done
+          image=$REGISTRY/milesstorm/$NAME
+          docker buildx imagetools create -t "$image:prod-$tag" -t "$image:latest" "$image:$tag"
