@@ -2,12 +2,14 @@ name: release
 
 # One run per merge to main:
 # 1. builds every service whose files changed (all of them on a manual run) as sha-<commit>;
-#    staging.milesstorm.com follows those tags on its own (homelab argo/apps/website-staging.yaml).
+#    and moves the staging tag to it, which staging.milesstorm.com follows (homelab
+#    argo/apps/website-staging.yaml).
 # 2. lists every service whose newest build isn't in production yet (also ones held back earlier)
 #    and waits for approval. The Review deployments dialog shows one box per such service
 #    (production-<service>) plus "production" for all of them; tick either, then approve.
-# Shipping tags the build prod-sha-<commit>, production and latest; production follows prod-sha-* (homelab
-# argo/apps/{frontend,auth,ai-pipeline}.yaml). A newer run cancels this run's unanswered boxes.
+# Shipping moves the production tag (and latest) to that build and adds prod-sha-<commit>; the
+# production apps follow the production tag (homelab argo/apps/{frontend,auth,ai-pipeline}.yaml).
+# A newer run cancels this run's unanswered boxes.
 #
 # RELEASE_TOKEN (repo secret): a fine-grained token of the approver, for this repo only, with
 # Administration and Deployments read/write. It creates the missing production-<service>
@@ -92,7 +94,9 @@ jobs:
           images: ${{ env.REGISTRY }}/milesstorm/${{ matrix.name }}
           # No automatic latest (the semver tag would add it): only shipping moves latest.
           flavor: latest=false
+          # staging: the newest build, which staging.milesstorm.com runs.
           tags: |
+            type=raw,value=staging
             type=sha
             type=semver,pattern={{version}},value=${{ steps.crate-version.outputs.version }}
 
@@ -128,8 +132,8 @@ jobs:
           docker image prune -f
           docker builder prune -f --keep-storage 20GB
 
-  # Every service whose newest build differs from what production runs (its production tag). A
-  # failed build has no image, so that service is left out until a later build succeeds.
+  # Every service whose staging build (staging tag) isn't what production runs (production tag),
+  # compared by the commit each was built from. A failed build leaves the staging tag where it was.
   plan:
     needs: [changes, build]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
@@ -156,28 +160,26 @@ jobs:
       - name: find builds not in production
         id: pending
         run: |
-          digest() { docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null; }
+          revision() {
+            docker buildx imagetools inspect "$1" \
+              --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null
+          }
           matrix=
           echo "| Service | Build | Last change |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
           for entry in $SERVICES; do
-            IFS=: read -r name dir _ <<<"$entry"
-            # The newest build is the one of the last commit on main that changed the service (or
-            # this workflow, which rebuilds everything); that's what staging runs. If several
-            # commits were pushed at once, the build is tagged with the newest of them instead.
+            IFS=: read -r name _ <<<"$entry"
             image=$REGISTRY/milesstorm/$name
-            last=$(git log -1 --first-parent --format=%H HEAD -- "$dir" .github/workflows/release.yml)
-            built=
-            for commit in "$last" $(git rev-list --first-parent --max-count=50 HEAD "^$last"); do
-              tag=sha-${commit::7}
-              built=$(digest "$image:$tag") && break
-            done
-            [ -n "$built" ] || { echo "$name: no build since ${last::7} (failed?), skipped"; continue; }
-            [ "$built" = "$(digest "$image:production")" ] && { echo "$name: $tag already in production"; continue; }
+            commit=$(revision "$image:staging") || { echo "$name: no staging build, skipped"; continue; }
+            [ "$commit" = "$(revision "$image:production")" ] && { echo "$name: ${commit::7} already in production"; continue; }
+            # Manual runs from other branches also reach staging; only builds of main may ship.
+            git merge-base --is-ancestor "$commit" HEAD 2>/dev/null \
+              || { echo "$name: staging runs ${commit::7}, which isn't on main, skipped"; continue; }
+            tag=sha-${commit::7}
             matrix+="${matrix:+,}{\"name\":\"$name\",\"tag\":\"$tag\"}"
             echo "| $name | $tag | $(git log -1 --format=%s "$commit" | sed 's/|/\\|/g') |" >> "$GITHUB_STEP_SUMMARY"
           done
-          [ -n "$matrix" ] || echo "Nothing to ship: production runs every newest build." >> "$GITHUB_STEP_SUMMARY"
+          [ -n "$matrix" ] || echo "Nothing to ship: production runs every staging build." >> "$GITHUB_STEP_SUMMARY"
           echo "matrix=[$matrix]" >> "$GITHUB_OUTPUT"
 
       - name: create missing approval boxes
