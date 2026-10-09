@@ -17,7 +17,7 @@ milesstorm-web  submit Log In                         (browser, root)
 
 A page load is the server's trace, and the browser joins it: the server writes its span into
 `<meta name="traceparent">`, and the browser's `page load <path>` span (with the WASM download
-and hydration-time server calls under it) is a child of that span:
+and hydration-time server calls under it) is a child of that span (OTel's document-load pattern):
 
 ```
 public-istio.istio-ingress
@@ -30,9 +30,28 @@ public-istio.istio-ingress
       └─ GET /assets/…wasm, POST /bff/…
 ```
 
+### Reading a page-load trace
+
+The `page load` span starts when the HTML arrives and ends after the WASM has hydrated, so it
+outlives the server span it is a child of: the server is done once the HTML is sent. It carries
+`trace.relation=follows` to say so; it is the one browser span allowed outside its parent. Two
+consequences:
+
+- Grafana computes the critical path from the trace's root, the Gateway span, and stops at the
+  server render; the page load is never on it. To see what the page load waited for, open the
+  `page load` span's subtree (the WASM download, hydration-time `POST /bff/…` calls).
+- The page load's own time (time no child covers) is the browser parsing and hydrating. It is
+  labelled by span events: the navigation timing marks after the HTML arrived (`responseEnd`,
+  `domInteractive`, `domContentLoadedEventStart`/`End`, `domComplete`, `loadEventStart`/`End`)
+  and one `longtask` event per task over 50 ms (`longtask.duration_ms`). Long tasks are
+  Chromium-only: in Safari and Firefox the own time stays unlabelled.
+
 A camera session adds `arcane.ws_session`, with ai_pipeline's `arcane.ws_connection` and one
 `arcane.capture` per roll under it. Browsers can't set headers on a WebSocket, so the session's
-trace starts at the Gateway, not at a click. A roll stream (`/api/arcane/rolls`, server-sent
+trace starts at the Gateway, not at a click. The browser's own `camera session` span (the
+handshake, ending at the socket's `open`; a child of the click that opened it, else a root) sends
+its context as the URL parameter `/ws/arcane?traceparent=…`, and `arcane.ws_session` carries a
+**link** to it, not a parent: the Gateway's span for the handshake is its parent already. A roll stream (`/api/arcane/rolls`, server-sent
 events) adds `arcane.rolls_stream`, with its once-a-minute permission rechecks under it.
 
 The services send spans to Alloy over OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`). Istio sends its spans to
@@ -55,7 +74,14 @@ component loads all three in `<head>`, before the WASM. The script:
 
 - starts a span on a click or form submit and makes every fetch it causes a child of it. The span
   is only created when a server call happens, so clicks that stay in the browser make no trace. It
-  ends 300 ms after its last fetch (at most 10 s).
+  ends 300 ms after its last fetch span ended (at most 10 s), and never before a child: OTel's
+  fetch span ends when the response body is read and reaches the span processor 300 ms later, so
+  trace.js counts child spans in an OTel `SpanProcessor` rather than trusting the fetch promise.
+- starts a `navigate <route>` span the same way on a client-side route change
+  (`history.pushState`, `popstate`), named by the templated path only, never the query string.
+  A route change caused by a click keeps the click as the root, and one during the page load
+  stays in the page load. Faro's navigation instrumentation is off: it records query strings.
+- gives the arcane camera WebSocket a `camera session` span (above), by wrapping `window.WebSocket`.
 - names the span from `data-trace-name`, then `aria-label`, then the button's text (links: their
   path). Give a button `data-trace-name="…"` when its text isn't a good name or holds user data.
 - links the page load to the server's trace through `<meta name="traceparent">`
@@ -63,7 +89,9 @@ component loads all three in `<head>`, before the WASM. The script:
   rendering and no Cloudflare cache rule for pages, or page loads join someone else's trace.
 - ends the page-load span once the page has loaded and no server call has run for 1.5 s (at most
   15 s), so calls made during hydration land under it. A click that calls the server ends it.
-- only starts Faro on milesstorm.com, so `dx serve` sends nothing.
+- records long tasks (Chromium) as `longtask` events on the open click, navigate or page-load span.
+- only starts Faro on milesstorm.com (`deployment.environment.name=production`) and
+  staging.milesstorm.com (`staging`), so `dx serve` sends nothing.
 
 Faro's fetch instrumentation sends `traceparent` on same-origin requests only. It ignores `/faro/`,
 `/ws/` and `/api/arcane/rolls`. Faro's own uploads send an unsampled `traceparent` (flags `00`):
@@ -90,15 +118,21 @@ there is no standard one for browser traces):
   `istio/manifests/gateway-server-timing.yaml`).
 - Only responses no cache can replay are used: the page's own navigation and `/bff/` server calls
   (POSTs). A sample whose round trip comes out negative, or whose offset is over an hour, is
-  dropped as not belonging to that request.
+  dropped as not belonging to that request. The frontend sends `Cache-Control: no-store` on
+  `/bff/` responses and rendered pages (`no_store` in `packages/web/src/main.rs`), so a future
+  Cloudflare cache rule can't replay a stamp either.
 - For each such request the browser has its own `requestStart` and `responseStart` (Resource
   Timing). With the Gateway's two times that gives the offset, accurate to within half the network
   round trip; the lowest-round-trip of the last 8 wins.
-- Before export, every browser span is moved by the offset its trace was first sent with (so all
-  of a trace's spans move together) and carries `browser.clock_offset_ms` (added to the browser's
-  own time) and `browser.clock_offset_error_ms` (the most it can be off). Server spans then land
-  inside their browser parent to within that error. A trace whose first spans were sent before
-  any sample existed stays uncorrected throughout, and its spans have no such attributes.
+- A trace's offset is fixed when its root span starts (so all of a trace's spans move together).
+  Before export, every browser span is moved by it and carries `browser.clock_offset_ms` (added to
+  the browser's own time) and `browser.clock_offset_error_ms` (the most it can be off). Server
+  spans then land inside their browser parent to within that error.
+- A trace that starts before any sample exists (the page load usually does: the navigation entry
+  is read just after) is held back by trace.js's span processor and takes the first sample that
+  arrives. If its root ends first, or the page is hidden, it is sent uncorrected, without those
+  attributes, and stays uncorrected: holding it longer would lose it when the tab closes, and a
+  page with no sample by then usually gets none (its responses lack the stamp).
 
 After the correction, the part of a fetch span outside the Gateway span is time between the
 browser and the Gateway: the internet and Cloudflare.
@@ -182,6 +216,10 @@ Bump `@grafana/faro-web-sdk` and `@grafana/faro-web-tracing` together (exact ver
 
 - `faro.api.getOTEL()` (the standard `@opentelemetry/api` `trace` and `context`), and Faro patching
   `window.fetch` while `initializeFaro` runs, before `trace.js` wraps it;
+- `TracingInstrumentation`'s `spanProcessor` option, with `FaroMetaAttributesSpanProcessor` and
+  `FaroTraceExporter` from the tracing bundle and the live `GrafanaFaroWebSdk.faro` instance
+  (`trace.js` rebuilds Faro's default chain around its own processor: the bundle doesn't export
+  OTel's `BatchSpanProcessor`, so trace.js batches like it, 1 s or 30 spans);
 - `FetchTransport`'s `requestOptions.headers` (the unsampled `traceparent` on uploads);
 - the fetch instrumentation's `requestHook`, reading `http.request.method` and `url.full` from the
   span to name it;
