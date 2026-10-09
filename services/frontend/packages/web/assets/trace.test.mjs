@@ -837,3 +837,15 @@ test('staging starts Faro tagged staging, with the span processor in Faro\'s cha
   assert.equal(typeof chain.inner.onEnd, 'function');
   assert.deepEqual({ ...chain.metas.value }, {});
 });
+
+test('the environment comes from the host, so one bundle serves staging and production', () => {
+  const envs = {};
+  for (const host of ['staging.milesstorm.com', 'milesstorm.com']) {
+    const sandbox = bootSandbox(host);
+    vm.runInContext(SRC, sandbox);
+    envs[host] = sandbox.cfg.app.environment;
+  }
+  assert.deepEqual(envs, { 'staging.milesstorm.com': 'staging', 'milesstorm.com': 'production' });
+  // 'production' appears only in the host table, never as a fixed value.
+  assert.equal(SRC.match(/'production'/g).length, 1);
+});
