@@ -65,6 +65,7 @@ pub async fn start(store: Dataset, redis: Pool) {
     let lock = SchemaLock::new(redis);
     let mut delay = Duration::from_secs(1);
     let mut waiting_since: Option<tokio::time::Instant> = None;
+    let mut attempt_no: u32 = 0;
     loop {
         match lock.acquire().await {
             Ok(true) => waiting_since = None,
@@ -85,7 +86,17 @@ pub async fn start(store: Dataset, redis: Pool) {
             }
         }
         // One trace per attempt: the loop itself may wait for hours while SurrealDB is down.
-        let attempt = tracing::Instrument::instrument(store.apply_schema(), tracing::info_span!("dataset.apply_schema"));
+        // A root span by design (it runs at startup, not for a request), so it says what it is.
+        attempt_no += 1;
+        let attempt = tracing::Instrument::instrument(
+            store.apply_schema(),
+            tracing::info_span!(
+                "dataset.apply_schema",
+                purpose = "startup: sync the SurrealDB schema (surrealkit)",
+                attempt = attempt_no,
+                schema_files = embedded_schema::SCHEMA.len(),
+            ),
+        );
         match lock.hold_while(tokio::time::timeout(SCHEMA_ATTEMPT_LIMIT, attempt)).await {
             Ok(Ok(())) => {
                 lock.release().await;
@@ -247,6 +258,7 @@ impl Dataset {
     /// sync: only changed files are applied; nothing is dropped). Signs in as the
     /// website's own login.
     async fn apply_schema(&self) -> anyhow::Result<()> {
+        use tracing::Instrument as _;
         let i = &self.inner;
         let cfg = surrealkit::DbCfg::from_env(
             None,
@@ -260,11 +272,29 @@ impl Dataset {
                 folder: None,
             },
         )?;
-        let db = surrealkit::connect(&cfg).await?;
+        // surrealkit makes no spans of its own: one CLIENT span per step, so the time splits
+        // into connecting (sign-in checks the password hash, ~60 ms) and syncing.
+        let db = surrealkit::connect(&cfg)
+            .instrument(tracing::info_span!(
+                "surrealdb.connect",
+                otel.kind = "client",
+                peer.service = "surrealdb",
+                db.system.name = "surrealdb",
+            ))
+            .await?;
         // No pruning: a table or field that disappears from the files is left in place
         // (and logged by surrealkit) rather than dropped with the users' pictures in it.
         // Removing one is a deliberate surrealkit rollout, not a side effect of a deploy.
-        surrealkit::Sync::embedded(embedded_schema::SCHEMA).prune(false).run(&db).await
+        surrealkit::Sync::embedded(embedded_schema::SCHEMA)
+            .prune(false)
+            .run(&db)
+            .instrument(tracing::info_span!(
+                "surrealkit.sync",
+                otel.kind = "client",
+                peer.service = "surrealdb",
+                db.system.name = "surrealdb",
+            ))
+            .await
     }
 
     pub fn sample_every(&self) -> u32 {
