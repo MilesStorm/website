@@ -78,7 +78,16 @@ impl Auth {
             .set_token_uri(g_token_url);
 
         let db_connection = env::var("DATABASE_URL").expect("DATABASE_URL should be provided.");
-        let db = PgPool::connect(&db_connection).await?;
+        // Connections are opened here and kept: a new one costs ~100 ms of CPU (TLS setup loads
+        // the system CA bundle), which sqlx's defaults (closing idle connections after 10 min,
+        // every connection after 30) put inside requests. A dead connection is still replaced:
+        // the pool pings each one before handing it out.
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .min_connections(2)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect(&db_connection)
+            .await?;
 
         let mig_res = sqlx::migrate!().run(&db).await;
         match mig_res {

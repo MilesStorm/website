@@ -82,6 +82,7 @@ spans, drops attributes that would add service-graph nodes and strips query stri
 | You are adding | Do this |
 |---|---|
 | An axum service | Layer `OtelAxumLayer::default().filter(\|p\| p != "/metrics")` and register the W3C `TraceContextPropagator` at startup. Copy `auth/src/main.rs`. |
+| An HTTP client, connection pool, or anything that loads TLS certificates | Create it at startup and reuse it; keep pool connections open (auth: `min_connections`, no idle timeout or max lifetime). Loading the system CA bundle costs 30–100+ ms of CPU, which otherwise shows up as unexplained own time in whichever request comes first. |
 | An outbound HTTP call (frontend) | Build the client with `api::trace::client(reqwest::Client)`. A plain `reqwest::Client` sends no `traceparent`, so the callee starts its own trace. |
 | A `use_server_future` or `use_loader` | Use `api::trace::use_server_future("name", f)`; add a matching `use_loader` wrapper when first needed. Clippy warns on the plain hooks (`services/frontend/clippy.toml`). |
 | Work that outlives the request: `tokio::spawn`, a queue, a WebSocket, a streamed response body | Run it in `api::detached_span!("name")` (auth: `telemetry::detached_span`). Neither `.in_current_span()` nor a plain child span works: they keep the request's span open until the work ends. |
@@ -117,7 +118,9 @@ CPU profiles of frontend, auth and ai-pipeline are collected all the time by an 
 time is large and no child span explains it: Explore → Pyroscope, `service_name` = the span's
 `service.name`, over the trace's time range. Spans have no "Profiles" link: Grafana only links spans
 that carry `pyroscope.profile.id`, which eBPF profiles can't provide. Keep the binaries' symbol tables
-(`strip --strip-debug`, never a full `strip`), or flame graphs show addresses.
+(`strip --strip-debug`, never a full `strip`), or flame graphs show addresses. A block of
+`{unknown}` with no stack under it comes from a process's first minute (or the profiler's):
+the profiler hasn't read that binary yet. Narrow the time range past it or filter by `pod`.
 
 ## Checks
 

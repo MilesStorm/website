@@ -73,6 +73,13 @@ fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
     CLIENT.get_or_init(|| trace::client(reqwest::Client::new()))
 }
 
+/// Builds the client for calls to auth before the server takes requests. Building it loads the
+/// system CA certificates (~30 ms of CPU), which otherwise lands in the first request's trace.
+#[cfg(feature = "server")]
+pub fn init_http_client() {
+    http_client();
+}
+
 // ---- Plain async helpers for Axum OAuth handlers in the web crate ----
 
 /// Ask the auth service to begin an OAuth flow. Returns `(auth_url, csrf_state)`.
