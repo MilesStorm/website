@@ -1,10 +1,11 @@
 # Staging copy of the website at https://staging.milesstorm.com (Argo app website-staging in the
-# homelab repo, which follows the `staging` branch). Reuses the production manifests in ../ and
+# homelab repo, which follows main). Reuses the production manifests in ../ and
 # changes only what keeps staging away from production:
 # - everything in one namespace, website-staging, whose mesh policy admits only itself and the gateway
 # - its own Postgres DB/login, SurrealDB namespace/login and in-namespace Redis (secrets: homelab
 #   website-staging/manifests)
-# - *-staging images, built from the staging branch only
+# - the newest sha-* build of each image; production only runs builds promoted to prod-sha-*
+#   (approval on the build workflow)
 # - no Cloudflare cache purge, no email (no RESEND_API_KEY), one replica each
 # - lowest priority: production pods may evict staging pods (e.g. for the GPU during a rollout)
 # The Argo project website-staging only lets this deploy Deployments, Services and ConfigMaps
@@ -18,9 +19,10 @@ resources:
   - ../ai-pipeline
   - redis.yaml
 images:
-  - {name: ghcr.io/milesstorm/frontend, newName: ghcr.io/milesstorm/frontend-staging, newTag: latest}
-  - {name: ghcr.io/milesstorm/auth, newName: ghcr.io/milesstorm/auth-staging, newTag: latest}
-  - {name: ghcr.io/milesstorm/ai-pipeline, newName: ghcr.io/milesstorm/ai-pipeline-staging, newTag: latest}
+  # Image Updater pins the newest sha-* build over these on the live app.
+  - {name: ghcr.io/milesstorm/frontend, newTag: latest}
+  - {name: ghcr.io/milesstorm/auth, newTag: latest}
+  - {name: ghcr.io/milesstorm/ai-pipeline, newTag: latest}
 patches:
   # The PostSync hook purges the production Cloudflare zone.
   - target: {kind: Job, name: frontend-cloudflare-cache}
@@ -31,7 +33,7 @@ patches:
       metadata:
         name: frontend-cloudflare-cache
   # The public route lives in the homelab repo (website-staging/manifests/route.yaml): the
-  # website-staging Argo project may not create routes, so this branch can't claim production hosts.
+  # website-staging Argo project may not create routes, so this overlay can't claim production hosts.
   - target: {kind: HTTPRoute, name: frontend}
     patch: |
       $patch: delete
@@ -39,7 +41,7 @@ patches:
       kind: HTTPRoute
       metadata:
         name: frontend
-  # The *-staging images are public: no pull secret, so no GHCR token in this namespace.
+  # The images are public: no pull secret, so no GHCR token in this namespace.
   - target: {kind: Deployment, name: "(frontend|auth|ai-pipeline)-deployment"}
     patch: |
       - op: remove

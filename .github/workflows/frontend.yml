@@ -8,9 +8,6 @@ on:
   push:
     branches:
       - main
-      # Builds from any branch but main (pushes to staging, manual runs) go to separate
-      # *-staging images, which only the website-staging app (homelab repo) follows.
-      - staging
     paths:
     - services/frontend/**
     - .github/workflows/frontend.yml
@@ -37,9 +34,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/milesstorm/frontend${{ github.ref_name != 'main' && '-staging' || '' }}
+          images: ${{ env.REGISTRY }}/milesstorm/frontend
           tags: | 
-            type=raw,value=latest
             type=sha
             type=semver,pattern={{version}},value=${{ steps.crate-version.outputs.version }}
 
@@ -65,3 +61,30 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # Every main build goes to staging.milesstorm.com first (it follows the sha-* tags). Once it
+  # checks out there, approve this job: it tags that same image prod-sha-*, which is the only tag
+  # production follows (homelab argo/apps). Manual runs from other branches reach staging only.
+  promote:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    name: Promote to production
+    runs-on: [self-hosted, eta]
+    steps:
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false
+
+      - name: tag the tested image for production
+        run: |
+          image=${{ env.REGISTRY }}/milesstorm/frontend
+          tag=sha-${GITHUB_SHA::7}
+          docker buildx imagetools create -t "$image:prod-$tag" -t "$image:latest" "$image:$tag"
