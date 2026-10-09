@@ -11,6 +11,7 @@ use password_auth::verify_password;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 use tokio::task;
+use tracing::Instrument;
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -218,6 +219,7 @@ impl Backend {
         }
     }
 
+    #[tracing::instrument(name = "oauth.complete", skip_all, fields(provider = ?provider))]
     pub async fn complete_oauth(
         &self,
         provider: OAuthProvider,
@@ -229,22 +231,26 @@ impl Backend {
                     .client
                     .exchange_code(AuthorizationCode::new(code))
                     .request_async(&self.http_client)
+                    .instrument(tracing::info_span!("oauth.code_exchange"))
                     .await
                     .map_err(BackendError::OAuth2)?;
 
-                let user_info = reqwest::Client::new()
-                    .get("https://api.github.com/user")
-                    .header(USER_AGENT.as_str(), "milesstorm-auth")
-                    .header(
-                        AUTHORIZATION.as_str(),
-                        format!("Bearer {}", token_res.access_token().secret()),
-                    )
-                    .send()
-                    .await
-                    .map_err(BackendError::Reqwest)?
-                    .json::<UserInfo>()
-                    .await
-                    .map_err(BackendError::Reqwest)?;
+                let user_info = async {
+                    reqwest::Client::new()
+                        .get("https://api.github.com/user")
+                        .header(USER_AGENT.as_str(), "milesstorm-auth")
+                        .header(
+                            AUTHORIZATION.as_str(),
+                            format!("Bearer {}", token_res.access_token().secret()),
+                        )
+                        .send()
+                        .await?
+                        .json::<UserInfo>()
+                        .await
+                }
+                .instrument(tracing::info_span!("oauth.user_info"))
+                .await
+                .map_err(BackendError::Reqwest)?;
 
                 // The `WHERE users.password IS NULL` guards against account takeover:
                 // if a password account already owns this username, the conflict update is
@@ -271,22 +277,26 @@ impl Backend {
                     .g_client
                     .exchange_code(AuthorizationCode::new(code))
                     .request_async(&self.http_client)
+                    .instrument(tracing::info_span!("oauth.code_exchange"))
                     .await
                     .map_err(BackendError::OAuth2)?;
 
-                let user_info = reqwest::Client::new()
-                    .get("https://www.googleapis.com/oauth2/v2/userinfo")
-                    .header(USER_AGENT.as_str(), "milesstorm-auth")
-                    .header(
-                        AUTHORIZATION.as_str(),
-                        format!("Bearer {}", token_res.access_token().secret()),
-                    )
-                    .send()
-                    .await
-                    .map_err(BackendError::Reqwest)?
-                    .json::<GoogleUserInfo>()
-                    .await
-                    .map_err(BackendError::Reqwest)?;
+                let user_info = async {
+                    reqwest::Client::new()
+                        .get("https://www.googleapis.com/oauth2/v2/userinfo")
+                        .header(USER_AGENT.as_str(), "milesstorm-auth")
+                        .header(
+                            AUTHORIZATION.as_str(),
+                            format!("Bearer {}", token_res.access_token().secret()),
+                        )
+                        .send()
+                        .await?
+                        .json::<GoogleUserInfo>()
+                        .await
+                }
+                .instrument(tracing::info_span!("oauth.user_info"))
+                .await
+                .map_err(BackendError::Reqwest)?;
 
                 // Identify Google users by email (unique on Google's side and in our schema).
                 // Matching on `username` would let two Googlers with the same display name
@@ -368,7 +378,8 @@ impl Backend {
 
         // password is slow, so spawn off a thread to do the hashing
         let password = password.to_owned();
-        let hashed_password = task::spawn_blocking(move || password_auth::generate_hash(password))
+        let span = tracing::info_span!("password.hash");
+        let hashed_password = task::spawn_blocking(move || span.in_scope(|| password_auth::generate_hash(password)))
             .await
             .expect("password hashing failed");
 
@@ -403,6 +414,7 @@ impl AuthnBackend for Backend {
     type Credentials = Credentials;
     type Error = BackendError;
 
+    #[tracing::instrument(name = "user.authenticate", skip_all)]
     async fn authenticate(
         &self,
         creds: Self::Credentials,
@@ -417,13 +429,16 @@ impl AuthnBackend for Backend {
 
         // Verifying the password is blocking and potentially slow, so we'll do so via
         // `spawn_blocking`.
-        task::spawn_blocking(|| {
-            Ok(user.filter(|user| {
-                let Some(ref password) = user.password else {
-                    return false;
-                };
-                verify_password(password_cred.password, password).is_ok()
-            }))
+        let span = tracing::info_span!("password.verify");
+        task::spawn_blocking(move || {
+            span.in_scope(|| {
+                Ok(user.filter(|user| {
+                    let Some(ref password) = user.password else {
+                        return false;
+                    };
+                    verify_password(password_cred.password, password).is_ok()
+                }))
+            })
         })
         .await?
     }

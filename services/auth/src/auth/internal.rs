@@ -70,6 +70,7 @@ pub fn router(state: InternalState) -> Router<()> {
         .with_state(state)
 }
 
+#[tracing::instrument(name = "token.create", skip_all)]
 async fn create_bff_token(db: &Db, user_id: i64) -> Result<BffToken, sqlx::Error> {
     sqlx::query_as("INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2) RETURNING *")
         .bind(Ulid::new().to_string())
@@ -143,7 +144,9 @@ async fn exchange_password(
     let password_hash = user.password.clone().unwrap_or_default();
     let input = req.password.clone();
 
-    let valid = match task::spawn_blocking(move || verify_password(input, &password_hash).is_ok()).await {
+    // The span sits inside the closure so the hashing's CPU time shows under its own name.
+    let span = tracing::info_span!("password.verify");
+    let valid = match task::spawn_blocking(move || span.in_scope(|| verify_password(input, &password_hash).is_ok())).await {
         Ok(valid) => valid,
         Err(e) => {
             tracing::error!(error = %e, "password verification failed");
@@ -407,7 +410,8 @@ async fn register(
         }
     }
     let password = req.password.clone();
-    let hashed = task::spawn_blocking(move || password_auth::generate_hash(password))
+    let span = tracing::info_span!("password.hash");
+    let hashed = task::spawn_blocking(move || span.in_scope(|| password_auth::generate_hash(password)))
         .await
         .expect("password hashing failed");
 
@@ -507,6 +511,7 @@ struct DockerRequestResponse {
     command_result: Option<CommandResult>,
 }
 
+#[tracing::instrument(name = "ark.authorize", skip_all)]
 async fn resolve_ark_user(db: &Db, token: &str) -> Option<i64> {
     let row: Option<(i64,)> = sqlx::query_as(
         r#"
@@ -544,6 +549,7 @@ const PROFILE_COLUMNS: &str =
     "u.id AS user_id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS email_verified";
 
 /// The token's user (id, username, display name, email), for any valid token.
+#[tracing::instrument(name = "profile.resolve", skip_all)]
 async fn resolve_profile(db: &Db, token: &str) -> Result<Option<ProfileResp>, sqlx::Error> {
     sqlx::query_as(&format!(
         "SELECT {PROFILE_COLUMNS} FROM bff_tokens t JOIN users u ON u.id = t.user_id \
@@ -631,6 +637,7 @@ async fn profile_set_display_name(
 // a choice; the pictures themselves are stored by the website in SurrealDB.
 
 /// The token's user, if the token is valid and the user holds `arcane`.
+#[tracing::instrument(name = "dataset.authorize", skip_all)]
 async fn resolve_arcane_user(db: &Db, token: &str) -> Option<i64> {
     let row: Option<(i64,)> = sqlx::query_as(
         r#"

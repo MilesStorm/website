@@ -389,6 +389,12 @@ test('the fetch request hook renames Faro fetch spans', () => {
   assert.equal(span.name, 'POST /bff/login_password');
 });
 
+test('fetch spans keep their network timing events', () => {
+  const sandbox = bootSandbox('milesstorm.com');
+  vm.runInContext(SRC, sandbox);
+  assert.equal(sandbox.tracingOpts.instrumentationOptions.fetchInstrumentationOptions.ignoreNetworkEvents, false);
+});
+
 test('Faro is not started off milesstorm.com', () => {
   for (const host of ['localhost', 'staging.milesstorm.com']) {
     const sandbox = bootSandbox(host);

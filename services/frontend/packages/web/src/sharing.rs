@@ -58,6 +58,7 @@ fn store_error(e: impl std::fmt::Display) -> ServerFnError {
 }
 
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.get_dataset_sharing", skip_all)]
 pub async fn get_dataset_sharing() -> Result<SharingState, ServerFnError> {
     let (_, token, _) = caller(true).await?;
     if crate::dataset::dataset().is_none() {
@@ -68,6 +69,7 @@ pub async fn get_dataset_sharing() -> Result<SharingState, ServerFnError> {
 }
 
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.set_dataset_sharing", skip_all, fields(share = share))]
 pub async fn set_dataset_sharing(share: bool) -> Result<SharingState, ServerFnError> {
     let (_, token, _) = caller(true).await?;
     if crate::dataset::dataset().is_none() {
@@ -86,6 +88,7 @@ pub async fn set_dataset_sharing(share: bool) -> Result<SharingState, ServerFnEr
 /// Deleting never depends on auth being reachable. A save that was already under
 /// way can land just after the delete, so the delete runs again a few seconds later.
 #[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.delete_my_dataset", skip_all)]
 pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
     let (user, token, hub) = caller(false).await?;
     // Deleting works whenever the store is configured, even while the schema step
