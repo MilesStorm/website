@@ -1,0 +1,65 @@
+name: promote
+
+# Sends the ticked services to production by hand, e.g. only some of what a release run built.
+# For each one it takes the build staging runs: the image of the last commit on main that changed
+# that service (or release.yml, which rebuilds everything), tagged sha-<commit> by release.yml.
+# Needs the same approval as the release run's promote job.
+
+env:
+  REGISTRY: ghcr.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      frontend:
+        description: frontend
+        type: boolean
+        default: true
+      auth:
+        description: auth
+        type: boolean
+        default: true
+      ai_pipeline:
+        description: ai-pipeline
+        type: boolean
+        default: true
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    name: Promote to production
+    runs-on: [self-hosted, eta]
+    steps:
+      - name: check out repo code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          logout: false
+
+      - name: tag the latest builds for production
+        env:
+          FRONTEND: ${{ inputs.frontend }}
+          AUTH: ${{ inputs.auth }}
+          AI_PIPELINE: ${{ inputs.ai_pipeline }}
+        run: |
+          declare -A dir=([frontend]=services/frontend [auth]=services/auth [ai-pipeline]=services/ai_pipeline)
+          declare -A ticked=([frontend]=$FRONTEND [auth]=$AUTH [ai-pipeline]=$AI_PIPELINE)
+          for name in frontend auth ai-pipeline; do
+            [ "${ticked[$name]}" = true ] || { echo "$name: skipped"; continue; }
+            commit=$(git log -1 --format=%H HEAD -- "${dir[$name]}" .github/workflows/release.yml)
+            tag=sha-${commit::7}
+            image=$REGISTRY/milesstorm/$name
+            docker buildx imagetools create -t "$image:prod-$tag" -t "$image:latest" "$image:$tag"
+            echo "$name: $tag → production"
+          done
