@@ -1,0 +1,72 @@
+name: checks
+
+# Clippy and the tests of every service, on every push and pull request (TRACING.md, "Checks").
+# No path filters, so the jobs can be required checks. ai_pipeline builds without CUDA (burn
+# loads it at run time) and no test needs a GPU, so all three run on GitHub's runners.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/frontend
+      # asset! needs the vendored Faro bundles and the Tailwind CSS at compile time.
+      - run: npm ci && npm run vendor
+      - run: node_modules/.bin/tailwindcss -i packages/ui/tailwind.css -o packages/ui/assets/styling/tailwind.css --minify
+      - run: cargo clippy -p api -p web --features web/server --all-targets -- -D warnings
+      - run: cargo test -p api -p web --features web/server
+      - run: npm run test:trace
+
+  auth:
+    name: auth
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/auth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/auth
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  ai-pipeline:
+    name: ai-pipeline
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ai_pipeline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/ai_pipeline
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
