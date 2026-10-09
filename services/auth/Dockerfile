@@ -17,6 +17,10 @@ RUN cargo build --release
 
 # Final stage: Copy the built files to an nginx image to serve the website
 FROM debian:bookworm-slim
+# The commit this image is built from (CI passes github.sha): `service.version` on traces and
+# logs. Declared in this stage only, so a new commit doesn't invalidate the build cache.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 
 # Install OpenSSL
 RUN apt-get update && \
