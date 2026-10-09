@@ -1,34 +1,44 @@
 name: release
 
-# One run per merge to main. It builds every service whose files changed (all of them on a manual
-# run) and pushes each as sha-<commit>; staging.milesstorm.com follows those tags on its own.
-# The run then waits on one approval per service (GitHub environment production-<service>); the
-# Review deployments dialog lists them all, so tick every one for a full release or only some.
-# Approving tags that build prod-sha-<commit>, the only tags production follows (homelab argo/apps).
+# One run per merge to main:
+# 1. builds every service whose files changed (all of them on a manual run) as sha-<commit>;
+#    staging.milesstorm.com follows those tags on its own (homelab argo/apps/website-staging.yaml).
+# 2. lists every service whose newest build isn't in production yet (also ones held back earlier)
+#    and waits for approval. The Review deployments dialog shows one box per such service
+#    (production-<service>) plus "production" for all of them; tick either, then approve.
+# Shipping tags the build prod-sha-<commit>, production and latest; production follows prod-sha-* (homelab
+# argo/apps/{frontend,auth,ai-pipeline}.yaml). A newer run cancels this run's unanswered boxes.
+#
+# RELEASE_TOKEN (repo secret): a fine-grained token of the approver, for this repo only, with
+# Administration and Deployments read/write. It creates the missing production-<service>
+# environments and, after "production" is approved, approves the run's remaining boxes.
 
 env:
   REGISTRY: ghcr.io
+  # name:directory:Cargo.toml (for the version tag). A new service only needs a line here
+  # (and its Argo apps in the homelab repo); its approval box appears on its first release.
+  SERVICES: >-
+    frontend:services/frontend:packages/web/Cargo.toml
+    auth:services/auth:Cargo.toml
+    ai-pipeline:services/ai_pipeline:Cargo.toml
 
 on:
   push:
     branches:
       - main
     paths:
-      - services/frontend/**
-      - services/auth/**
-      - services/ai_pipeline/**
+      - services/**
       - .github/workflows/release.yml
   workflow_dispatch:
 
 jobs:
   changes:
     name: Changed services
-    runs-on: [self-hosted, eta]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
-      names: ${{ steps.pick.outputs.names }}
     steps:
       - name: check out repo code
         uses: actions/checkout@v4
@@ -40,28 +50,22 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
         run: |
-          declare -A dir=([frontend]=services/frontend [auth]=services/auth [ai-pipeline]=services/ai_pipeline)
-          declare -A cargo=([frontend]=packages/web/Cargo.toml [auth]=Cargo.toml [ai-pipeline]=Cargo.toml)
-          picked=()
-          for name in frontend auth ai-pipeline; do
+          matrix=
+          for entry in $SERVICES; do
+            IFS=: read -r name dir cargo <<<"$entry"
             # A manual run, or a push with no earlier commit to compare against, builds everything,
             # as does a change to this workflow.
             if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null \
-              || ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- "${dir[$name]}" .github/workflows/release.yml; then
-              picked+=("$name")
+              || ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- "$dir" .github/workflows/release.yml; then
+              matrix+="${matrix:+,}{\"name\":\"$name\",\"dir\":\"$dir\",\"cargo\":\"$dir/$cargo\"}"
+              echo "build: $name"
             fi
           done
-          matrix=
-          for name in "${picked[@]}"; do
-            matrix+="${matrix:+,}{\"name\":\"$name\",\"dir\":\"${dir[$name]}\",\"cargo\":\"${dir[$name]}/${cargo[$name]}\"}"
-          done
           echo "matrix=[$matrix]" >> "$GITHUB_OUTPUT"
-          echo "names=${picked[*]}" >> "$GITHUB_OUTPUT"
-          echo "Building: ${picked[*]:-nothing}"
 
   build:
     needs: changes
-    if: needs.changes.outputs.names != ''
+    if: needs.changes.outputs.matrix != '[]'
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +90,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/milesstorm/${{ matrix.name }}
+          # No automatic latest (the semver tag would add it): only shipping moves latest.
+          flavor: latest=false
           tags: |
             type=sha
             type=semver,pattern={{version}},value=${{ steps.crate-version.outputs.version }}
@@ -122,21 +128,91 @@ jobs:
           docker image prune -f
           docker builder prune -f --keep-storage 20GB
 
-  # Approve once the build checks out on staging.milesstorm.com: tags the same image
-  # prod-sha-<commit> (and latest). Runs only if every build in this run succeeded.
-  promote:
+  # Every service whose newest build differs from what production runs (its production tag). A
+  # failed build has no image, so that service is left out until a later build succeeds.
+  plan:
     needs: [changes, build]
-    if: github.ref == 'refs/heads/main' && needs.changes.outputs.names != ''
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
-    environment: production-${{ matrix.name }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    name: What can ship
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      matrix: ${{ steps.pending.outputs.matrix }}
+    steps:
+      - name: check out repo code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: find builds not in production
+        id: pending
+        run: |
+          digest() { docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null; }
+          matrix=
+          echo "| Service | Build | Last change |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for entry in $SERVICES; do
+            IFS=: read -r name dir _ <<<"$entry"
+            # The newest build is the one of the last commit on main that changed the service (or
+            # this workflow, which rebuilds everything); that's what staging runs. If several
+            # commits were pushed at once, the build is tagged with the newest of them instead.
+            image=$REGISTRY/milesstorm/$name
+            last=$(git log -1 --first-parent --format=%H HEAD -- "$dir" .github/workflows/release.yml)
+            built=
+            for commit in "$last" $(git rev-list --first-parent --max-count=50 HEAD "^$last"); do
+              tag=sha-${commit::7}
+              built=$(digest "$image:$tag") && break
+            done
+            [ -n "$built" ] || { echo "$name: no build since ${last::7} (failed?), skipped"; continue; }
+            [ "$built" = "$(digest "$image:production")" ] && { echo "$name: $tag already in production"; continue; }
+            matrix+="${matrix:+,}{\"name\":\"$name\",\"tag\":\"$tag\"}"
+            echo "| $name | $tag | $(git log -1 --format=%s "$commit" | sed 's/|/\\|/g') |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          [ -n "$matrix" ] || echo "Nothing to ship: production runs every newest build." >> "$GITHUB_STEP_SUMMARY"
+          echo "matrix=[$matrix]" >> "$GITHUB_OUTPUT"
+
+      - name: create missing approval boxes
+        if: steps.pending.outputs.matrix != '[]'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          MATRIX: ${{ steps.pending.outputs.matrix }}
+          OWNER_ID: ${{ github.repository_owner_id }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Repo secret RELEASE_TOKEN is missing (see the top of release.yml)"; exit 1; }
+          for environment in production $(jq -r '.[] | "production-" + .name' <<<"$MATRIX"); do
+            gh api "repos/$GITHUB_REPOSITORY/environments/$environment" --silent 2>/dev/null && continue
+            # Only the owner may approve, and only runs from main.
+            jq -n --argjson id "$OWNER_ID" \
+              '{reviewers: [{type: "User", id: $id}], deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}' \
+              | gh api -X PUT "repos/$GITHUB_REPOSITORY/environments/$environment" --input - --silent
+            gh api -X POST "repos/$GITHUB_REPOSITORY/environments/$environment/deployment-branch-policies" \
+              -f name=main -f type=branch --silent
+            echo "created environment $environment"
+          done
+
+  # The "production" box: ships every service in the plan, then approves the run's other boxes
+  # (their jobs just repeat the same tagging).
+  ship-all:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]' && needs.plan.outputs.matrix != ''
+    environment: production
+    concurrency:
+      group: ship-all
+      cancel-in-progress: true
     permissions:
       contents: read
       packages: write
-    name: Promote ${{ matrix.name }} to production
-    runs-on: [self-hosted, eta]
+    name: Ship everything
+    runs-on: ubuntu-latest
     steps:
       - name: Log in to container registry
         uses: docker/login-action@v3
@@ -144,12 +220,56 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          logout: false
+
+      - name: tag the tested images for production
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          jq -r '.[] | "\(.name) \(.tag)"' <<<"$MATRIX" | while read -r name tag; do
+            image=$REGISTRY/milesstorm/$name
+            docker buildx imagetools create -t "$image:prod-$tag" -t "$image:production" -t "$image:latest" "$image:$tag"
+            echo "$name: $tag shipped"
+          done
+
+      - name: approve the per-service boxes
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/pending_deployments" --jq '[.[].environment.id]')
+          [ "$ids" = "[]" ] && exit 0
+          jq -n --argjson ids "$ids" '{environment_ids: $ids, state: "approved", comment: "Shipped with everything"}' \
+            | gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/pending_deployments" --input - --silent
+
+  # One box per service (production-<service>): ships just that service.
+  ship:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]' && needs.plan.outputs.matrix != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    environment: production-${{ matrix.name }}
+    concurrency:
+      group: ship-${{ matrix.name }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: write
+    name: Ship ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: tag the tested image for production
         env:
           NAME: ${{ matrix.name }}
+          TAG: ${{ matrix.tag }}
         run: |
-          tag=sha-${GITHUB_SHA::7}
           image=$REGISTRY/milesstorm/$NAME
-          docker buildx imagetools create -t "$image:prod-$tag" -t "$image:latest" "$image:$tag"
+          docker buildx imagetools create -t "$image:prod-$TAG" -t "$image:production" -t "$image:latest" "$image:$TAG"
+          echo "$NAME: $TAG shipped"
