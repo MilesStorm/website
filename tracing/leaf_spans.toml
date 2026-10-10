@@ -28,6 +28,11 @@ service = "auth"
 name = "email.password_reset_send"
 reason = "sent after the response: the reset request doesn't wait for the email provider"
 
+[[follows]]
+service = "frontend"
+name = "roll publish"
+reason = "published from a queue after the roll was received: the camera socket doesn't wait for Redis"
+
 [[leaf]]
 service = "auth"
 name = "db.pool.acquire"
@@ -61,7 +66,7 @@ reason = "inference stages (queue, decode, yolo, crop, head): measured in the in
 [[leaf]]
 service = "ai-pipeline"
 name = "ws.send"
-reason = "the write of one message to the camera socket"
+reason = "the write of a frame's replies to the camera socket"
 
 [[leaf]]
 service = "ai-pipeline"
