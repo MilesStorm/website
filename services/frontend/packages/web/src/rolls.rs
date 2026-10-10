@@ -102,9 +102,21 @@ pub fn split_trace(text: &str) -> (Envelope, Cow<'_, str>) {
     if !text.contains("\"_trace\"") {
         return untouched();
     }
-    let Ok(Traced { trace: Some(raw) }) = serde_json::from_str::<Traced>(text) else { return untouched() };
-    let Some(rest) = without_member(text, raw.get()) else { return untouched() };
-    let trace: TraceField = serde_json::from_str(raw.get()).unwrap_or_default();
+    let cut = match serde_json::from_str::<Traced>(text) {
+        Ok(Traced { trace: Some(raw) }) => without_member(text, raw.get()).map(|rest| (raw.get().to_string(), rest)),
+        _ => None,
+    };
+    // A field that can't be cut out of the text (written twice, or null) still
+    // comes off: the message is read and written again, at the cost of the sender's layout.
+    let (trace, rest) = match cut {
+        Some(cut) => cut,
+        None => {
+            let Ok(serde_json::Value::Object(mut message)) = serde_json::from_str(text) else { return untouched() };
+            let Some(trace) = message.remove(TRACE_FIELD) else { return untouched() };
+            (trace.to_string(), serde_json::Value::Object(message).to_string())
+        }
+    };
+    let trace: TraceField = serde_json::from_str(&trace).unwrap_or_default();
     let envelope = Envelope {
         cx: trace.traceparent.as_deref().map(api::trace::context_from_traceparent).unwrap_or_default(),
         published: trace.published_ms.and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms))),
@@ -840,6 +852,16 @@ mod tests {
             assert_eq!(split_trace(&with_trace(roll, &publish)).1, roll);
         }
         assert_eq!(split_trace(r#"{"_trace":{}}"#).1, "{}");
+
+        // Written in a way that can't be cut out of the text: it still comes off.
+        for odd in [
+            r#"{"a":1,"_trace":null}"#,
+            r#"{"_trace":{},"a":1,"_trace":{}}"#,
+        ] {
+            let stripped = split_trace(odd).1;
+            let message: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+            assert!(message.get("_trace").is_none() && message["a"] == 1, "{odd} -> {stripped}");
+        }
     }
 
     #[test]

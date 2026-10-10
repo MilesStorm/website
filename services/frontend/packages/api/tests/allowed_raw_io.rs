@@ -59,30 +59,69 @@ fn attributes(source: &str) -> Vec<(usize, String)> {
 /// Lints and groups that take the bans with them: `disallowed_*` are in `clippy::style`.
 const TOO_BROAD: [&str; 4] = ["warnings", "clippy::all", "clippy::style", "clippy::disallowed"];
 
+/// `code` with its string literals emptied (`"…"` becomes `""`) and its whitespace removed,
+/// so what is left is attribute syntax only.
+fn syntax_only(code: &str) -> String {
+    let (mut out, mut in_string, mut escaped) = (String::new(), false, false);
+    for c in code.chars() {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => {
+                    in_string = false;
+                    out.push('"');
+                }
+                _ => {}
+            }
+        } else if c == '"' {
+            in_string = true;
+            out.push('"');
+        } else if !c.is_whitespace() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The lints each `allow(...)` and `expect(...)` in an attribute names, one list per group:
+/// `cfg_attr` can hold several.
+fn allow_groups(code: &str) -> Vec<Vec<String>> {
+    let syntax = syntax_only(code);
+    let mut groups = Vec::new();
+    for opener in ["allow(", "expect("] {
+        for (at, _) in syntax.match_indices(opener) {
+            let list = syntax[at + opener.len()..].split(')').next().unwrap_or_default();
+            groups.push(list.split(',').filter(|l| !l.is_empty() && !l.starts_with("reason=")).map(str::to_string).collect());
+        }
+    }
+    groups
+}
+
 /// The `#[allow]`/`#[expect]` attributes naming a `clippy::disallowed_*` lint in `source`.
 /// Each must give a `reason`. An allow wide enough to cover the bans without naming them
 /// fails: it would be an exception the registry never sees.
 fn allow_sites(file: &str, source: &str) -> Vec<Site> {
     let mut sites = Vec::new();
     for (line, code) in attributes(source) {
-        let allows = code.contains("allow(") || code.contains("expect(");
-        let names: Vec<&str> = code
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
-            .filter(|name| !name.is_empty())
-            .collect();
-        // What comes after `reason =` is text, not lint names.
-        let named = &names[..names.iter().position(|n| *n == "reason").unwrap_or(names.len())];
-        if allows {
-            if let Some(broad) = named.iter().find(|n| TOO_BROAD.contains(n)) {
-                panic!("{file}:{line}: `{broad}` is too broad an allow: it turns the I/O bans off (TRACING.md, \"Chokepoints\")");
-            }
+        let groups = allow_groups(&code);
+        if let Some(broad) = groups.iter().flatten().find(|lint| TOO_BROAD.contains(&lint.as_str())) {
+            panic!("{file}:{line}: `{broad}` is too broad an allow: it turns the I/O bans off (TRACING.md, \"Chokepoints\")");
         }
-        let mut lints: Vec<String> =
-            named.iter().filter_map(|n| n.strip_prefix("clippy::")).filter(|l| l.starts_with("disallowed_")).map(str::to_string).collect();
+        let mut lints: Vec<String> = groups
+            .iter()
+            .flatten()
+            .filter_map(|lint| lint.strip_prefix("clippy::"))
+            .filter(|lint| lint.starts_with("disallowed_"))
+            .map(str::to_string)
+            .collect();
         if lints.is_empty() {
+            assert!(
+                !syntax_only(&code).contains("clippy::disallowed_"),
+                "{file}:{line}: an attribute naming a disallowed_* lint that is neither allow nor expect"
+            );
             continue;
         }
-        assert!(allows, "{file}:{line}: an attribute naming a disallowed_* lint that is neither allow nor expect");
         lints.sort();
         let reason = code
             .split_once("reason = \"")
@@ -170,10 +209,20 @@ fn an_allow_over_several_lines_is_found() {
 
 #[test]
 fn an_allow_that_covers_the_bans_without_naming_them_fails() {
-    for broad in ["#[allow(clippy::all)]", "#![allow(warnings)]", "#[allow(\n  clippy::style\n)]", "#[expect(clippy::style, reason = \"x\")]"] {
+    for broad in [
+        "#[allow(clippy::all)]",
+        "#![allow(warnings)]",
+        "#[allow(\n  clippy::style\n)]",
+        "#[expect(clippy::style, reason = \"x\")]",
+        "#[cfg_attr(test, allow(clippy::too_many_arguments, reason = \"x\"), allow(clippy::all))]",
+        "#[allow(clippy :: all) ]",
+    ] {
         let caught = std::panic::catch_unwind(|| allow_sites("a.rs", broad));
         assert!(caught.is_err(), "{broad}");
     }
+    // A second group in one attribute is a site too.
+    let two = "#[cfg_attr(test, allow(clippy::too_many_arguments, reason = \"x\"), allow(clippy::disallowed_types, reason = \"y\"))]";
+    assert_eq!(allow_sites("a.rs", two).len(), 1);
     // Other lints, and these words in a reason, are fine.
     assert!(allow_sites("a.rs", "#[allow(clippy::too_many_arguments, reason = \"not clippy::all, no warnings\")]").is_empty());
 }
