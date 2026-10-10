@@ -43,3 +43,11 @@ Links use `SITE_URL`, like the emails.
 ## Running the server
 
 for development purposes you can add an .env file to the root folder and the server will automatically parse. However for production you need to set the environment variables manually for security purposes.
+
+## Tests
+
+`cargo test` starts a throwaway Postgres in Docker for the tests that need a database
+(testcontainers), so Docker has to be running. To use an existing empty database instead,
+set `TEST_DATABASE_URL`. `cargo clippy --all-targets -- -D warnings` also enforces the
+tracing rules: `clippy.toml` bans the untraced I/O and task APIs, and every exception is
+listed in `allowed_raw_io.toml` (see TRACING.md at the repository root).

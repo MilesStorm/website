@@ -10,6 +10,13 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
 };
 
+/// The log filter when `RUST_LOG` isn't set. It also decides which spans exist (TRACING.md,
+/// "Log level"). Targets match by prefix: `sqlx=warn` would hide sqlx_tracing's query spans
+/// too, hence the override. `sqlx::pool::acquire=info` lets through sqlx's report of a slow
+/// pool acquire, which becomes the `db.pool.acquire` span.
+const LOG_FILTER: &str =
+    "info,sqlx=warn,sqlx::pool::acquire=info,sqlx_tracing=info,tower_sessions=warn,axum_login=warn,opentelemetry=warn";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Only init OTLP when the endpoint is explicitly configured. In dev (no env var) the
@@ -20,7 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let (otel_layer, otel_log_layer, otel_provider, otel_log_provider): (
+    let (otel_layer, pool_acquire_layer, otel_log_layer, otel_provider, otel_log_provider): (
+        Option<_>,
         Option<_>,
         Option<_>,
         Option<SdkTracerProvider>,
@@ -55,26 +63,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let log_bridge = log_bridge(&log_provider);
 
                 (
-                    Some(tracing_opentelemetry::layer().with_tracer(tracer)),
+                    Some(tracing_opentelemetry::layer().with_tracer(tracer.clone())),
+                    Some(auth::trace::PoolAcquireSpans(tracer)),
                     Some(log_bridge),
                     Some(provider),
                     Some(log_provider),
                 )
             }
-            Err(_) => (None, None, None, None),
+            Err(_) => (None, None, None, None, None),
         };
 
     // JSON structured logging — one object per line, parsed by Loki / any log aggregator.
     // The OTel log bridge additionally ships log events via OTLP so Loki entries carry
     // trace_id/span_id, enabling Tempo → Loki correlation.
-    // The filter also decides which spans exist (TRACING.md, "Log level"). Targets match by
-    // prefix: `sqlx=warn` would hide sqlx_tracing's query spans too, hence the override.
     tracing_subscriber::registry()
-        .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
-            |_| "info,sqlx=warn,sqlx_tracing=info,tower_sessions=warn,axum_login=warn,opentelemetry=warn".into(),
-        )))
+        .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| LOG_FILTER.into())))
         .with(tracing_subscriber::fmt::layer().json())
         .with(otel_layer)
+        .with(pool_acquire_layer)
         .with(otel_log_layer)
         .try_init()?;
 
@@ -88,11 +94,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("starting auth service");
 
-    let result = auth::Auth::new().await?.server().await;
+    // A failed start is flushed too: its spans and logs say why.
+    let result = async { auth::Auth::new().await?.server().await }.await;
 
-    // Flush buffered spans and log records before exit.
-    if let Some(provider) = otel_provider {
-        provider.shutdown()?;
+    // Flush buffered spans and log records before exit. The tracer first: the logger still
+    // has to carry its failure.
+    if let Some(provider) = otel_provider
+        && let Err(e) = provider.shutdown()
+    {
+        tracing::error!(error = %e, "flushing spans at shutdown failed");
     }
     if let Some(provider) = otel_log_provider {
         let _ = provider.shutdown();

@@ -12,6 +12,7 @@ use tracing::info;
 
 use super::telemetry;
 use super::user::Backend;
+use super::{GAME_HOST, trace};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, FromRow)]
 pub struct Permission {
@@ -131,7 +132,7 @@ mod get {
             Some(user) => {
                 tracing::info!("{:?} restarted valheim server", user);
 
-                match reqwest::get("http://192.168.1.21:9090/valheim").await {
+                match auth_session.backend.game_http.get(format!("{GAME_HOST}/valheim")).send().await {
                     Ok(resp) => {
                         let json: Result<DockerRequestResponse, reqwest::Error> =
                             resp.json::<DockerRequestResponse>().await;
@@ -197,7 +198,7 @@ mod get {
             Some(user) => {
                 tracing::info!("{:?} {}ed ark server", user, op);
 
-                match reqwest::get(format!("http://192.168.1.21:9090/ark/{op}")).await {
+                match auth_session.backend.game_http.get(format!("{GAME_HOST}/ark/{op}")).send().await {
                     Ok(resp) => {
                         let json: Result<DockerRequestResponse, reqwest::Error> =
                             resp.json::<DockerRequestResponse>().await;
@@ -216,12 +217,14 @@ mod get {
                             }
                             Err(ere) => {
                                 telemetry::ark_command(&op_str, "error");
+                                trace::fail(&tracing::Span::current(), "bad_body");
                                 (StatusCode::INTERNAL_SERVER_ERROR, ere.to_string()).into_response()
                             }
                         }
                     }
                     Err(_) => {
                         telemetry::ark_command(&op_str, "unreachable");
+                        trace::fail(&tracing::Span::current(), "unreachable");
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "Failed to {op} ark server",
@@ -263,7 +266,8 @@ impl AuthzBackend for Backend {
         )
         .bind(user.id())
         .fetch_all(&self.db)
-        .await?;
+        .await
+        .inspect_err(trace::db_failed)?;
 
         info!("Permissions: {:?} for user {:?}", &permissions, &user);
 

@@ -1,7 +1,7 @@
 use axum::response::IntoResponse;
 use axum_login::tower_sessions::Session;
 use serde::Deserialize;
-use tokio::{signal, task::AbortHandle};
+use tokio::signal;
 
 const COUNTER_KEY: &str = "counter";
 
@@ -24,7 +24,7 @@ pub async fn handler(session: Session) -> impl IntoResponse {
     tracing::trace!("Current count: {}", counter.0);
 }
 
-pub async fn shutdown_signal(deletion_task_abot_handle: AbortHandle) {
+pub async fn shutdown_signal() {
     let ctrl_c = async {
         signal::ctrl_c().await.expect("Failed to listen for ctrl+C");
     };
@@ -43,11 +43,9 @@ pub async fn shutdown_signal(deletion_task_abot_handle: AbortHandle) {
     tokio::select! {
         _ = ctrl_c => {
             println!("Received SIGINT signal");
-            deletion_task_abot_handle.abort()
         }
         _ = terminate => {
             println!("Received SIGTERM signal");
-            deletion_task_abot_handle.abort()
         }
     }
 }

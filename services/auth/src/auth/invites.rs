@@ -33,6 +33,7 @@ use super::account_email::{db_error, error, hash, new_code};
 use super::internal::InternalState;
 use super::mail::site_url;
 use super::telemetry;
+use super::trace;
 
 /// Longest a link can work, in days.
 const MAX_DAYS: i64 = 365;
@@ -268,7 +269,7 @@ enum Redeemed {
 #[tracing::instrument(name = "invite.redeem", skip_all)]
 async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) -> Response {
     let result: Result<Redeemed, sqlx::Error> = async {
-        let mut tx = state.db.begin().await?;
+        let mut tx = trace::begin(&state.db).await?;
         // Locked, so two people can't both take the last use.
         let invite: Option<InviteRow> = sqlx::query_as(&format!(
             "SELECT i.id, i.role_id, r.name AS role, ({LIVE}) AS live \
@@ -277,13 +278,19 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
         .bind(hash(&req.code))
         .fetch_optional(&mut tx.executor())
         .await?;
-        let Some(invite) = invite else { return Ok(Redeemed::Invalid) };
+        let Some(invite) = invite else {
+            trace::rollback(tx).await;
+            return Ok(Redeemed::Invalid);
+        };
         let user: Option<(i64,)> =
             sqlx::query_as("SELECT user_id FROM bff_tokens WHERE token = $1 AND expires_at > NOW()")
                 .bind(&req.token)
                 .fetch_optional(&mut tx.executor())
                 .await?;
-        let Some((user_id,)) = user else { return Ok(Redeemed::LoggedOut) };
+        let Some((user_id,)) = user else {
+            trace::rollback(tx).await;
+            return Ok(Redeemed::LoggedOut);
+        };
         // Opening the link again after joining (e.g. the page after signing up).
         let (already,): (bool,) = sqlx::query_as(
             "SELECT EXISTS (SELECT 1 FROM invite_redemptions WHERE invite_id = $1 AND user_id = $2)",
@@ -301,9 +308,11 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
             .bind(invite.role_id)
             .fetch_one(&mut tx.executor())
             .await?;
+            trace::rollback(tx).await;
             return Ok(if has_role { Redeemed::Joined(invite.role, false) } else { Redeemed::Removed });
         }
         if !invite.live {
+            trace::rollback(tx).await;
             return Ok(Redeemed::Invalid);
         }
         let granted = sqlx::query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
@@ -324,7 +333,7 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
                 .execute(&mut tx.executor())
                 .await?;
         }
-        tx.commit().await?;
+        trace::commit(tx).await?;
         tracing::info!(user_id, invite_id = invite.id, role = %invite.role, new_role = granted > 0, "invite redeemed");
         Ok(Redeemed::Joined(invite.role, true))
     }

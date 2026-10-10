@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use super::trace::{self, Peer, TracedClient};
+
 const RESEND_URL: &str = "https://api.resend.com/emails";
 const DEFAULT_FROM: &str = "milesstorm.com <no-reply@milesstorm.com>";
 
@@ -28,7 +30,9 @@ pub struct Mail {
 #[derive(Clone)]
 pub enum Mailer {
     Resend {
-        http: reqwest::Client,
+        http: TracedClient,
+        /// `RESEND_URL`, or a stand-in server in tests.
+        url: Arc<str>,
         key: Arc<str>,
         from: Arc<str>,
     },
@@ -55,10 +59,8 @@ impl Mailer {
                     .unwrap_or_else(|| DEFAULT_FROM.to_string());
                 tracing::info!(%from, "sending email through Resend");
                 Mailer::Resend {
-                    http: reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(15))
-                        .build()
-                        .expect("could not build the email HTTP client"),
+                    http: resend_client(),
+                    url: RESEND_URL.into(),
                     key: key.trim().into(),
                     from: from.into(),
                 }
@@ -76,20 +78,24 @@ impl Mailer {
 
     /// Sends `mail`. `kind` names it in logs and metrics.
     #[tracing::instrument(name = "email.send", skip_all, fields(kind = kind))]
-    pub async fn send(&self, kind: &str, mail: &Mail) -> Result<(), String> {
+    pub async fn send(&self, kind: &str, mail: &Mail) -> Result<(), SendError> {
         let result = self.deliver(kind, mail).await;
         super::telemetry::email(kind, if result.is_ok() { "sent" } else { "failed" });
+        // Resend's reply can repeat the address, so the span gets the error's type only.
+        if let Err(e) = &result {
+            trace::fail(&tracing::Span::current(), e.error_type.clone());
+        }
         result
     }
 
-    async fn deliver(&self, kind: &str, mail: &Mail) -> Result<(), String> {
-        let (http, key, from) = match self {
-            Mailer::Resend { http, key, from } => (http, key, from),
+    async fn deliver(&self, kind: &str, mail: &Mail) -> Result<(), SendError> {
+        let (http, url, key, from) = match self {
+            Mailer::Resend { http, url, key, from } => (http, url, key, from),
             Mailer::Off if cfg!(debug_assertions) => {
                 tracing::info!(kind, to = %mail.to, subject = %mail.subject, body = %mail.text, "email (not sent: no RESEND_API_KEY)");
                 return Ok(());
             }
-            Mailer::Off => return Err("no RESEND_API_KEY".into()),
+            Mailer::Off => return Err(SendError::new("no_api_key", "no RESEND_API_KEY")),
         };
 
         #[derive(Serialize)]
@@ -101,20 +107,52 @@ impl Mailer {
             html: &'a str,
         }
         let resp = http
-            .post(RESEND_URL)
+            .post(&**url)
             .bearer_auth(key)
             .header(reqwest::header::USER_AGENT, "milesstorm-auth")
             .json(&Body { from, to: [&mail.to], subject: &mail.subject, text: &mail.text, html: &mail.html })
             .send()
             .await
-            .map_err(|e| format!("Resend unreachable: {e}"))?;
+            .map_err(|e| SendError::new("unreachable", format!("Resend unreachable: {e}")))?;
         let status = resp.status();
         if status.is_success() {
             return Ok(());
         }
         // Resend's error body says what's wrong (bad key, unverified domain, rate limit).
         let body = resp.text().await.unwrap_or_default();
-        Err(format!("Resend returned {status}: {}", body.chars().take(300).collect::<String>()))
+        Err(SendError::new(
+            status.as_str().to_owned(),
+            format!("Resend returned {status}: {}", body.chars().take(300).collect::<String>()),
+        ))
+    }
+}
+
+/// The client for Resend's API.
+fn resend_client() -> TracedClient {
+    trace::client(
+        Peer { service: "resend", expected: &[] },
+        std::time::Duration::from_secs(15),
+        reqwest::redirect::Policy::default(),
+    )
+}
+
+/// Why an email wasn't sent. It prints as the full reason, for the log.
+#[derive(Debug)]
+pub struct SendError {
+    /// Safe on a span: `unreachable`, `no_api_key`, or Resend's HTTP status.
+    pub error_type: std::borrow::Cow<'static, str>,
+    reason: String,
+}
+
+impl SendError {
+    fn new(error_type: impl Into<std::borrow::Cow<'static, str>>, reason: impl Into<String>) -> Self {
+        Self { error_type: error_type.into(), reason: reason.into() }
+    }
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
     }
 }
 
@@ -200,7 +238,59 @@ fn escape(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use axum::routing::post;
+    use opentelemetry::trace::{SpanKind, Status};
+
+    use super::super::trace::testing::{attr, pipeline, serve, text};
     use super::*;
+
+    #[tokio::test]
+    async fn sending_is_a_client_span_and_a_refusal_keeps_the_address_off_spans() {
+        let traced = pipeline();
+        let traceparent = Arc::new(Mutex::new(String::new()));
+        let seen = traceparent.clone();
+        let resend = serve(
+            axum::Router::new()
+                .route("/emails", post(move |headers: axum::http::HeaderMap| async move {
+                    *seen.lock().unwrap() = headers["traceparent"].to_str().unwrap().to_string();
+                }))
+                // Resend's refusals repeat what was sent.
+                .route("/refused", post(|body: String| async move {
+                    (axum::http::StatusCode::UNPROCESSABLE_ENTITY, format!("invalid: {body}"))
+                })),
+        )
+        .await;
+        let mailer = |path: &str| Mailer::Resend {
+            http: resend_client(),
+            url: format!("{resend}{path}").into(),
+            key: "key".into(),
+            from: DEFAULT_FROM.into(),
+        };
+        let mail = Mail { to: "ada@example.com".into(), subject: "s".into(), text: "t".into(), html: "h".into() };
+
+        mailer("/emails").send("verify_email", &mail).await.unwrap();
+        let refused = mailer("/refused").send("verify_email", &mail).await.unwrap_err();
+        // The log still gets Resend's reason.
+        assert!(refused.to_string().contains("ada@example.com"));
+
+        let [sent, failed] = &traced.named("email.send")[..] else { panic!("two email.send spans") };
+        let client = traced.span("POST /emails");
+        assert_eq!(client.span_kind, SpanKind::Client);
+        assert_eq!(client.parent_span_id, sent.span_context.span_id());
+        assert_eq!(attr(&client, "peer.service").as_deref(), Some("resend"));
+        assert_eq!(
+            *traceparent.lock().unwrap(),
+            format!("00-{}-{}-01", sent.span_context.trace_id(), client.span_context.span_id())
+        );
+        assert_eq!(sent.status, Status::Unset);
+        assert_eq!(failed.status, Status::error(""));
+        assert_eq!(attr(failed, "error.type").as_deref(), Some("422"));
+        for span in traced.spans() {
+            assert!(!text(&span).contains("ada@example.com"), "{} holds the address", span.name);
+        }
+    }
 
     #[test]
     fn names_are_escaped_in_html_but_not_text() {
