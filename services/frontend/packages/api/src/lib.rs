@@ -1181,7 +1181,17 @@ mod tests {
     #[tokio::test]
     async fn password_login_preserves_rejections_over_http() {
         use axum::response::IntoResponse;
+        use opentelemetry::trace::TracerProvider as _;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let exporter = opentelemetry_sdk::trace::InMemorySpanExporter::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test"))),
+        );
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1207,6 +1217,20 @@ mod tests {
             };
             let (result, ()) = tokio::join!(request, upstream);
             assert_eq!(result.unwrap_err().into_response().status().as_u16(), expected);
+
+            // In the trace, a wrong password is an answer (the status code is recorded, no
+            // span is an error); auth being unusable fails the server function's span.
+            let spans = exporter.get_finished_spans().unwrap();
+            exporter.reset();
+            let span = |name: &str| spans.iter().find(|s| s.name == name).unwrap();
+            let failed = |name: &str| matches!(span(name).status, opentelemetry::trace::Status::Error { .. });
+            let call = span("POST /internal/token/exchange");
+            let recorded = call.attributes.iter().find(|kv| kv.key.as_str() == "http.response.status_code");
+            assert_eq!(recorded.map(|kv| kv.value.to_string()), Some(status.to_string()));
+            assert_eq!(failed("bff.login_password"), expected == 502, "{status} {body}");
+            // 401 is the token endpoints' expected answer (so is auth's own 401 for a bad
+            // service secret, which the server function's span reports instead).
+            assert_eq!(failed("POST /internal/token/exchange"), status != 401, "{status} {body}");
         }
         drop(listener);
         let result = super::login_password("tester".into(), "wrong-password".into()).await;

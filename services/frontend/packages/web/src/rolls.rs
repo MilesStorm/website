@@ -370,6 +370,14 @@ impl RollHub {
         tx
     }
 
+    /// One permission recheck of a long-lived connection ([`Self::still_allowed`]), as a
+    /// trace of its own, linked to the connection's `session`.
+    pub async fn recheck(&self, session: &Session, session_id: Option<Id>, user: &str) -> bool {
+        let span = api::unit_span!(None, "arcane.recheck", otel.name = "permission recheck");
+        session.unit(&span);
+        self.still_allowed(session_id, user).instrument(span).await
+    }
+
     /// Whether the session behind a long-lived connection still exists (not logged
     /// out), still belongs to `user`, and still holds `arcane`.
     pub async fn still_allowed(&self, session_id: Option<Id>, user: &str) -> bool {
@@ -566,6 +574,74 @@ fn deliver_span(session: &Session, roll: Carried<Delivery>, replay: bool) -> (tr
     (span, delivery.roll)
 }
 
+impl RollHub {
+    /// The events of a new roll stream for `user`: the stored last roll as a `replay`
+    /// event, then a `roll` event per settled roll, until the session behind
+    /// `session_id` ends or the server shuts down. None when the user already has
+    /// `MAX_STREAMS_PER_USER` streams open.
+    pub(crate) async fn events(
+        &self,
+        user: String,
+        session_id: Option<Id>,
+    ) -> Option<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+        // The stream's open span: the part of it that belongs to this request.
+        let open = tracing::info_span!("arcane.rolls_stream", otel.name = "arcane.rolls_stream open", user = %user);
+        // Subscribe before reading the stored roll so nothing published in between is
+        // lost; the duplicate this can cause is dropped below.
+        let rx = self.subscribe(&user)?;
+        let state = RollStream {
+            pending: self.last_roll(&user).instrument(open.clone()).await.map(Arc::<str>::from),
+            rx,
+            sent: None,
+            recheck: interval_at(Instant::now() + RECHECK, RECHECK),
+            session_id,
+            session: Session::open("arcane.rolls_stream", &open),
+            user,
+            hub: self.clone(),
+        };
+        drop(open);
+
+        Some(stream::unfold(state, |mut st| async move {
+            loop {
+                let (next, replay) = match st.pending.take() {
+                    Some(roll) => (Carried::with_context(Default::default(), Delivery { roll, published: None }), true),
+                    None => tokio::select! {
+                        got = st.rx.recv() => match got {
+                            Ok(p) => (p, false),
+                            Err(RecvError::Lagged(skipped)) => {
+                                st.session.dropped(skipped);
+                                continue;
+                            }
+                            Err(RecvError::Closed) => return None,
+                        },
+                        _ = st.recheck.tick() => {
+                            if st.hub.recheck(&st.session, st.session_id, &st.user).await {
+                                continue;
+                            }
+                            // Logged out or permission removed: end the stream; the
+                            // client reconnects and gets 401/403.
+                            st.session.set_reason("session ended or permission removed");
+                            return None;
+                        }
+                        _ = st.hub.shutdown.cancelled() => {
+                            st.session.set_reason("shutdown");
+                            return None;
+                        }
+                    },
+                };
+                if st.sent.as_deref() == Some(&*next.roll) {
+                    continue;
+                }
+                let (span, roll) = deliver_span(&st.session, next, replay);
+                st.session.roll();
+                st.sent = Some(roll.clone());
+                let event = span.in_scope(|| Event::default().event(if replay { "replay" } else { "roll" }).data(&*roll));
+                return Some((Ok::<_, Infallible>(event), st));
+            }
+        }))
+    }
+}
+
 /// `GET /api/arcane/rolls`: server-sent events, one `roll` event per settled roll,
 /// starting with the user's last roll from the past hour (if any) as a `replay`
 /// event, so a viewer can show it without acting on it as a new roll (the extension
@@ -581,65 +657,9 @@ pub async fn arcane_rolls(
         Err(Denied::NoPermission) => return no_store(StatusCode::FORBIDDEN.into_response()),
     };
 
-    // The stream's open span: the part of it that belongs to this request.
-    let open = tracing::info_span!("arcane.rolls_stream", otel.name = "arcane.rolls_stream open", user = %user);
-    // Subscribe before reading the stored roll so nothing published in between is
-    // lost; the duplicate this can cause is dropped below.
-    let Some(rx) = hub.subscribe(&user) else {
+    let Some(events) = hub.events(user, session.id()).await else {
         return no_store(StatusCode::TOO_MANY_REQUESTS.into_response());
     };
-    let state = RollStream {
-        pending: hub.last_roll(&user).instrument(open.clone()).await.map(Arc::<str>::from),
-        rx,
-        sent: None,
-        recheck: interval_at(Instant::now() + RECHECK, RECHECK),
-        session_id: session.id(),
-        session: Session::open("arcane.rolls_stream", &open),
-        user,
-        hub,
-    };
-    drop(open);
-
-    let events = stream::unfold(state, |mut st| async move {
-        loop {
-            let (next, replay) = match st.pending.take() {
-                Some(roll) => (Carried::with_context(Default::default(), Delivery { roll, published: None }), true),
-                None => tokio::select! {
-                    got = st.rx.recv() => match got {
-                        Ok(p) => (p, false),
-                        Err(RecvError::Lagged(skipped)) => {
-                            st.session.dropped(skipped);
-                            continue;
-                        }
-                        Err(RecvError::Closed) => return None,
-                    },
-                    _ = st.recheck.tick() => {
-                        let span = api::unit_span!(None, "arcane.recheck", otel.name = "permission recheck");
-                        st.session.unit(&span);
-                        if st.hub.still_allowed(st.session_id, &st.user).instrument(span).await {
-                            continue;
-                        }
-                        // Logged out or permission removed: end the stream; the
-                        // client reconnects and gets 401/403.
-                        st.session.set_reason("session ended or permission removed");
-                        return None;
-                    }
-                    _ = st.hub.shutdown.cancelled() => {
-                        st.session.set_reason("shutdown");
-                        return None;
-                    }
-                },
-            };
-            if st.sent.as_deref() == Some(&*next.roll) {
-                continue;
-            }
-            let (span, roll) = deliver_span(&st.session, next, replay);
-            st.session.roll();
-            st.sent = Some(roll.clone());
-            let event = span.in_scope(|| Event::default().event(if replay { "replay" } else { "roll" }).data(&*roll));
-            return Some((Ok::<_, Infallible>(event), st));
-        }
-    });
 
     let mut resp = Sse::new(events)
         .keep_alive(KeepAlive::new().interval(KEEP_ALIVE))
@@ -699,6 +719,134 @@ mod tests {
         assert!(!is_roll(r#"{"type":"frame","detections":[],"frame_ms":3}"#));
         assert!(!is_roll(r#"{"type":"error","error":"roll"}"#));
         assert!(!is_roll("not json \"roll\""));
+    }
+
+    use crate::trace_tests::{attr, context_of, exporting, links, span};
+    use opentelemetry::trace::{SpanId, SpanKind, TraceContextExt as _};
+
+    const ROLL: &str = r#"{"complete":true,"dice":[],"roll_id":"18f3a2b-0badf00d","type":"roll"}"#;
+
+    #[test]
+    fn the_trace_field_is_taken_off_a_message_and_read() {
+        let (_exporter, _guard) = exporting();
+        let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let message = format!(r#"{{"type":"roll","_trace":{{"traceparent":"{traceparent}"}},"roll_id":"18f3a2b-0badf00d","dice":[],"complete":true}}"#);
+
+        let (envelope, roll) = split_trace(&message);
+        assert_eq!(roll, ROLL);
+        let sc = envelope.cx.span().span_context().clone();
+        assert_eq!(format!("00-{}-{}-01", sc.trace_id(), sc.span_id()), traceparent);
+        assert!(sc.is_remote());
+
+        // A field that isn't a usable context is still taken off.
+        for bad in [r#""_trace":{"traceparent":"00-garbage"}"#, r#""_trace":7"#, r#""_trace":{}"#] {
+            let message = format!(r#"{{"type":"roll",{bad}}}"#);
+            let (envelope, roll) = split_trace(&message);
+            assert_eq!(roll, r#"{"type":"roll"}"#);
+            assert!(!envelope.cx.span().span_context().is_valid());
+        }
+    }
+
+    #[test]
+    fn messages_without_a_trace_field_are_left_as_they_are() {
+        // Byte for byte: key order and spacing are ai_pipeline's.
+        for message in [
+            r#"{"type":"roll",  "roll_id":"a", "b":1}"#,
+            r#"{"type":"frame","detections":[{"label":"_trace"}]}"#,
+            r#"{"type":"frame","nested":{"_trace":{"traceparent":"x"}}}"#,
+            "not json \"_trace\"",
+        ] {
+            let (envelope, same) = split_trace(message);
+            assert!(matches!(same, Cow::Borrowed(_)), "{message}");
+            assert_eq!(same, message);
+            assert!(!envelope.cx.span().span_context().is_valid());
+        }
+    }
+
+    #[test]
+    fn a_roll_carries_its_publish_span_over_redis_and_arrives_without_it() {
+        let (_exporter, _guard) = exporting();
+        let publish = tracing::info_span!("roll.publish");
+        let publish_sc = context_of(&publish);
+
+        let on_wire = with_trace(ROLL, &publish);
+        assert!(on_wire.contains("_trace"));
+        let (envelope, roll) = split_trace(&on_wire);
+        assert_eq!(roll, ROLL);
+        let sc = envelope.cx.span().span_context().clone();
+        assert_eq!((sc.trace_id(), sc.span_id()), (publish_sc.trace_id(), publish_sc.span_id()));
+        assert!(envelope.published.is_some_and(|at| at.elapsed().is_ok_and(|age| age < LIVE)));
+
+        // Not a JSON object: published as it is.
+        assert_eq!(with_trace("[1]", &publish), "[1]");
+    }
+
+    #[test]
+    fn a_roll_delivered_late_or_from_storage_roots_its_own_trace() {
+        let (exporter, _guard) = exporting();
+        let open = tracing::info_span!("open");
+        let session = Session::open("arcane.rolls_stream", &open);
+        let open_sc = context_of(&open);
+        drop(open);
+        let publish = tracing::info_span!("roll.publish");
+        let publish_sc = context_of(&publish);
+        let roll = |published| {
+            let _in = publish.enter();
+            Carried::new(Delivery { roll: Arc::from(ROLL), published })
+        };
+        let deliver = |roll: Carried<Delivery>| {
+            exporter.reset();
+            drop(deliver_span(&session, roll, false));
+            exporter.get_finished_spans().unwrap().into_iter().find(|s| s.name == "roll deliver").unwrap()
+        };
+
+        // Live: a child of the publish span.
+        let live = deliver(roll(Some(SystemTime::now())));
+        assert_eq!(live.span_kind, SpanKind::Consumer);
+        assert_eq!(live.parent_span_id, publish_sc.span_id());
+        assert_eq!(links(&live), std::slice::from_ref(&open_sc));
+        // A publisher whose clock is a little ahead is still live.
+        let ahead = deliver(roll(Some(SystemTime::now() + Duration::from_secs(2))));
+        assert_eq!(ahead.parent_span_id, publish_sc.span_id());
+
+        // Published too long ago, or read back from storage: a root that links to it.
+        for published in [Some(SystemTime::now() - LIVE - Duration::from_secs(1)), None] {
+            let late = deliver(roll(published));
+            assert_eq!(late.parent_span_id, SpanId::INVALID);
+            assert_ne!(late.span_context.trace_id(), publish_sc.trace_id());
+            assert_eq!(links(&late), [publish_sc.clone(), open_sc.clone()]);
+            assert_eq!(attr(&late, "trace_id"), Some(late.span_context.trace_id().to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn drops_are_an_event_on_the_next_unit_span_and_counted_at_close() {
+        let (exporter, _guard) = exporting();
+        let open = tracing::info_span!("open");
+        let session = Session::open("arcane.ws_session", &open);
+        drop(open);
+
+        session.frame();
+        session.dropped(2);
+        let unit = tracing::info_span!("unit");
+        session.unit(&unit);
+        drop(unit);
+        let unit = span(&exporter, "unit").await;
+        let dropped: Vec<_> = unit.events.iter().filter(|e| e.name == "dropped").collect();
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].attributes[0].value.to_string(), "2");
+
+        // Reported once: the next unit has none, the close span has the total.
+        let next = tracing::info_span!("next unit");
+        session.unit(&next);
+        drop(next);
+        assert!(span(&exporter, "next unit").await.events.iter().all(|e| e.name != "dropped"));
+        session.dropped(1);
+        drop(session);
+        let close = span(&exporter, "arcane.ws_session close").await;
+        assert_eq!(attr(&close, "session.drops").as_deref(), Some("3"));
+        assert_eq!(attr(&close, "session.frames").as_deref(), Some("1"));
+        assert!(close.events.iter().any(|e| e.name == "dropped"), "the last drop has no later unit");
     }
 
     #[test]

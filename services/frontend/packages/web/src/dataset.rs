@@ -47,6 +47,13 @@ pub fn dataset() -> Option<&'static Dataset> {
     SCHEMA_READY.load(Ordering::Acquire).then(|| STORE.get()).flatten()
 }
 
+/// Makes `store` the configured store with its schema applied, as [`start`] does.
+#[cfg(test)]
+pub(crate) fn install_for_tests(store: Dataset) {
+    let _ = STORE.set(store);
+    SCHEMA_READY.store(true, Ordering::Release);
+}
+
 /// The store whenever it's configured, schema applied or not. Only for deleting what
 /// users shared: that must keep working even while the schema step can't finish.
 pub fn configured() -> Option<&'static Dataset> {
@@ -279,6 +286,24 @@ impl Dataset {
                 token: tokio::sync::Mutex::new(None),
             }),
         })
+    }
+
+    /// A store at `url` (a stand-in SurrealDB) with the login the stand-ins expect.
+    #[cfg(test)]
+    pub(crate) fn for_tests(url: String, pass: &str) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                http: api::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).unwrap(),
+                rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
+                url,
+                user: "dice".into(),
+                pass: pass.into(),
+                ns: "milesstorm".into(),
+                db: "arcane".into(),
+                sample_every: DEFAULT_SAMPLE_EVERY,
+                token: tokio::sync::Mutex::new(None),
+            }),
+        }
     }
 
     /// Brings SurrealDB's tables in line with `surreal/database/schema/` (surrealkit
@@ -745,19 +770,7 @@ mod auth_tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
         api::trace::spawn_loop("test: stand-in SurrealDB", async move { axum::serve(listener, app).await.unwrap() });
-        let ds = Dataset {
-            inner: Arc::new(Inner {
-                http: api::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).unwrap(),
-                rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
-                url,
-                user: "dice".into(),
-                pass: pass.into(),
-                ns: "milesstorm".into(),
-                db: "arcane".into(),
-                sample_every: DEFAULT_SAMPLE_EVERY,
-                token: tokio::sync::Mutex::new(None),
-            }),
-        };
+        let ds = Dataset::for_tests(url, pass);
         (ds, fake)
     }
 
@@ -812,6 +825,68 @@ mod auth_tests {
         let err = ds.query("RETURN 1", json!({})).await.unwrap_err().to_string();
         assert!(err.contains("signin 401") && err.contains("Authentication failed"), "{err}");
         assert!(fake.lock().unwrap().auth_seen.is_empty());
+    }
+
+    use crate::trace_tests::{attr, context_of, exporting, span, spans};
+    use opentelemetry::trace::{SpanKind, Status};
+    use tracing::Instrument as _;
+
+    #[tokio::test]
+    async fn queries_are_client_spans_and_waiting_for_a_sign_in_is_one_too() {
+        let (exporter, _guard) = exporting();
+        let (ds, _fake) = serve("pw").await;
+        let request = tracing::info_span!("request");
+        let request_sc = context_of(&request);
+        let queries = futures_util::future::join_all((0..3).map(|_| ds.query("SELECT 1", json!({}))));
+        assert!(queries.instrument(request).await.iter().all(Result::is_ok));
+
+        // One caller signs in; the others' wait for it is a span, not unexplained time.
+        let signins = spans(&exporter, "surrealdb.signin");
+        let [signin] = &signins[..] else { panic!("{} sign-ins", signins.len()) };
+        assert_eq!(signin.span_kind, SpanKind::Client);
+        assert_eq!(attr(signin, "db.operation.name").as_deref(), Some("SIGNIN"));
+        let waits = spans(&exporter, "surrealdb.token_wait");
+        assert_eq!(waits.len(), 2);
+        assert!(waits.iter().all(|w| w.parent_span_id == request_sc.span_id()));
+
+        let queries = spans(&exporter, "surrealdb.query");
+        assert_eq!(queries.len(), 3);
+        for query in &queries {
+            assert_eq!(query.span_kind, SpanKind::Client);
+            assert_eq!(query.parent_span_id, request_sc.span_id());
+            assert_eq!(attr(query, "db.operation.name").as_deref(), Some("SELECT"));
+            assert_eq!(attr(query, "db.system.name").as_deref(), Some("surrealdb"));
+            assert_eq!(attr(query, "peer.service").as_deref(), Some("surrealdb"));
+        }
+
+        // With a token in hand nobody waits.
+        exporter.reset();
+        ds.query("SELECT 1", json!({})).await.unwrap();
+        assert!(spans(&exporter, "surrealdb.token_wait").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_store_call_marks_its_span_failed() {
+        let (exporter, _guard) = exporting();
+        let (ds, _fake) = serve("wrong").await;
+        assert!(ds.profile_picture_version(1).await.is_err());
+
+        let call = span(&exporter, "dataset.profile_picture_version").await;
+        assert!(matches!(call.status, Status::Error { .. }), "{:?}", call.status);
+        // By kind only: SurrealDB's error text can quote what was sent.
+        assert_eq!(attr(&call, "error.type").as_deref(), Some("surrealdb"));
+        assert!(call.events.is_empty());
+        let signin = span(&exporter, "surrealdb.signin").await;
+        assert!(matches!(signin.status, Status::Error { .. }));
+        assert_eq!(attr(&signin, "http.response.status_code").as_deref(), Some("401"));
+    }
+
+    #[test]
+    fn statements_are_named_by_their_first_keyword() {
+        assert_eq!(statement_kind("SELECT VALUE x FROM y;"), "SELECT");
+        assert_eq!(statement_kind("\n            LET $rec = 1;\n   UPSERT $rec"), "LET");
+        assert_eq!(statement_kind("delete a"), "DELETE");
+        assert_eq!(statement_kind(""), "");
     }
 
     fn jwt(claims: Value) -> String {

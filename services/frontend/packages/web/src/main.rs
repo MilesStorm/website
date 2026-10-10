@@ -17,6 +17,8 @@ mod capture;
 #[cfg(not(target_arch = "wasm32"))]
 mod dataset;
 mod sharing;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod trace_tests;
 mod account;
 mod emails;
 mod invites;
@@ -649,10 +651,7 @@ async fn proxy_ws(
             let mut recheck = tokio::time::interval_at(start, rolls::RECHECK);
             loop {
                 recheck.tick().await;
-                // Each recheck is a trace of its own, linked to the session.
-                let span = api::unit_span!(None, "arcane.recheck", otel.name = "permission recheck");
-                session.unit(&span);
-                if !hub.still_allowed(session_id, &user).instrument(span).await { break; }
+                if !hub.recheck(&session, session_id, &user).await { break; }
             }
         } => {
             tracing::info!("arcane WebSocket closed: session ended or permission removed");
