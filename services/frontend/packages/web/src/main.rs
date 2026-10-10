@@ -516,7 +516,7 @@ async fn arcane_ws_proxy(
     // The camera session outlives this request (it ends at the 101). This span is its short
     // open span, in the request's trace: it ends once ai_pipeline is connected (whose
     // connection span joins it). What the session does after that is traced per roll.
-    let open = api::detached_span!("arcane.ws_session", otel.name = "arcane.ws_session open", user = %user);
+    let open = api::detached_span!("arcane.ws_session", otel.name = "session open", user = %user);
     // The browser's `camera session` span (assets/trace.js), passed in the URL.
     if let Some(tp) = query_traceparent(&uri) {
         api::trace::link_traceparent(&open, tp);

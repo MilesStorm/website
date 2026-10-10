@@ -145,7 +145,7 @@ async fn a_roll_is_one_trace_from_the_camera_to_every_stream() {
     assert_eq!(stored, roll);
 
     // The delivery continues the roll's trace, and links to the stream it went out on.
-    let open = span(&exporter, "arcane.rolls_stream open").await;
+    let open = span(&exporter, "session open").await;
     let deliver = span(&exporter, "roll deliver").await;
     assert_eq!(deliver.span_kind, SpanKind::Consumer);
     assert_eq!(deliver.parent_span_id, publish_sc.span_id());
@@ -158,7 +158,7 @@ async fn a_roll_is_one_trace_from_the_camera_to_every_stream() {
     let events = hub.events("miles".into(), None).await.unwrap();
     let mut late = axum::response::sse::Sse::new(events).into_response().into_body().into_data_stream();
     assert_eq!(next_event(&mut late).await, format!("event: replay\ndata: {roll}\n\n"));
-    let late_open = span(&exporter, "arcane.rolls_stream open").await;
+    let late_open = span(&exporter, "session open").await;
     let replay = span(&exporter, "roll deliver").await;
     assert_eq!(replay.parent_span_id, SpanId::INVALID);
     assert_ne!(replay.span_context.trace_id(), settle_sc.trace_id());
@@ -175,7 +175,7 @@ async fn a_roll_is_one_trace_from_the_camera_to_every_stream() {
     // Closing a stream leaves a close span: a root that links to the open span, with the
     // same session ID and what the stream did.
     drop(late);
-    let close = span(&exporter, "arcane.rolls_stream close").await;
+    let close = span(&exporter, "session close").await;
     assert_eq!(close.parent_span_id, SpanId::INVALID);
     assert_eq!(links(&close), std::slice::from_ref(&late_open.span_context));
     assert_eq!(attr(&close, "session.rolls").as_deref(), Some("1"));
@@ -291,7 +291,7 @@ async fn a_camera_session_traces_each_roll_and_keeps_the_trace_field_to_itself()
     let proxy = {
         let hub = hub.clone();
         move |ws: axum::extract::ws::WebSocketUpgrade| async move {
-            let open = api::detached_span!("arcane.ws_session", otel.name = "arcane.ws_session open", user = "miles");
+            let open = api::detached_span!("arcane.ws_session", otel.name = "session open", user = "miles");
             ws.on_upgrade(move |socket| {
                 api::trace::session(crate::proxy_ws(socket, ai_url, hub, "miles".into(), "token".into(), None, open))
             })
@@ -313,7 +313,7 @@ async fn a_camera_session_traces_each_roll_and_keeps_the_trace_field_to_itself()
     assert_eq!(replies[1], roll, "the browser gets the roll without `_trace`");
 
     // The session's open span covers connecting to ai_pipeline, whose span joins the trace.
-    let open = span(&exporter, "arcane.ws_session open").await;
+    let open = span(&exporter, "session open").await;
     let connect = span(&exporter, "GET /").await;
     assert_eq!(connect.span_kind, SpanKind::Client);
     assert_eq!(connect.parent_span_id, open.span_context.span_id());
@@ -366,10 +366,12 @@ async fn a_camera_session_traces_each_roll_and_keeps_the_trace_field_to_itself()
     while let Ok(Some(Ok(message))) = tokio::time::timeout(TIMEOUT, browser.next()).await {
         assert!(message.is_close(), "unexpected message at shutdown: {message:?}");
     }
-    let close = span(&exporter, "arcane.ws_session close").await;
+    let close = span(&exporter, "session close").await;
     assert_eq!(close.parent_span_id, SpanId::INVALID);
     assert_eq!(links(&close), std::slice::from_ref(&open.span_context));
     assert_eq!(attr(&close, "session.id"), attr(&open, "session.id"));
+    assert_eq!(attr(&open, "session.kind").as_deref(), Some("arcane.ws_session"));
+    assert_eq!(attr(&close, "session.kind").as_deref(), Some("arcane.ws_session"));
     assert_eq!(attr(&close, "session.frames").as_deref(), Some("1"));
     assert_eq!(attr(&close, "session.rolls").as_deref(), Some("1"));
     assert_eq!(attr(&close, "session.drops").as_deref(), Some("0"));

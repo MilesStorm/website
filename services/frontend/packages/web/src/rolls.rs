@@ -141,11 +141,13 @@ pub struct Session {
 }
 
 impl Session {
-    /// `open` is the session's open span (named `"<name> open"`), still open.
+    /// `open` is the session's open span (named `session open`, as ai_pipeline's), still
+    /// open. `name` tells the kinds of session apart, as `session.kind`.
     pub fn open(name: &'static str, open: &tracing::Span) -> Self {
         use opentelemetry_sdk::trace::{IdGenerator as _, RandomIdGenerator};
         let id = RandomIdGenerator::default().new_span_id().to_string();
         open.set_attribute("session.id", id.clone());
+        open.set_attribute("session.kind", name);
         Self {
             name,
             id,
@@ -190,6 +192,7 @@ impl Session {
             span.add_link(open);
         }
         span.set_attribute("session.id", self.id.clone());
+        span.set_attribute("session.kind", self.name);
         let dropped = self.unreported.swap(0, Ordering::Relaxed);
         if dropped > 0 {
             span.add_event("dropped", vec![KeyValue::new("dropped.count", dropped as i64)]);
@@ -203,7 +206,7 @@ impl Drop for Session {
         let close = api::unit_span!(
             None,
             "arcane.session_close",
-            otel.name = format!("{} close", self.name),
+            otel.name = "session close",
             session.duration_ms = self.started.elapsed().as_millis() as u64,
             session.frames = self.frames.load(Ordering::Relaxed),
             session.rolls = self.rolls.load(Ordering::Relaxed),
@@ -585,7 +588,7 @@ impl RollHub {
         session_id: Option<Id>,
     ) -> Option<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
         // The stream's open span: the part of it that belongs to this request.
-        let open = tracing::info_span!("arcane.rolls_stream", otel.name = "arcane.rolls_stream open", user = %user);
+        let open = tracing::info_span!("arcane.rolls_stream", otel.name = "session open", user = %user);
         // Subscribe before reading the stored roll so nothing published in between is
         // lost; the duplicate this can cause is dropped below.
         let rx = self.subscribe(&user)?;
@@ -843,7 +846,7 @@ mod tests {
         assert!(span(&exporter, "next unit").await.events.iter().all(|e| e.name != "dropped"));
         session.dropped(1);
         drop(session);
-        let close = span(&exporter, "arcane.ws_session close").await;
+        let close = span(&exporter, "session close").await;
         assert_eq!(attr(&close, "session.drops").as_deref(), Some("3"));
         assert_eq!(attr(&close, "session.frames").as_deref(), Some("1"));
         assert!(close.events.iter().any(|e| e.name == "dropped"), "the last drop has no later unit");
