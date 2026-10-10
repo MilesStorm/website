@@ -51,6 +51,14 @@
 | `DATASET_SAMPLE_EVERY` | `20` | For users who opted in, keep about one in N confident rolls (rolls the model is unsure about are always kept). |
 | `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins the website accepts requests from, comma-separated: `/ws/arcane`, the profile page (name, picture, sharing) and `/api/profile/picture`. Same-host origins are always allowed; plain-http ones only in debug builds. Needed for local `dx serve`, whose proxy changes the host the server sees: `http://localhost:8080,http://127.0.0.1:8080`. |
 
+## AI pipeline (`services/ai_pipeline`)
+
+### Optional — have sane defaults
+
+| Variable | Default | Description |
+|---|---|---|
+| `FRAME_TRACE_EVERY` | `10` | Of the camera frames that settle no roll, one in N gets a `frame.infer` trace (TRACING.md, "Streams"). Rolls are always traced. `0` traces only rolls. |
+
 ---
 
 ## Notes
