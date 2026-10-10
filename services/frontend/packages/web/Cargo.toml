@@ -31,7 +31,10 @@ axum-tracing-opentelemetry = { workspace = true }
 
 # Metrics (Prometheus exposition format → Alloy → Mimir)
 axum-prometheus = "0.10"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+# `signal`: SIGTERM starts the graceful shutdown (src/main.rs).
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
+# CancellationToken: tells the long-lived streams to close on shutdown.
+tokio-util = "0.7"
 # Same fred the session store re-exports; `subscriber-client` adds the
 # auto-resubscribing client used for live arcane rolls (src/rolls.rs); `i-scripts`
 # the compare-and-delete of the schema lock (src/dataset.rs).
@@ -50,8 +53,10 @@ tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# InMemoryLogExporter for the log bridge test
+# InMemoryLogExporter for the log bridge test, the in-memory span exporter for the trace tests
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# A real Redis for the roll hub's trace tests (needs Docker).
+testcontainers-modules = { version = "0.15", features = ["redis"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

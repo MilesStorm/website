@@ -47,19 +47,30 @@ fn main() {
 
 // ---- Server launch ----
 
+/// The exporters' providers, kept to flush them before the process ends.
 #[cfg(not(target_arch = "wasm32"))]
-fn server_launch() -> ! {
-    use axum::{routing::get, Router};
-    use axum_prometheus::PrometheusMetricLayer;
-    use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
+static TELEMETRY: std::sync::OnceLock<(opentelemetry_sdk::trace::SdkTracerProvider, opentelemetry_sdk::logs::SdkLoggerProvider)> =
+    std::sync::OnceLock::new();
+
+/// Sends the spans and log records still batched. Blocks until the collector has them.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn flush_telemetry() {
+    if let Some((traces, logs)) = TELEMETRY.get() {
+        let _ = traces.force_flush();
+        let _ = logs.force_flush();
+    }
+}
+
+/// How long a shutdown waits for open connections, camera sessions and detached tasks.
+/// Kubernetes kills the pod 30 s after SIGTERM; telemetry is flushed after the wait.
+#[cfg(not(target_arch = "wasm32"))]
+const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn server_launch() {
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{logs::SdkLoggerProvider, trace::SdkTracerProvider};
-    use tower_sessions::cookie::time::Duration;
-    use tower_sessions::cookie::SameSite;
-    use tower_sessions::{Expiry, SessionManagerLayer};
-    use tower_sessions_redis_store::fred::prelude::*;
-    use tower_sessions_redis_store::RedisStore;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
     let redis_host = std::env::var("REDIS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -73,8 +84,7 @@ fn server_launch() -> ! {
     };
 
     // Runtime for the OTLP (tonic) exporters, which the batch processors' own threads call
-    // into. Lives for the process lifetime because server_launch() is `-> !` and never
-    // returns, so _otel_rt is never dropped.
+    // into. Kept until the providers have shut down (the last thing this function does).
     let _otel_rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -104,7 +114,7 @@ fn server_launch() -> ! {
                         .build();
 
                     let tracer = provider.tracer("web");
-                    opentelemetry::global::set_tracer_provider(provider);
+                    opentelemetry::global::set_tracer_provider(provider.clone());
 
                     let log_exporter = opentelemetry_otlp::LogExporter::builder()
                         .with_tonic()
@@ -116,6 +126,7 @@ fn server_launch() -> ! {
                         .with_batch_exporter(log_exporter)
                         .with_resource(otel_resource())
                         .build();
+                    let _ = TELEMETRY.set((provider, log_provider.clone()));
 
                     (
                         Some(tracing_opentelemetry::layer().with_tracer(tracer)),
@@ -152,89 +163,204 @@ fn server_launch() -> ! {
     }
     // Taken by the first server start only (the schema is applied once per process).
     let store = std::sync::Mutex::new(store);
+    let shutdown = tokio_util::sync::CancellationToken::new();
 
-    dioxus::serve(move || {
-        let redis_url = redis_url.clone();
-        let store = store.lock().ok().and_then(|mut s| s.take());
-        async move {
-            use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
+    let app = {
+        let shutdown = shutdown.clone();
+        move || router(redis_url.clone(), store.lock().ok().and_then(|mut s| s.take()), shutdown.clone())
+    };
 
-            let config = Config::from_url(&redis_url).expect("invalid Redis URL");
-            let roll_config = config.clone();
-            let con_conf = ConnectionConfig {
-                tcp: TcpConfig {
-                    nodelay: Some(true),
-                    keepalive: Some(
-                        TcpKeepalive::new()
-                            .with_time(std::time::Duration::from_secs(30))
-                            .with_interval(std::time::Duration::from_secs(10))
-                            .with_retries(3),
-                    ),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let roll_con_conf = con_conf.clone();
-            let pool = Pool::new(
-                config,
-                None,
-                Some(con_conf),
-                Some(ReconnectPolicy::new_exponential(0, 100, 30_000, 2)),
-                6,
-            )
-            .expect("failed to build Redis pool");
-            pool.connect();
-            pool.wait_for_connect()
-                .await
-                .expect("failed to connect to Redis");
-            if let Some(store) = store {
-                tokio::spawn(store.clone().keep_signed_in());
-                tokio::spawn(dataset::start(store, pool.clone()));
-            }
-            let roll_hub = rolls::RollHub::connect(roll_config, roll_con_conf, pool.clone())
-                .await
-                .expect("failed to start the arcane roll subscriber");
-            let session_store = api::trace::TracedStore::new(RedisStore::new(pool), "redis");
+    // `dx serve` hot-patches the running server, which only `dioxus::serve` does. It never
+    // returns, so a debug build stops without draining or flushing.
+    if cfg!(debug_assertions) {
+        dioxus::serve(app)
+    }
 
-            let layer = SessionManagerLayer::new(session_store)
-                .with_secure(!cfg!(debug_assertions))
-                .with_same_site(SameSite::Lax)
-                .with_name("milesstorm.bff")
-                .with_expiry(Expiry::OnInactivity(Duration::days(7)));
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build the runtime")
+        .block_on(serve(app, shutdown));
 
-            let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
-
-            let router = Router::new()
-                .serve_dioxus_application(ServeConfig::default(), App)
-                .route("/oauth/start/{provider}", get(oauth_start))
-                .route("/oauth/callback/{provider}", get(oauth_callback))
-                .route("/ws/arcane", get(arcane_ws_proxy))
-                .route("/api/arcane/me", get(rolls::arcane_me))
-                .route("/api/arcane/rolls", get(rolls::arcane_rolls))
-                .route("/api/arcane/flag", axum::routing::post(capture::arcane_flag))
-                .route(
-                    "/api/profile/picture",
-                    get(account::get_picture).post(account::upload_picture).layer(
-                        // Room for the largest accepted upload; bigger bodies get 413.
-                        axum::extract::DefaultBodyLimit::max(account::PICTURE_MAX_UPLOAD),
-                    ),
-                )
-                .route(
-                    "/metrics",
-                    get(move || async move { metric_handle.render() }),
-                )
-                .layer(axum::Extension(roll_hub))
-                .layer(axum::middleware::from_fn(no_store))
-                .layer(layer)
-                .layer(axum::middleware::from_fn(api::trace::capture_request_context))
-                .layer(axum::middleware::from_fn(name_page_span))
-                .layer(OtelInResponseLayer)
-                // Prometheus scrapes every 15s; a trace each would bury the real ones.
-                .layer(OtelAxumLayer::default().filter(|path| path != "/metrics"))
-                .layer(prometheus_layer);
-            Ok(router)
+    // Everything still batched goes out before the process ends.
+    if let Some((traces, logs)) = TELEMETRY.get() {
+        if let Err(e) = traces.shutdown() {
+            eprintln!("flushing traces at shutdown failed: {e}");
         }
-    })
+        if let Err(e) = logs.shutdown() {
+            eprintln!("flushing logs at shutdown failed: {e}");
+        }
+    }
+}
+
+/// What `dioxus::serve` does in a release build (dioxus-server 0.7.10 `launch.rs`: bind the
+/// `IP`/`PORT` address, then `axum::serve`), plus a graceful shutdown on SIGTERM, which
+/// `dioxus::serve` can't do: it never returns.
+#[cfg(not(target_arch = "wasm32"))]
+async fn serve<F>(mut app: impl FnMut() -> F, shutdown: tokio_util::sync::CancellationToken)
+where
+    F: std::future::Future<Output = anyhow::Result<axum::Router>>,
+{
+    let addr = dioxus::cli_config::fullstack_address_or_localhost();
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .unwrap_or_else(|e| panic!("failed to bind to address {addr}: {e}"));
+    let router = app().await.expect("failed to build the router");
+
+    let stop = shutdown.clone();
+    api::trace::spawn_loop("shutdown: waits for SIGTERM or Ctrl-C", async move {
+        terminated().await;
+        tracing::info!("shutting down: closing streams and waiting for open requests");
+        stop.cancel();
+    });
+    serve_until(listener, router, shutdown, SHUTDOWN_WAIT).await;
+}
+
+/// Serves until `shutdown` is cancelled, then waits at most `wait` for what is still
+/// running: open requests (roll streams end by themselves: they watch `shutdown` too), then
+/// camera sessions and detached tasks (`api::trace`), which axum doesn't count.
+#[cfg(not(target_arch = "wasm32"))]
+async fn serve_until(
+    listener: tokio::net::TcpListener,
+    router: axum::Router,
+    shutdown: tokio_util::sync::CancellationToken,
+    wait: std::time::Duration,
+) {
+    let server = axum::serve(listener, router).with_graceful_shutdown(shutdown.clone().cancelled_owned());
+    let drained = async {
+        if let Err(e) = server.await {
+            tracing::error!(error = %e, "the server stopped with an error");
+        }
+        api::trace::drain(wait).await
+    };
+    let deadline = async {
+        shutdown.cancelled().await;
+        tokio::time::sleep(wait).await;
+    };
+    tokio::select! {
+        done = drained => {
+            if done {
+                tracing::info!("shut down: nothing left running");
+            } else {
+                tracing::warn!(waited = ?wait, "shutting down with tasks still running");
+            }
+        }
+        _ = deadline => tracing::warn!(waited = ?wait, "shutting down with connections still open"),
+    }
+}
+
+/// Resolves when the process is asked to stop: SIGTERM (Kubernetes) or Ctrl-C.
+#[cfg(not(target_arch = "wasm32"))]
+async fn terminated() {
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to listen for SIGTERM");
+        tokio::select! {
+            _ = sigterm.recv() => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// The website's router: the Dioxus app and the plain axum routes, with their Redis
+/// clients and background loops. `shutdown` ends the long-lived streams.
+#[cfg(not(target_arch = "wasm32"))]
+async fn router(
+    redis_url: String,
+    store: Option<dataset::Dataset>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<axum::Router> {
+    use api::trace::RedisTracing;
+    use axum::{routing::get, Router};
+    use axum_prometheus::PrometheusMetricLayer;
+    use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
+    use tower_sessions::cookie::time::Duration;
+    use tower_sessions::cookie::SameSite;
+    use tower_sessions::{Expiry, SessionManagerLayer};
+    use tower_sessions_redis_store::fred::prelude::*;
+    use tower_sessions_redis_store::fred::socket2::TcpKeepalive;
+    use tower_sessions_redis_store::RedisStore;
+
+    let config = Config::from_url(&redis_url).expect("invalid Redis URL");
+    let con_conf = ConnectionConfig {
+        tcp: TcpConfig {
+            nodelay: Some(true),
+            keepalive: Some(
+                TcpKeepalive::new()
+                    .with_time(std::time::Duration::from_secs(30))
+                    .with_interval(std::time::Duration::from_secs(10))
+                    .with_retries(3),
+            ),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // Every command of the pool is used inside a span (a request, a roll, a recheck).
+    let pool = api::trace::redis_pool(config.clone(), con_conf.clone(), 6, RedisTracing::Commands)
+        .expect("failed to build Redis pool");
+    pool.connect();
+    pool.wait_for_connect()
+        .await
+        .expect("failed to connect to Redis");
+    if let Some(store) = store {
+        // The schema lock is polled and renewed in a loop: a client without command spans.
+        let lock_redis = api::trace::redis_client(config.clone(), con_conf.clone(), RedisTracing::Off)
+            .expect("failed to build the Redis client");
+        lock_redis.connect();
+        lock_redis
+            .wait_for_connect()
+            .await
+            .expect("failed to connect to Redis");
+        api::trace::spawn_loop("SurrealDB token: renewed before it expires", store.clone().keep_signed_in());
+        api::trace::spawn_loop("roll-sharing schema: applied once at startup", dataset::start(store, lock_redis));
+    }
+    let roll_hub = rolls::RollHub::connect(config, con_conf, pool.clone(), shutdown)
+        .await
+        .expect("failed to start the arcane roll subscriber");
+    let session_store = api::trace::TracedStore::new(RedisStore::new(pool), "redis");
+
+    let layer = SessionManagerLayer::new(session_store)
+        .with_secure(!cfg!(debug_assertions))
+        .with_same_site(SameSite::Lax)
+        .with_name("milesstorm.bff")
+        .with_expiry(Expiry::OnInactivity(Duration::days(7)));
+
+    let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+
+    let router = Router::new()
+        .serve_dioxus_application(ServeConfig::default(), App)
+        .route("/oauth/start/{provider}", get(oauth_start))
+        .route("/oauth/callback/{provider}", get(oauth_callback))
+        .route("/ws/arcane", get(arcane_ws_proxy))
+        .route("/api/arcane/me", get(rolls::arcane_me))
+        .route("/api/arcane/rolls", get(rolls::arcane_rolls))
+        .route("/api/arcane/flag", axum::routing::post(capture::arcane_flag))
+        .route(
+            "/api/profile/picture",
+            get(account::get_picture).post(account::upload_picture).layer(
+                // Room for the largest accepted upload; bigger bodies get 413.
+                axum::extract::DefaultBodyLimit::max(account::PICTURE_MAX_UPLOAD),
+            ),
+        )
+        .route(
+            "/metrics",
+            get(move || async move { metric_handle.render() }),
+        )
+        .layer(axum::middleware::from_fn(render_span))
+        .layer(axum::Extension(roll_hub))
+        .layer(axum::middleware::from_fn(no_store))
+        .layer(layer)
+        .layer(axum::middleware::from_fn(api::trace::capture_request_context))
+        .layer(axum::middleware::from_fn(name_page_span))
+        .layer(axum::middleware::from_fn(api::trace::end_span_with_body))
+        .layer(OtelInResponseLayer)
+        // Prometheus scrapes every 15s; a trace each would bury the real ones.
+        .layer(OtelAxumLayer::default().filter(|path| path != "/metrics"))
+        .layer(prometheus_layer);
+    Ok(router)
 }
 
 /// `service.version` is the commit the image was built from (Dockerfile `GIT_SHA`).
@@ -269,7 +395,6 @@ where
 /// Server functions are named by their path without Dioxus's hash ([`server_fn_route`]).
 #[cfg(not(target_arch = "wasm32"))]
 async fn name_page_span(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
-    use axum::http::Method;
     let method = req.method();
     let span = tracing::Span::current();
     let matched = req.extensions().get::<axum::extract::MatchedPath>();
@@ -278,11 +403,30 @@ async fn name_page_span(req: axum::extract::Request, next: axum::middleware::Nex
     if let Some(route) = matched.and_then(|m| server_fn_route(m.as_str())) {
         span.record("otel.name", format!("{method} {route}"));
         span.record("http.route", route);
-    } else if (method == Method::GET || method == Method::HEAD) && matched.is_none() {
+    } else if is_page(&req) {
         let page = page_name(req.uri().path());
         span.record("otel.name", format!("{method} {page}"));
     }
     next.run(req).await
+}
+
+/// Whether a request goes to Dioxus's page handler (the router's fallback): no route of
+/// ours or of Dioxus's (server functions, assets) matched it.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_page(req: &axum::extract::Request) -> bool {
+    use axum::http::Method;
+    (req.method() == Method::GET || req.method() == Method::HEAD)
+        && req.extensions().get::<axum::extract::MatchedPath>().is_none()
+}
+
+/// The innermost layer: a page render gets its `ssr.render` span (`api::trace::ssr_render`).
+#[cfg(not(target_arch = "wasm32"))]
+async fn render_span(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    if is_page(&req) {
+        api::trace::ssr_render(req, next).await
+    } else {
+        next.run(req).await
+    }
 }
 
 /// `Cache-Control` on server-function responses (`no-store`) and rendered pages (`private,
@@ -367,19 +511,24 @@ async fn arcane_ws_proxy(
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
     let session_id = session.id();
     let token: String = session.get("opaque_token").await.ok().flatten().unwrap_or_default();
-    // The camera session outlives this request (it ends at the 101), so it gets a span of
-    // its own in the same trace, which ai_pipeline's connection joins.
-    let session_span = api::detached_span!("arcane.ws_session", user = %user);
+    // The camera session outlives this request (it ends at the 101). This span is its short
+    // open span, in the request's trace: it ends once ai_pipeline is connected (whose
+    // connection span joins it). What the session does after that is traced per roll.
+    let open = api::detached_span!("arcane.ws_session", otel.name = "arcane.ws_session open", user = %user);
     // The browser's `camera session` span (assets/trace.js), passed in the URL.
     if let Some(tp) = query_traceparent(&uri) {
-        api::trace::link_traceparent(&session_span, tp);
+        api::trace::link_traceparent(&open, tp);
     }
     // Camera frames are a few hundred KB; anything much larger isn't a frame.
+    // axum spawns the callback itself; `session` makes it a task shutdown waits for.
     ws.max_message_size(4 * 1024 * 1024).on_upgrade(move |socket| {
-        use tracing::Instrument as _;
-        proxy_ws(socket, ai_url, hub, user, token, session_id).instrument(session_span)
+        api::trace::session(proxy_ws(socket, ai_url, hub, user, token, session_id, open))
     })
 }
+
+/// ai_pipeline is in the cluster: a handshake that takes longer than this has failed.
+#[cfg(not(target_arch = "wasm32"))]
+const UPSTREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[cfg(not(target_arch = "wasm32"))]
 async fn proxy_ws(
@@ -389,33 +538,35 @@ async fn proxy_ws(
     user: String,
     token: String,
     session_id: Option<tower_sessions::session::Id>,
+    open: tracing::Span,
 ) {
+    use api::trace::Carried;
     use axum::extract::ws::Message as AxMsg;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TngMsg;
+    use tracing::Instrument as _;
 
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-
-    let mut upstream_req = match upstream_url.as_str().into_client_request() {
-        Ok(r) => r,
+    let connected = api::trace::connect_ws(&upstream_url, "ai-pipeline", UPSTREAM_CONNECT_TIMEOUT)
+        .instrument(open.clone())
+        .await;
+    let session = rolls::Session::open("arcane.ws_session", &open);
+    let upstream = match connected {
+        Ok(upstream) => upstream,
         Err(e) => {
-            tracing::error!(error = %e, upstream = %upstream_url, "invalid ai_pipeline URL");
+            open.in_scope(|| {
+                tracing::error!(error = %e, upstream = %upstream_url, "ai_pipeline connect failed");
+                api::trace::failed("upstream_connect");
+            });
+            session.set_reason("ai_pipeline connect failed");
             return;
         }
     };
-    api::trace::inject(&tracing::Span::current(), upstream_req.headers_mut());
-    let (upstream, _) = match tokio_tungstenite::connect_async(upstream_req).await {
-        Ok(conn) => conn,
-        Err(e) => {
-            tracing::error!(error = %e, upstream = %upstream_url, "ai_pipeline connect failed");
-            return;
-        }
-    };
+    drop(open);
 
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
     // Rolls go to Redis in order through one queue; never awaited here, so Redis
     // latency can't stall the frame stream.
-    let rolls_tx = hub.publisher(user.clone());
+    let rolls_tx = hub.publisher(user.clone(), session.link());
     // Separate queue for keeping roll pictures, so the database can't slow rolls.
     let capture_tx = hub.capturer(user.clone(), token);
     // Recent frames by number, to find the exact one each roll was read from.
@@ -423,12 +574,13 @@ async fn proxy_ws(
     let mut last_frame: Option<(u64, String)> = None;
     let (mut client_tx, mut client_rx) = client.split();
 
-    tokio::select! {
+    let reason = tokio::select! {
         // Browser sends binary camera frames → forward to ai_pipeline.
         _ = async {
             while let Some(Ok(msg)) = client_rx.next().await {
                 match msg {
                     AxMsg::Binary(b) => {
+                        session.frame();
                         frames.lock().unwrap().push(&b);
                         if upstream_tx.send(TngMsg::Binary(b)).await.is_err() { break; }
                     }
@@ -436,49 +588,79 @@ async fn proxy_ws(
                     _ => {}
                 }
             }
-        } => {}
+        } => "browser closed",
         // ai_pipeline sends JSON detection results → forward to browser.
         _ = async {
             while let Some(Ok(msg)) = upstream_rx.next().await {
                 match msg {
                     TngMsg::Text(t) => {
+                        // A roll comes with the context of its trace (`_trace`), which goes
+                        // no further than this: not to the browser, Redis' `last_roll` or
+                        // the stored sample.
+                        let (trace, t) = rolls::split_trace(&t);
                         let (is_roll, seq) = reply_info(&t);
                         if is_roll {
-                            if rolls_tx.try_send(t.to_string()).is_err() {
+                            session.roll();
+                            if rolls_tx.try_send(Carried::with_context(trace.cx.clone(), t.to_string())).is_err() {
                                 tracing::warn!("arcane roll dropped: Redis publish queue full");
+                                session.dropped(1);
                             }
                             // Reserve first, so a full queue makes no (empty) capture span.
                             match capture_tx.try_reserve() {
-                                Ok(permit) => permit.send(capture::CaptureJob {
-                                    roll: t.to_string(),
-                                    frame: last_frame.take().filter(|(s, _)| Some(*s) == seq).map(|(_, f)| f),
-                                    jpeg: seq.and_then(|s| frames.lock().unwrap().get(s)),
-                                    span: api::detached_span!("arcane.capture"),
-                                }),
-                                Err(_) => tracing::debug!("roll capture skipped: queue full"),
+                                Ok(permit) => {
+                                    let span = tracing::info_span!(
+                                        parent: None,
+                                        "roll.capture",
+                                        otel.name = "roll capture",
+                                        otel.kind = "producer",
+                                        messaging.system = "tokio",
+                                        messaging.operation.name = "send",
+                                        "messaging.operation.type" = "send",
+                                        messaging.destination.name = capture::CAPTURE_QUEUE_NAME,
+                                        trace_id = tracing::field::Empty,
+                                        span_id = tracing::field::Empty,
+                                    );
+                                    api::trace::continue_from(&span, trace.cx);
+                                    session.unit(&span);
+                                    permit.send(span.in_scope(|| Carried::new(capture::CaptureJob {
+                                        roll: t.to_string(),
+                                        frame: last_frame.take().filter(|(s, _)| Some(*s) == seq).map(|(_, f)| f),
+                                        jpeg: seq.and_then(|s| frames.lock().unwrap().get(s)),
+                                    })));
+                                }
+                                Err(_) => {
+                                    tracing::debug!("roll capture skipped: queue full");
+                                    session.dropped(1);
+                                }
                             }
                         } else if let Some(s) = seq {
                             last_frame = Some((s, t.to_string()));
                         }
-                        if client_tx.send(AxMsg::Text(t.to_string().into())).await.is_err() { break; }
+                        if client_tx.send(AxMsg::Text(t.into_owned().into())).await.is_err() { break; }
                     }
                     TngMsg::Close(_) => break,
                     _ => {}
                 }
             }
-        } => {}
+        } => "ai_pipeline closed",
         // Logging out or losing the permission ends the camera session too.
         _ = async {
             let start = tokio::time::Instant::now() + rolls::RECHECK;
             let mut recheck = tokio::time::interval_at(start, rolls::RECHECK);
             loop {
                 recheck.tick().await;
-                if !hub.still_allowed(session_id, &user).await { break; }
+                // Each recheck is a trace of its own, linked to the session.
+                let span = api::unit_span!(None, "arcane.recheck", otel.name = "permission recheck");
+                session.unit(&span);
+                if !hub.still_allowed(session_id, &user).instrument(span).await { break; }
             }
         } => {
             tracing::info!("arcane WebSocket closed: session ended or permission removed");
+            "session ended or permission removed"
         }
-    }
+        _ = hub.shutdown.cancelled() => "shutdown",
+    };
+    session.set_reason(reason);
 }
 
 /// The `traceparent` query parameter of the camera WebSocket URL. Its value is hex and
@@ -723,6 +905,11 @@ mod tests {
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
     use tracing_subscriber::layer::SubscriberExt as _;
 
+    fn test_client() -> api::trace::TracedClient {
+        let peer = api::trace::Peer { service: "frontend", system: None };
+        api::trace::client(peer, std::time::Duration::from_secs(5), |b| b).unwrap()
+    }
+
     #[test]
     fn server_function_spans_leave_out_the_hash() {
         use super::server_fn_route;
@@ -794,9 +981,9 @@ mod tests {
             .layer(axum::middleware::from_fn(super::no_store));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        api::trace::spawn_loop("test: stand-in server", async move { axum::serve(listener, app).await.unwrap() });
 
-        let client = reqwest::Client::new();
+        let client = test_client();
         let cache_control = |res: reqwest::Response| {
             res.headers().get(CACHE_CONTROL).map(|v| v.to_str().unwrap().to_string())
         };

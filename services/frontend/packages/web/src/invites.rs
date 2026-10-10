@@ -94,33 +94,36 @@ mod server {
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.open_invite", skip_all)]
 pub async fn open_invite(code: String) -> Result<Opened, ServerFnError> {
-    use server::{call, code_ok, message, Refused};
+    api::trace::rejectable(async move {
+        use server::{call, code_ok, message, Refused};
 
-    let (session, _) = crate::emails::server::request()?;
-    if !code_ok(&code) {
-        return Err(api::auth_error(400, server::INVALID));
-    }
-    if let Ok(token) = crate::emails::server::token(&session).await {
-        match call("/internal/invite/redeem", serde_json::json!({ "code": code, "token": token })).await {
-            Ok(role) => return Ok(Opened::Joined { role }),
-            // The session ran out: treat them as logged out.
-            Err(Refused::LoggedOut) => {}
-            Err(r) => return Err(message(r)),
+        let (session, _) = crate::emails::server::request()?;
+        if !code_ok(&code) {
+            return Err(api::auth_error(400, server::INVALID));
         }
-    }
-    let role = call("/internal/invite/check", serde_json::json!({ "code": code })).await.map_err(message)?;
-    let session = session.ok_or_else(|| ServerFnError::new("no session context"))?;
-    session
-        .insert(api::PENDING_INVITE_KEY, api::PendingInvite::new(code))
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(Opened::NeedsAccount { role })
+        if let Ok(token) = crate::emails::server::token(&session).await {
+            match call("/internal/invite/redeem", serde_json::json!({ "code": code, "token": token })).await {
+                Ok(role) => return Ok(Opened::Joined { role }),
+                // The session ran out: treat them as logged out.
+                Err(Refused::LoggedOut) => {}
+                Err(r) => return Err(message(r)),
+            }
+        }
+        let role = call("/internal/invite/check", serde_json::json!({ "code": code })).await.map_err(message)?;
+        let session = session.ok_or_else(|| ServerFnError::new("no session context"))?;
+        session
+            .insert(api::PENDING_INVITE_KEY, api::PendingInvite::new(code))
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        Ok(Opened::NeedsAccount { role })
+    })
+    .await
 }
 
 /// Where to go right after logging in or signing up: back to the invite page if
 /// that's where they came from, otherwise the start page.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.after_login_path", skip_all)]
+#[tracing::instrument(name = "bff.after_login_path", skip_all, err)]
 pub async fn after_login_path() -> Result<String, ServerFnError> {
     let (session, _) = crate::emails::server::request()?;
     let page: Option<String> = match session {

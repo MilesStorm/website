@@ -29,6 +29,8 @@ pub const UNSURE_CONF: f64 = 0.9;
 const DEFAULT_SAMPLE_EVERY: u32 = 20;
 /// Per request; a slow store only delays the capture worker, never live rolls.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Names SurrealDB on the client spans (and in Tempo's service graph).
+const SURREALDB: api::trace::Peer = api::trace::Peer { service: "surrealdb", system: Some("surrealdb") };
 
 // The table definitions, compiled in (`build.rs` rebuilds when files are added).
 surrealkit::embed_schema!("../../surreal/database/schema");
@@ -60,7 +62,10 @@ const SCHEMA_WAIT_LOG: Duration = Duration::from_secs(60);
 /// Applies the schema once per process, one replica at a time (see [`SchemaLock`]),
 /// retrying until SurrealDB accepts it, then turns sharing on (like sqlx migrations
 /// at startup). Runs in the background: the website serves pages meanwhile.
-pub async fn start(store: Dataset, redis: Pool) {
+///
+/// `redis` is a client without command spans (`RedisTracing::Off`): the lock is polled and
+/// renewed in a loop, and each command would root a trace.
+pub async fn start(store: Dataset, redis: Client) {
     let _ = STORE.set(store.clone());
     let lock = SchemaLock::new(redis);
     let mut delay = Duration::from_secs(1);
@@ -90,7 +95,8 @@ pub async fn start(store: Dataset, redis: Pool) {
         attempt_no += 1;
         let attempt = tracing::Instrument::instrument(
             store.apply_schema(),
-            tracing::info_span!(
+            api::unit_span!(
+                None,
                 "dataset.apply_schema",
                 purpose = "startup: sync the SurrealDB schema (surrealkit)",
                 attempt = attempt_no,
@@ -124,7 +130,7 @@ pub async fn start(store: Dataset, redis: Pool) {
 /// replicas share, under a token only this process knows; it is renewed while held
 /// and expires by itself if the holder dies.
 struct SchemaLock {
-    redis: Pool,
+    redis: Client,
     token: String,
 }
 
@@ -140,7 +146,7 @@ impl SchemaLock {
     const RELEASE: &'static str =
         "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
-    fn new(redis: Pool) -> Self {
+    fn new(redis: Client) -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
@@ -262,7 +268,7 @@ impl Dataset {
             .unwrap_or(DEFAULT_SAMPLE_EVERY);
         Some(Self {
             inner: Arc::new(Inner {
-                http: api::trace::client(reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?),
+                http: api::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).ok()?,
                 rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
                 url,
                 user: var("SURREAL_USER")?,
@@ -293,8 +299,9 @@ impl Dataset {
                 folder: None,
             },
         )?;
-        // surrealkit makes no spans of its own: one CLIENT span per step, so the time splits
-        // into connecting (sign-in checks the password hash, ~60 ms) and syncing.
+        // surrealkit brings its own SurrealDB connection (it can't take the traced client) and
+        // makes no spans: one CLIENT span per step, so the time splits into connecting
+        // (sign-in checks the password hash, ~60 ms) and syncing.
         let db = surrealkit::connect(&cfg)
             .instrument(tracing::info_span!(
                 "surrealdb.connect",
@@ -358,7 +365,11 @@ impl Dataset {
                     *self.inner.token.lock().await = Some(t.clone());
                     Ok(t)
                 },
-                tracing::info_span!("surrealdb.token_refresh", purpose = "background: renew the SurrealDB token before it expires"),
+                api::unit_span!(
+                    None,
+                    "surrealdb.token_refresh",
+                    purpose = "background: renew the SurrealDB token before it expires",
+                ),
             )
             .await;
             let wait = match signed_in {
@@ -384,8 +395,13 @@ impl Dataset {
     }
 
     async fn sign_in_unless_done(&self, stale: Option<&str>) -> anyhow::Result<String> {
+        use tracing::Instrument as _;
         let i = &self.inner;
-        let mut token = i.token.lock().await;
+        let mut token = match i.token.try_lock() {
+            Ok(free) => free,
+            // Another caller is signing in: the wait shows as a span, not as own time.
+            Err(_) => i.token.lock().instrument(tracing::info_span!("surrealdb.token_wait")).await,
+        };
         if let Some(t) = token.as_deref().filter(|t| Some(*t) != stale) {
             return Ok(t.to_string());
         }
@@ -400,7 +416,7 @@ impl Dataset {
         let resp = i
             .http
             .post(format!("{}/signin", i.url.trim_end_matches('/')))
-            .with_extension(api::trace::Peer { service: "surrealdb", system: "surrealdb" })
+            .with_extension(api::trace::DbCall { name: "surrealdb.signin", operation: "SIGNIN".into() })
             .header("Accept", "application/json")
             .json(&json!({"NS": i.ns, "DB": i.db, "user": i.user, "pass": i.pass}))
             .send()
@@ -414,8 +430,18 @@ impl Dataset {
         Ok(t)
     }
 
-    /// Run SurrealQL; returns each statement's result, or the first error.
+    /// Run SurrealQL; returns each statement's result, or the first error. A failure marks
+    /// the caller's span (`dataset.*`) failed by kind only: SurrealDB's error text can quote
+    /// the values sent.
     async fn query(&self, sql: &str, vars: Value) -> anyhow::Result<Vec<Value>> {
+        let result = self.run_query(sql, vars).await;
+        if result.is_err() {
+            api::trace::failed("surrealdb");
+        }
+        result
+    }
+
+    async fn run_query(&self, sql: &str, vars: Value) -> anyhow::Result<Vec<Value>> {
         let token = self.token(None).await?;
         let mut resp = self.send_query(&token, sql, &vars).await?;
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -449,7 +475,7 @@ impl Dataset {
         Ok(i
             .http
             .post(&i.rpc_url)
-            .with_extension(api::trace::Peer { service: "surrealdb", system: "surrealdb" })
+            .with_extension(api::trace::DbCall { name: "surrealdb.query", operation: statement_kind(sql) })
             .bearer_auth(token)
             .header("Accept", "application/json")
             .header("surreal-ns", &i.ns)
@@ -597,6 +623,12 @@ impl Dataset {
     }
 }
 
+/// The kind of a query's first statement (`SELECT`, `UPSERT`, `LET` for the scripted
+/// ones), for the span's `db.operation.name`. Queries are constants, so the set is small.
+fn statement_kind(sql: &str) -> String {
+    sql.split_whitespace().next().unwrap_or_default().to_ascii_uppercase()
+}
+
 /// Whether the session's user shares roll pictures (asked fresh each time, so
 /// switching it off applies on every replica at once). Bounded like store calls.
 pub async fn shares(token: &str) -> anyhow::Result<bool> {
@@ -712,10 +744,10 @@ mod auth_tests {
             .with_state(fake.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        api::trace::spawn_loop("test: stand-in SurrealDB", async move { axum::serve(listener, app).await.unwrap() });
         let ds = Dataset {
             inner: Arc::new(Inner {
-                http: api::trace::client(reqwest::Client::new()),
+                http: api::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).unwrap(),
                 rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
                 url,
                 user: "dice".into(),
@@ -820,7 +852,7 @@ mod auth_tests {
     #[tokio::test]
     async fn keeping_signed_in_takes_the_sign_in_out_of_queries() {
         let (ds, fake) = serve("pw").await;
-        let refresher = tokio::spawn(ds.clone().keep_signed_in());
+        let refresher = api::trace::spawn_loop("test: token refresh", ds.clone().keep_signed_in());
         while fake.lock().unwrap().signins == 0 {
             tokio::task::yield_now().await;
         }

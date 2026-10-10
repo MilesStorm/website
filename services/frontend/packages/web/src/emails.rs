@@ -132,19 +132,25 @@ pub(crate) mod server {
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.send_confirmation_email", skip_all)]
 pub async fn send_confirmation_email() -> Result<String, ServerFnError> {
-    let (session, _) = server::request()?;
-    let token = server::token(&session).await?;
-    let reply = server::call("/internal/email/verify/send", serde_json::json!({ "token": token })).await?;
-    Ok(server::text(&reply, "email"))
+    api::trace::rejectable(async move {
+        let (session, _) = server::request()?;
+        let token = server::token(&session).await?;
+        let reply = server::call("/internal/email/verify/send", serde_json::json!({ "token": token })).await?;
+        Ok(server::text(&reply, "email"))
+    })
+    .await
 }
 
 /// Confirms an address with the code from the emailed link; returns the username.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.confirm_email", skip_all)]
 pub async fn confirm_email(code: String) -> Result<String, ServerFnError> {
-    server::request()?;
-    let reply = server::call("/internal/email/verify/confirm", serde_json::json!({ "code": code })).await?;
-    Ok(server::text(&reply, "username"))
+    api::trace::rejectable(async move {
+        server::request()?;
+        let reply = server::call("/internal/email/verify/confirm", serde_json::json!({ "code": code })).await?;
+        Ok(server::text(&reply, "username"))
+    })
+    .await
 }
 
 /// Emails a password reset link, if `login` (username or email) is a password
@@ -152,12 +158,15 @@ pub async fn confirm_email(code: String) -> Result<String, ServerFnError> {
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.forgot_password", skip_all)]
 pub async fn forgot_password(login: String) -> Result<(), ServerFnError> {
-    server::request()?;
-    if login.trim().is_empty() {
-        return Err(ServerFnError::new("Enter your username or email."));
-    }
-    server::call("/internal/password/forgot", serde_json::json!({ "login": login.trim() })).await?;
-    Ok(())
+    api::trace::rejectable(async move {
+        server::request()?;
+        if login.trim().is_empty() {
+            return Err(ServerFnError::new("Enter your username or email."));
+        }
+        server::call("/internal/password/forgot", serde_json::json!({ "login": login.trim() })).await?;
+        Ok(())
+    })
+    .await
 }
 
 /// Sets a new password with the code from the emailed link. The account is logged
@@ -165,53 +174,65 @@ pub async fn forgot_password(login: String) -> Result<(), ServerFnError> {
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.reset_password", skip_all)]
 pub async fn reset_password(code: String, password: String) -> Result<Done, ServerFnError> {
-    let (session, _) = server::request()?;
-    let reply = server::call("/internal/password/reset", serde_json::json!({ "code": code, "password": password })).await?;
-    let username = server::text(&reply, "username");
-    let logged_out = server::log_out_if(&session, &username).await;
-    Ok(Done { username, logged_out })
+    api::trace::rejectable(async move {
+        let (session, _) = server::request()?;
+        let reply = server::call("/internal/password/reset", serde_json::json!({ "code": code, "password": password })).await?;
+        let username = server::text(&reply, "username");
+        let logged_out = server::log_out_if(&session, &username).await;
+        Ok(Done { username, logged_out })
+    })
+    .await
 }
 
 /// Emails the logged-in user a link to delete their account; returns the address.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.request_account_deletion", skip_all)]
 pub async fn request_account_deletion() -> Result<String, ServerFnError> {
-    let (session, _) = server::request()?;
-    let token = server::token(&session).await?;
-    let reply = server::call("/internal/account/delete/request", serde_json::json!({ "token": token })).await?;
-    Ok(server::text(&reply, "email"))
+    api::trace::rejectable(async move {
+        let (session, _) = server::request()?;
+        let token = server::token(&session).await?;
+        let reply = server::call("/internal/account/delete/request", serde_json::json!({ "token": token })).await?;
+        Ok(server::text(&reply, "email"))
+    })
+    .await
 }
 
 /// Which account a delete link is for, without using it.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.account_to_delete", skip_all)]
 pub async fn account_to_delete(code: String) -> Result<Deletion, ServerFnError> {
-    server::request()?;
-    let reply = server::call("/internal/account/delete/check", serde_json::json!({ "code": code })).await?;
-    Ok(Deletion { username: server::text(&reply, "username") })
+    api::trace::rejectable(async move {
+        server::request()?;
+        let reply = server::call("/internal/account/delete/check", serde_json::json!({ "code": code })).await?;
+        Ok(Deletion { username: server::text(&reply, "username") })
+    })
+    .await
 }
 
 /// Deletes the account a delete link is for.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.delete_account", skip_all)]
 pub async fn delete_account(code: String) -> Result<Done, ServerFnError> {
-    let (session, hub) = server::request()?;
-    let reply = server::call("/internal/account/delete/check", serde_json::json!({ "code": code })).await?;
-    let user_id = reply.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| ServerFnError::new("unexpected reply"))?;
-    let username = server::text(&reply, "username");
-    server::forget(user_id, &username, &hub).await?;
-    // Rare: the link ran out or was replaced in the moment since the check.
-    server::call("/internal/account/delete/confirm", serde_json::json!({ "code": code }))
-        .await
-        .map_err(|e| {
-            tracing::warn!(user_id, "deleting an account: data removed but the account wasn't");
-            ServerFnError::new(format!(
-                "The data you shared was removed, but the account itself wasn't deleted: {}",
-                server_message(e)
-            ))
-        })?;
-    let logged_out = server::log_out_if(&session, &username).await;
-    Ok(Done { username, logged_out })
+    api::trace::rejectable(async move {
+        let (session, hub) = server::request()?;
+        let reply = server::call("/internal/account/delete/check", serde_json::json!({ "code": code })).await?;
+        let user_id = reply.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| ServerFnError::new("unexpected reply"))?;
+        let username = server::text(&reply, "username");
+        server::forget(user_id, &username, &hub).await?;
+        // Rare: the link ran out or was replaced in the moment since the check.
+        server::call("/internal/account/delete/confirm", serde_json::json!({ "code": code }))
+            .await
+            .map_err(|e| {
+                tracing::warn!(user_id, "deleting an account: data removed but the account wasn't");
+                ServerFnError::new(format!(
+                    "The data you shared was removed, but the account itself wasn't deleted: {}",
+                    server_message(e)
+                ))
+            })?;
+        let logged_out = server::log_out_if(&session, &username).await;
+        Ok(Done { username, logged_out })
+    })
+    .await
 }
 
 /// Deletes the logged-in account right away. Only for accounts without a confirmed
@@ -220,24 +241,27 @@ pub async fn delete_account(code: String) -> Result<Done, ServerFnError> {
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.delete_account_without_email", skip_all)]
 pub async fn delete_account_without_email(confirm: String) -> Result<Done, ServerFnError> {
-    let (session, hub) = server::request()?;
-    let token = server::token(&session).await?;
-    let profile = match api::account_profile(&token).await {
-        Ok(p) => p,
-        Err(api::ProfileError::LoggedOut) => return Err(ServerFnError::new(server::LOGGED_OUT)),
-        Err(e) => {
-            tracing::error!(error = ?e, "reading the account from auth failed");
-            return Err(ServerFnError::new("Something went wrong on our side. Try again in a minute."));
+    api::trace::rejectable(async move {
+        let (session, hub) = server::request()?;
+        let token = server::token(&session).await?;
+        let profile = match api::account_profile(&token).await {
+            Ok(p) => p,
+            Err(api::ProfileError::LoggedOut) => return Err(ServerFnError::new(server::LOGGED_OUT)),
+            Err(e) => {
+                tracing::error!(error = ?e, "reading the account from auth failed");
+                return Err(ServerFnError::new("Something went wrong on our side. Try again in a minute."));
+            }
+        };
+        if profile.email.is_some() && profile.email_verified {
+            return Err(ServerFnError::new("Your email is confirmed: use the emailed link."));
         }
-    };
-    if profile.email.is_some() && profile.email_verified {
-        return Err(ServerFnError::new("Your email is confirmed: use the emailed link."));
-    }
-    if confirm.trim() != profile.username {
-        return Err(ServerFnError::new("Type your username exactly to confirm."));
-    }
-    server::forget(profile.user_id, &profile.username, &hub).await?;
-    server::call("/internal/account/delete/direct", serde_json::json!({ "token": token })).await?;
-    let logged_out = server::log_out_if(&session, &profile.username).await;
-    Ok(Done { username: profile.username, logged_out })
+        if confirm.trim() != profile.username {
+            return Err(ServerFnError::new("Type your username exactly to confirm."));
+        }
+        server::forget(profile.user_id, &profile.username, &hub).await?;
+        server::call("/internal/account/delete/direct", serde_json::json!({ "token": token })).await?;
+        let logged_out = server::log_out_if(&session, &profile.username).await;
+        Ok(Done { username: profile.username, logged_out })
+    })
+    .await
 }

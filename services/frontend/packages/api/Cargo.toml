@@ -22,6 +22,16 @@ reqwest-tracing = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 metrics = { version = "0.24", optional = true }
+# The chokepoints in trace.rs: tasks, queues, the ai_pipeline WebSocket, Redis clients, the
+# response body that holds the request's span.
+tokio = { version = "1", features = ["rt", "sync", "time"], optional = true }
+# `rt`: TaskTracker (the tasks a shutdown waits for).
+tokio-util = { version = "0.7", features = ["rt"], optional = true }
+tokio-tungstenite = { version = "0.29", optional = true }
+http-body = { version = "1", optional = true }
+# The same fred the session store uses. `partial-tracing`: a `fred.command` span per command,
+# on the clients trace.rs builds with tracing on.
+fred = { version = "10.1", default-features = false, features = ["subscriber-client", "partial-tracing"], optional = true }
 
 [features]
 server = [
@@ -33,11 +43,19 @@ server = [
     "dep:opentelemetry",
     "dep:tracing-opentelemetry",
     "dep:metrics",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:tokio-tungstenite",
+    "dep:http-body",
+    "dep:fred",
 ]
 
 [dev-dependencies]
 axum = { workspace = true }
 tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Reads allowed_raw_io.toml (tests/allowed_raw_io.rs).
+toml = "0.8"
 tracing-subscriber = { workspace = true }
 # `testing`: the in-memory span exporter.
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

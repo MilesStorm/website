@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tower_sessions_redis_store::fred::prelude::*;
 
+use api::trace::Carried;
 use tracing::Instrument as _;
 
 use crate::dataset::{auto_reason, clean_values, dataset, is_roll_id, shares, Capture};
@@ -44,6 +45,8 @@ const AUTO_SAMPLES_PER_DAY: i64 = 300;
 const CAPTURE_QUEUE: usize = 4;
 /// After a database error, skip automatic samples for this long.
 const ERROR_PAUSE: Duration = Duration::from_secs(30);
+/// The capture queue as span attributes name it.
+pub const CAPTURE_QUEUE_NAME: &str = "roll capture";
 
 fn held_meta_key(user: &str) -> String {
     format!("arcane:held:{user}")
@@ -85,26 +88,38 @@ impl FrameRing {
 
 /// One settled roll to keep: the roll JSON, the frame result it came with, and
 /// the picture ai_pipeline read it from (if still in the ring).
+///
+/// Queued as a `Carried` from inside the roll's `roll capture` span, so the worker's
+/// `arcane.capture` span continues the roll's trace.
 pub struct CaptureJob {
+    /// Without its `_trace` field (`rolls::split_trace`): this is what gets stored.
     pub roll: String,
     pub frame: Option<String>,
     pub jpeg: Option<Bytes>,
-    /// Made where the roll was read (`api::detached_span!`), so the work on it shows
-    /// in the camera session's trace.
-    pub span: tracing::Span,
 }
 
 impl RollHub {
     /// A capture queue for one camera connection; the worker ends with the sender.
     /// `token` is the connection's session token, used to look up the user's choice.
-    pub fn capturer(&self, user: String, token: String) -> mpsc::Sender<CaptureJob> {
-        let (tx, mut rx) = mpsc::channel::<CaptureJob>(CAPTURE_QUEUE);
+    pub fn capturer(&self, user: String, token: String) -> mpsc::Sender<Carried<CaptureJob>> {
+        let (tx, mut rx) = api::trace::channel::<CaptureJob>(CAPTURE_QUEUE);
         let hub = self.clone();
-        tokio::spawn(async move {
+        let worker = async move {
             let mut paused_until: Option<Instant> = None;
             let mut last_counted = String::new();
             while let Some(job) = rx.recv().await {
-                let span = job.span;
+                let span = tracing::info_span!(
+                    parent: None,
+                    "arcane.capture",
+                    otel.kind = "consumer",
+                    messaging.system = "tokio",
+                    messaging.operation.name = "process",
+                    "messaging.operation.type" = "process",
+                    messaging.destination.name = CAPTURE_QUEUE_NAME,
+                    trace_id = tracing::field::Empty,
+                    span_id = tracing::field::Empty,
+                );
+                let job = job.enter(&span);
                 // One iteration per job; `return` skips to the next job.
                 async {
                     let Ok(roll) = serde_json::from_str::<Value>(&job.roll) else { return };
@@ -136,6 +151,7 @@ impl RollHub {
                         Ok(false) => return,
                         Err(e) => {
                             tracing::warn!(error = %e, "dataset consent lookup failed; pausing samples");
+                            api::trace::failed("consent_lookup");
                             paused_until = Some(Instant::now() + ERROR_PAUSE);
                             return;
                         }
@@ -150,13 +166,16 @@ impl RollHub {
                     }
                     if let Err(e) = ds.save(&user, &capture, Some(reason), None).await {
                         tracing::warn!(error = %e, "saving dataset sample failed; pausing samples");
+                        api::trace::failed("surrealdb");
                         paused_until = Some(Instant::now() + ERROR_PAUSE);
                     }
                 }
                 .instrument(span)
                 .await;
             }
-        });
+        };
+        // Per connection, not per process: shutdown waits for the captures still queued.
+        api::trace::spawn_loop("camera session: keeps roll pictures", api::trace::session(worker));
         tx
     }
 
@@ -175,6 +194,7 @@ impl RollHub {
         .await;
         if let Err(e) = queued {
             tracing::warn!(error = %e, "holding roll picture failed");
+            api::trace::failed("redis");
         }
     }
 
@@ -186,6 +206,7 @@ impl RollHub {
             .next()
             .mget(vec![held_meta_key(user), held_jpeg_key(user)])
             .await
+            .inspect_err(|_| api::trace::failed("redis"))
             .ok()?;
         let [meta, jpeg]: [Option<Bytes>; 2] = both.try_into().ok()?;
         let meta: Value = serde_json::from_slice(&meta?).ok()?;
@@ -204,6 +225,7 @@ impl RollHub {
         let r: Result<i64, _> = self.pool.next().del(vec![held_meta_key(user), held_jpeg_key(user)]).await;
         if let Err(e) = r {
             tracing::warn!(error = %e, "clearing held roll failed");
+            api::trace::failed("redis");
         }
     }
 
@@ -217,7 +239,7 @@ impl RollHub {
             format!("arcane:auto_count:{user}"),
             format!("arcane:flag_count:{user}"),
         ];
-        let _: i64 = self.pool.next().del(keys).await?;
+        let _: i64 = self.pool.next().del(keys).await.inspect_err(|_| api::trace::failed("redis"))?;
         Ok(())
     }
 
@@ -231,9 +253,17 @@ impl RollHub {
             .await;
         if let Err(e) = created {
             tracing::warn!(error = %e, "rate counter failed");
+            api::trace::failed("redis");
             return None;
         }
-        client.incr(key).await.inspect_err(|e| tracing::warn!(error = %e, "rate counter failed")).ok()
+        client
+            .incr(key)
+            .await
+            .inspect_err(|e| {
+                tracing::warn!(error = %e, "rate counter failed");
+                api::trace::failed("redis");
+            })
+            .ok()
     }
 }
 

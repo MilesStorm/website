@@ -7,7 +7,60 @@ await-holding-invalid-types = [
   { path = "dioxus_signals::WriteLock", reason = "Write should not be held over an await point. This will cause any reads or writes to fail while the await is pending since the write borrow is still active." },
 ]
 
+# Coverage by construction (TRACING.md, "Chokepoints"): the raw I/O constructors are banned,
+# so new code can only reach them through api::trace, which adds the span. A legitimate raw
+# use carries `#[allow(clippy::disallowed_*, reason = "...")]` and is listed in
+# allowed_raw_io.toml; packages/api/tests/allowed_raw_io.rs fails on any that isn't.
+disallowed-types = [
+  { path = "reqwest::Client", reason = "build HTTP clients with api::trace::client: CLIENT span, traceparent, timeout, peer.service (TRACING.md)" },
+  { path = "reqwest::ClientBuilder", reason = "build HTTP clients with api::trace::client: CLIENT span, traceparent, timeout, peer.service (TRACING.md)" },
+]
+
 disallowed-methods = [
   { path = "dioxus_fullstack_core::server_future::use_server_future", reason = "use api::trace::use_server_future, which keeps SSR server futures in the page request's trace (TRACING.md)" },
   { path = "dioxus_fullstack_core::loader::use_loader", reason = "SSR futures need the page request's trace: add an api::trace::use_loader wrapper like api::trace::use_server_future (TRACING.md)" },
+
+  # Outbound HTTP
+  { path = "reqwest::Client::new", reason = "use api::trace::client (TRACING.md)" },
+  { path = "reqwest::Client::builder", reason = "use api::trace::client (TRACING.md)" },
+  { path = "reqwest::ClientBuilder::new", reason = "use api::trace::client (TRACING.md)" },
+  { path = "reqwest::get", reason = "use a client from api::trace::client (TRACING.md)" },
+
+  # WebSocket client (the `*_tls*` variants only exist with a TLS feature, which is off)
+  { path = "tokio_tungstenite::connect_async", reason = "use api::trace::connect_ws: CLIENT span, traceparent, timeout (TRACING.md)" },
+  { path = "tokio_tungstenite::connect_async_with_config", reason = "use api::trace::connect_ws (TRACING.md)" },
+  { path = "tokio_tungstenite::client_async", reason = "use api::trace::connect_ws (TRACING.md)" },
+  { path = "tokio_tungstenite::client_async_with_config", reason = "use api::trace::connect_ws (TRACING.md)" },
+
+  # Async work
+  { path = "tokio::spawn", reason = "use api::trace::spawn (a trace per unit of work), spawn_in_trace (a request's detached work) or spawn_loop (TRACING.md)" },
+  { path = "tokio::task::spawn", reason = "use api::trace::spawn, spawn_in_trace or spawn_loop (TRACING.md)" },
+  { path = "tokio::task::spawn_local", reason = "use api::trace::spawn, spawn_in_trace or spawn_loop (TRACING.md)" },
+  { path = "tokio::task::spawn_blocking", reason = "use api::trace::spawn_blocking: the work gets a span (TRACING.md)" },
+  { path = "tokio::runtime::Handle::spawn", reason = "use api::trace::spawn, spawn_in_trace or spawn_loop (TRACING.md)" },
+  { path = "tokio::task::JoinSet::spawn", reason = "use api::trace::spawn, spawn_in_trace or spawn_loop (TRACING.md)" },
+  { path = "tokio_util::task::TaskTracker::spawn", reason = "use api::trace::spawn, spawn_in_trace or spawn_loop (TRACING.md)" },
+  { path = "tokio_util::task::TaskTracker::spawn_blocking", reason = "use api::trace::spawn_blocking: the work gets a span (TRACING.md)" },
+  { path = "std::thread::spawn", reason = "use api::trace::spawn_blocking: the work gets a span (TRACING.md)" },
+  { path = "std::thread::Builder::spawn", reason = "use api::trace::spawn_blocking: the work gets a span (TRACING.md)" },
+  { path = "std::process::exit", reason = "it skips the telemetry flush: return from main, or flush first (TRACING.md)" },
+
+  # In-process queues
+  { path = "tokio::sync::mpsc::channel", reason = "use api::trace::channel: messages carry their trace context (TRACING.md)" },
+  { path = "tokio::sync::mpsc::unbounded_channel", reason = "use api::trace::channel: messages carry their trace context (TRACING.md)" },
+  { path = "tokio::sync::broadcast::channel", reason = "use api::trace::broadcast: messages carry their trace context (TRACING.md)" },
+  { path = "tokio::sync::watch::channel", reason = "wrap the value in api::trace::Carried, or list the use in allowed_raw_io.toml (TRACING.md)" },
+  { path = "tokio::sync::oneshot::channel", reason = "wrap the value in api::trace::Carried, or list the use in allowed_raw_io.toml (TRACING.md)" },
+  { path = "std::sync::mpsc::channel", reason = "use api::trace::channel: messages carry their trace context (TRACING.md)" },
+  { path = "std::sync::mpsc::sync_channel", reason = "use api::trace::channel: messages carry their trace context (TRACING.md)" },
+
+  # Redis: every client states whether its commands get spans
+  { path = "fred::clients::Client::new", reason = "use api::trace::redis_client: an explicit tracing choice (TRACING.md)" },
+  { path = "fred::clients::Pool::new", reason = "use api::trace::redis_pool: an explicit tracing choice (TRACING.md)" },
+  { path = "fred::clients::ExclusivePool::new", reason = "use api::trace::redis_pool: an explicit tracing choice (TRACING.md)" },
+  { path = "fred::clients::SubscriberClient::new", reason = "use api::trace::redis_subscriber: an explicit tracing choice (TRACING.md)" },
+  { path = "fred::types::Builder::build", reason = "use api::trace::redis_client: an explicit tracing choice (TRACING.md)" },
+  { path = "fred::types::Builder::build_pool", reason = "use api::trace::redis_pool: an explicit tracing choice (TRACING.md)" },
+  { path = "fred::types::Builder::build_exclusive_pool", reason = "use api::trace::redis_pool: an explicit tracing choice (TRACING.md)" },
+  { path = "fred::types::Builder::build_subscriber_client", reason = "use api::trace::redis_subscriber: an explicit tracing choice (TRACING.md)" },
 ]
