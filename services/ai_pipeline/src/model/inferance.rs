@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Instant;
 
 use burn::module::{ModuleMapper, Param};
 use burn::prelude::Backend;
@@ -68,6 +69,20 @@ pub struct Detection {
     pub probs: Vec<f32>,
 }
 
+/// When each stage of `infer_frame` finished, for the frame's trace (`unit_trace.rs`).
+/// Each is read after the stage's GPU work was synced (`into_data` reads the result back):
+/// burn's CUDA backend queues operations, and a clock read before the sync would charge
+/// them to the next stage. Cropping has no sync of its own: it is CPU work, and the crop
+/// tensors it queues are uploaded as part of the head's pass.
+#[derive(Debug, Clone, Copy)]
+pub struct StageEnds {
+    /// Letterbox, YOLO forward pass, read-back and duplicate suppression.
+    pub yolo: Instant,
+    /// Crop and head are None when YOLO found no dice: nothing was cropped or classified.
+    pub crop: Option<Instant>,
+    pub head: Option<Instant>,
+}
+
 pub struct DicePipeline<B: Backend> {
     yolo: my_model::Model<B>,
     /// None for `yolo_only` (crop export), which never classifies.
@@ -110,7 +125,8 @@ impl<B: Backend> DicePipeline<B> {
     ///
     /// `rgb` is packed R,G,B bytes in row-major (HWC) order — the format produced
     /// by most webcam APIs and image libraries. Length must equal `width * height * 3`.
-    pub fn infer_frame(&self, rgb: &[u8], width: usize, height: usize) -> Vec<Detection> {
+    /// Also returns when each stage finished.
+    pub fn infer_frame(&self, rgb: &[u8], width: usize, height: usize) -> (Vec<Detection>, StageEnds) {
         assert_eq!(rgb.len(), width * height * 3, "rgb buffer length mismatch");
         let head = self.head.as_ref().expect("infer_frame needs a head (not yolo_only)");
 
@@ -119,21 +135,24 @@ impl<B: Backend> DicePipeline<B> {
             .expect("rgb dimensions inconsistent with width/height");
 
         let boxes = self.detect_boxes(&img);
+        let yolo_end = Instant::now();
         if boxes.is_empty() {
-            return Vec::new();
+            return (Vec::new(), StageEnds { yolo: yolo_end, crop: None, head: None });
         }
         // Crop via the shared margin-aware path (train == serve), then classify all at once.
         let crops: Vec<Tensor<B, 4>> = boxes
             .iter()
             .map(|b| crop_for_head::<B>(&img, b.x1, b.y1, b.x2, b.y2, &self.device))
             .collect();
+        let crop_end = Instant::now();
         let probs: Vec<f32> = softmax(head.forward(Tensor::cat(crops, 0)), 1)
             .into_data()
             .convert::<f32>()
             .to_vec()
             .unwrap();
+        let head_end = Instant::now();
 
-        boxes
+        let detections = boxes
             .iter()
             .zip(probs.as_chunks::<{ crate::model::head::NUM_CLASSES }>().0)
             .map(|(b, p)| {
@@ -157,7 +176,8 @@ impl<B: Backend> DicePipeline<B> {
                     probs: p.to_vec(),
                 }
             })
-            .collect()
+            .collect();
+        (detections, StageEnds { yolo: yolo_end, crop: Some(crop_end), head: Some(head_end) })
     }
 
     /// Run only the YOLO detector on a frame and return accepted boxes in
