@@ -168,6 +168,22 @@ class I3(unittest.TestCase):
                        (2, 1, "frontend", "PRODUCER", "roll publish", 90, 130))
         self.assertEqual(len(tc.check_i3(inside, tc.LeafRegistry())), 1)
 
+    def test_a_roll_from_camera_to_browser_passes_with_the_real_registry(self):
+        leaves = tc.LeafRegistry.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "leaf_spans.toml"))
+        roll = [(1, 0, "ai-pipeline", "INTERNAL", "roll.settle", 0, 40),
+                (2, 1, "ai-pipeline", "INTERNAL", "infer.yolo", 0, 38),
+                (3, 1, "ai-pipeline", "PRODUCER", "ws.send", 38.5, 40),
+                (4, 3, "frontend", "CONSUMER", "roll receive", 39, 39.2),
+                (5, 4, "frontend", "PRODUCER", "roll capture", 39.1, 39.15),
+                (6, 5, "frontend", "CONSUMER", "arcane.capture", 45, 80),
+                (8, 7, "frontend", "CONSUMER", "roll deliver", 46, 47)]
+        publish = (7, 4, "frontend", "PRODUCER", "roll publish", 41, 45)
+        t = trace(*roll, (*publish, {"trace.relation": "follows"}))
+        self.assertEqual(tc.check_i3(t, leaves) + tc.check_i4(t, leaves), [])
+        # roll publish runs after roll receive ended: only as registered, marked detached work
+        unmarked = trace(*roll, publish)
+        self.assertEqual([v.rule for v in tc.check_i3(unmarked, leaves)], ["I3"])
+
     def test_follows_only_where_the_contract_allows_it(self):
         t = trace((1, 0, "auth", "SERVER", "POST /x", 0, 10),
                   (2, 1, "auth", "INTERNAL", "slow", 1, 500, {"trace.relation": "follows"}))
