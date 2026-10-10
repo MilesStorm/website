@@ -1,0 +1,14 @@
+# The hourly trace check (Argo app trace-checker in the homelab repo): runs tracing/checker
+# against Tempo and VictoriaLogs for production and staging, and pushes the counts to
+# VictoriaMetrics, where the "Trace health" dashboard reads them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: monitoring
+resources:
+  - cronjob.yaml
+configMapGenerator:
+  # The name gets a content hash, so each run uses the checker and registry of its commit.
+  - name: trace-checker
+    files:
+      - checker/trace_check.py
+      - leaf_spans.toml

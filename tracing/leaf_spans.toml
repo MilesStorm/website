@@ -1,0 +1,144 @@
+# Spans the trace checker (tracing/checker) allows without children, detached work it allows
+# to outlast its parent, and parents whose own time is CPU work by design. Everything else must
+# show what it did: a span with no children and no entry here fails rule I4. Each entry needs a
+# reason. service and name are globs.
+
+[[leaf]]
+service = "auth"
+name = "password.verify"
+reason = "argon2 verification: CPU only, about 20 ms by design"
+
+[[leaf]]
+service = "auth"
+name = "password.hash"
+reason = "argon2 hashing: CPU only"
+
+[[leaf]]
+service = "milesstorm-web"
+name = "camera session"
+reason = "the WebSocket handshake as the browser sees it; the browser exposes nothing inside it"
+
+[[follows]]
+service = "auth"
+name = "email.verify_send"
+reason = "sent after the response: registration doesn't wait for the email provider"
+
+[[follows]]
+service = "auth"
+name = "email.password_reset_send"
+reason = "sent after the response: the reset request doesn't wait for the email provider"
+
+[[follows]]
+service = "frontend"
+name = "roll publish"
+reason = "published from a queue after the roll was received: the camera socket doesn't wait for Redis"
+
+[[leaf]]
+service = "auth"
+name = "db.pool.acquire"
+reason = "the wait for a pool connection, measured by sqlx; nothing runs inside it"
+
+[[leaf]]
+service = "auth"
+name = "auth.oauth_start"
+reason = "builds the provider redirect URL; the session write is deferred to the session layer"
+
+[[leaf]]
+service = "auth"
+name = "email.send"
+reason = "childless only without RESEND_API_KEY (local runs): the email is logged, not sent"
+
+[[leaf]]
+service = "auth"
+name = "db.migrate"
+reason = "sqlx's migrator runs on its own connection; one CLIENT span covers the run at startup"
+
+[[leaf]]
+service = "ai-pipeline"
+name = "frame.pending"
+reason = "time a frame waited as the newest frame; written after the fact from measured times"
+
+[[leaf]]
+service = "ai-pipeline"
+name = "infer.*"
+reason = "inference stages (queue, decode, yolo, crop, head): measured in the inference thread, written after the fact"
+
+[[leaf]]
+service = "ai-pipeline"
+name = "ws.send"
+reason = "the write of a frame's replies to the camera socket"
+
+[[leaf]]
+service = "ai-pipeline"
+name = "session close"
+reason = "zero-length summary of a camera session"
+
+[[leaf]]
+service = "ai-pipeline"
+name = "frame.infer"
+reason = "childless only when the model never loaded: the frame fails before any stage runs"
+
+[[leaf]]
+service = "ai-pipeline"
+name = "roll.settle"
+reason = "childless only when the model never loaded: see frame.infer"
+
+[[leaf]]
+service = "frontend"
+name = "fred.rtt"
+reason = "the Redis round trip under fred.command, measured by fred"
+
+[[leaf]]
+service = "frontend"
+name = "surrealdb.token_wait"
+reason = "the wait for the SurrealDB token mutex; exists only when it was contended"
+
+[[leaf]]
+service = "frontend"
+name = "profile_picture.convert"
+reason = "image decoding and encoding: CPU only, on the blocking pool"
+
+[[leaf]]
+service = "frontend"
+name = "session close"
+reason = "zero-length summary of a camera session or roll stream"
+
+[[leaf]]
+service = "frontend"
+name = "arcane.rolls_replay"
+reason = "childless when the viewer watches no one: nothing to read"
+
+[[leaf]]
+service = "frontend"
+name = "permission recheck"
+reason = "childless when the stream has no session ID to check"
+
+[[leaf]]
+service = "frontend"
+name = "bff.fresh_session_id"
+reason = "marks the session for a new ID; the store write happens later in the session layer"
+
+[[leaf]]
+service = "frontend"
+name = "bff.after_login_path"
+reason = "reads the session in memory; the store read happened in the session layer"
+
+[[leaf]]
+service = "frontend"
+name = "bff.logout"
+reason = "clears the session in memory; the store delete happens later in the session layer"
+
+[[leaf]]
+service = "frontend"
+name = "bff.check_login_status"
+reason = "childless when logged out: no token, so no call to auth"
+
+[[leaf]]
+service = "frontend"
+name = "bff.get_my_permissions"
+reason = "childless when logged out: no token, so no call to auth"
+
+[[cpu]]
+service = "frontend"
+name = "ssr.render"
+reason = "the Dioxus page render: its own time is render CPU between the server futures (see the profiler)"

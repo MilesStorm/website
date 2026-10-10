@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trace-checker
+spec:
+  schedule: "7 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: trace-checker
+              image: python:3.12-alpine
+              # No --phase: violations are counted and pushed, they don't fail the job. The job
+              # fails only when the checker itself can't run. One environment failing doesn't
+              # stop the other.
+              command:
+                - sh
+                - -c
+                - |
+                  rc=0
+                  for env in production staging; do
+                    python3 /checker/trace_check.py \
+                      --tempo http://tempo.monitoring.svc.cluster.local:3200 \
+                      --vlogs http://victoria-logs.monitoring.svc.cluster.local:9428 \
+                      --push http://victoria-metrics.monitoring.svc.cluster.local:8428 \
+                      --leaf-spans /checker/leaf_spans.toml \
+                      --env "$env" --since 62m --until 2m || rc=1
+                  done
+                  exit $rc
+              resources:
+                requests: {cpu: 20m, memory: 64Mi}
+                limits: {memory: 256Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              volumeMounts:
+                - {name: checker, mountPath: /checker, readOnly: true}
+          volumes:
+            - name: checker
+              configMap: {name: trace-checker}
