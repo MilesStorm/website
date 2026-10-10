@@ -12,6 +12,7 @@ import concurrent.futures
 import datetime
 import fnmatch
 import json
+import math
 import os
 import re
 import sys
@@ -26,8 +27,17 @@ RULES = ("I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8")
 TRACE_KINDS = ("browser", "server", "background", "browser_part_missing")
 KIND_NAMES = {0: "UNSPECIFIED", 1: "INTERNAL", 2: "SERVER", 3: "CLIENT", 4: "PRODUCER", 5: "CONSUMER"}
 API_PREFIXES = ("/bff/", "/api/", "/rpc", "/internal/", "/ws/", "/sse/")
-BROWSER_UI_PREFIXES = ("page load", "click", "submit", "navigate")
+BROWSER_UI_PREFIXES = ("page load ", "click ", "submit ", "navigate ")
+BROWSER_UI_EVENTS = ("load", "click", "submit", "navigate")
 AUTH_EXPECTED = {401, 404}
+# Auth endpoints whose 401/404 is an expected answer (wrong password, unknown token): TRACING.md.
+AUTH_EXPECTED_PATHS = re.compile(r"^/(internal/token/|auth/login)")
+AUTH_PEER = re.compile(r"(^|[|/@])auth(-service)?(\.|:|$)")
+# Peers that are traced themselves: a CLIENT span to one of them must have a SERVER child.
+TRACED_PEER = re.compile(r"(^|[|/@.])(frontend|auth|ai-pipeline|waypoint|public-istio)(-service)?(\.|:|\||$)")
+BROWSER_TRACED_PATHS = ("/bff/", "/api/")
+DB_PEERS = ("postgres", "postgresql", "redis", "surrealdb")
+MAX_CLOCK_ERROR_MS = 1000
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -131,12 +141,19 @@ def is_envoy(s):
 
 
 def is_browser_ui(s):
+    """The roots trace.js makes for a click, submit, route change or page load."""
     return s.svc == BROWSER and s.kind == "INTERNAL" and (
-        "ui.event" in s.attrs or s.name.startswith(BROWSER_UI_PREFIXES))
+        s.attrs.get("ui.event") in BROWSER_UI_EVENTS or s.name.startswith(BROWSER_UI_PREFIXES))
 
 
-def follows(s):
-    return s.attrs.get("trace.relation") == "follows"
+def follows(s, parent, leaves):
+    """trace.relation=follows counts only where the contract allows it: the browser's page load
+    under the server render, and the detached work named in leaf_spans.toml's [[follows]]."""
+    if s.attrs.get("trace.relation") != "follows" or parent is None:
+        return False
+    if s.svc == BROWSER and s.name.startswith("page load ") and parent.kind == "SERVER":
+        return True
+    return leaves.follows(s)
 
 
 def http_status(s):
@@ -156,17 +173,22 @@ def http_path(s):
 
 
 def _env_of(spans):
+    """Staging if any server side says so (resource label, *-staging namespace, staging host): the
+    browser's own label doesn't decide. Else the servers' label, else the browser's, else production."""
+    labels = {"server": None, "browser": None}
     for s in spans:
+        side = "browser" if s.svc == BROWSER else "server"
         for k in ("deployment.environment.name", "deployment.environment"):
             if s.res.get(k):
-                return str(s.res[k])
-    for s in spans:
+                if side == "server" and str(s.res[k]) == "staging":
+                    return "staging"
+                labels[side] = labels[side] or str(s.res[k])
         if str(s.res.get("k8s.namespace.name", "")).endswith("-staging"):
             return "staging"
-        for k in ("server.address", "http.url", "url.full"):
-            if "staging." in str(s.attrs.get(k, "")):
+        for k in ("server.address", "http.url", "url.full", "http.host"):
+            if re.search(r"(^|//)staging\.", str(s.attrs.get(k, ""))):
                 return "staging"
-    return "production"  # staging labels itself (plan phase S); unlabelled telemetry is production
+    return labels["server"] or labels["browser"] or "production"
 
 
 class Trace:
@@ -246,18 +268,23 @@ def _browser_clock_bound_ns(p, c):
     b = p if p.svc == BROWSER else c
     v = b.attrs.get("browser.clock_offset_error_ms", b.res.get("browser.clock_offset_error_ms"))
     try:
-        return float(v) * MS, True
+        v = float(v)
     except (TypeError, ValueError):
         return 1 * MS, False
+    if not math.isfinite(v) or v < 0:
+        return 1 * MS, False
+    return min(v, MAX_CLOCK_ERROR_MS) * MS, True
 
 
-def check_i3(t):
+def check_i3(t, leaves):
     out = []
     for c in t.spans:
         p = t.parent(c)
-        if p is None or follows(c):
+        if p is None:
             continue
-        excess = max(p.st - c.st, c.en - p.en)
+        # A following span may outlast its parent but still can't start before it.
+        early, late = p.st - c.st, (0 if follows(c, p, leaves) else c.en - p.en)
+        excess = max(early, late)
         if excess <= 0:
             continue
         where = "in-process"
@@ -269,7 +296,7 @@ def check_i3(t):
             else:
                 where = "cross-node"
         if excess > tol:
-            side = "starts before" if p.st - c.st >= c.en - p.en else "ends after"
+            side = "starts before" if early >= late else "ends after"
             note = "" if bounded else " (no browser.clock_offset_error_ms)"
             out.append(Violation("I3", t, c, f"{_pair(p, c)}: child {side} parent by {excess / MS:.2f} ms, "
                                  f"{where} tolerance {tol / MS:.2f} ms{note}", excess / MS, key=_pair(p, c)))
@@ -299,11 +326,17 @@ def check_i4(t, leaves):
     for s in t.spans:
         if s.kind not in ("INTERNAL", "SERVER") or is_browser_ui(s):
             continue
-        kids = [k for k in t.kids.get(s.id, ()) if not follows(k)]
+        kids = [k for k in t.kids.get(s.id, ()) if not follows(k, s, leaves)]
         if not t.kids.get(s.id):
-            if s.kind == "INTERNAL" and not leaves.allows(s):
+            if leaves.allows(s):
+                continue
+            if s.kind == "INTERNAL":
                 out.append(Violation("I4", t, s, f"{s.key()}: childless INTERNAL span not in leaf_spans.toml "
                                      f"({s.dur / MS:.2f} ms)", s.dur / MS, key="leaf: " + s.key()))
+            # A handler with no spans inside: all of it is own time.
+            elif not is_envoy(s) and s.svc != BROWSER and s.dur > own_time_limit_ns(s.dur):
+                out.append(Violation("I4", t, s, f"{s.key()}: childless SERVER span, {s.dur / MS:.2f} ms with "
+                                     f"nothing inside", s.dur / MS, key="own: " + s.key()))
             continue
         covered = _union([(max(k.st, s.st), min(k.en, s.en)) for k in kids if min(k.en, s.en) > max(k.st, s.st)])
         own = s.dur - covered
@@ -314,8 +347,24 @@ def check_i4(t, leaves):
     return out
 
 
+def _peer_fields(s):
+    url = s.attrs.get("http.url") or s.attrs.get("url.full") or ""
+    return [str(f) for f in (s.attrs.get("peer.service"), s.attrs.get("upstream_cluster"),
+                             s.attrs.get("server.address"), urllib.parse.urlsplit(str(url)).netloc) if f]
+
+
+def traced_peer(c):
+    """True when the callee of CLIENT span c records spans itself, so c must have a SERVER child."""
+    if c.svc == BROWSER:
+        url = urllib.parse.urlsplit(str(c.attrs.get("http.url") or c.attrs.get("url.full") or ""))
+        own = not url.netloc or url.netloc.endswith("milesstorm.com")
+        return own and url.path.startswith(BROWSER_TRACED_PATHS)
+    return any(TRACED_PEER.search(f) for f in _peer_fields(c))
+
+
 def check_i5(t, hops):
-    """Hop overhead per edge into `hops`; structural violations (reported, never gating) returned."""
+    """Hop overhead per edge into `hops` (reported). Violations: a CLIENT span to a traced peer with
+    no SERVER child (the trace broke there), or to anything else without peer.service."""
     out = []
     for c in t.spans:
         if c.kind != "CLIENT":
@@ -323,15 +372,20 @@ def check_i5(t, hops):
         servers = [k for k in t.kids.get(c.id, ()) if k.kind == "SERVER" and not in_process(c, k)]
         for k in servers:
             hops[f"{c.svc} -> {k.svc}"].append((c.dur - k.dur) / MS)
-        if not servers and c.svc != BROWSER and not c.attrs.get("peer.service"):
+        if servers:
+            continue
+        if traced_peer(c):
+            out.append(Violation("I5", t, c, f"{c.key()}: CLIENT to a traced peer with no SERVER child",
+                                 key="no server: " + c.key()))
+        elif c.svc != BROWSER and not c.attrs.get("peer.service"):
             out.append(Violation("I5", t, c, f"{c.key()}: CLIENT with no SERVER child and no peer.service"))
     return out
 
 
 def _is_auth_target(s):
-    fields = (s.attrs.get("peer.service"), s.attrs.get("upstream_cluster"), s.attrs.get("http.url"),
-              s.attrs.get("server.address"), s.svc)
-    return any("auth" in str(f) for f in fields if f)
+    """A call to the auth service's login or token endpoints, where 401/404 is an answer."""
+    return (any(AUTH_PEER.search(f) for f in _peer_fields(s))
+            and bool(AUTH_EXPECTED_PATHS.match(http_path(s))))
 
 
 def check_i6(t):
@@ -341,8 +395,9 @@ def check_i6(t):
         def bad(what):
             out.append(Violation("I6", t, s, f"{s.key()}: {what}", key=f"{s.key()}: {what}"))
 
-        if s.svc not in seen_res:
-            seen_res.add(s.svc)
+        res_key = (s.svc, s.ident, s.res.get("service.version"))
+        if res_key not in seen_res:
+            seen_res.add(res_key)
             ver = s.res.get("service.version")
             what = ("resource has no service.version" if not ver else
                     None if SHA_RE.match(str(ver)) else f"service.version {ver!r} is not a git SHA")
@@ -353,7 +408,8 @@ def check_i6(t):
         code = http_status(s)
         failed = s.status == "ERROR" or "error.type" in s.attrs or s.attrs.get("error") in (True, "true")
         if method and s.kind in ("SERVER", "CLIENT"):
-            if s.kind == "SERVER" and not is_envoy(s) and not s.attrs.get("http.route"):
+            # No route matched on a 404, so there is none to record.
+            if s.kind == "SERVER" and not is_envoy(s) and not s.attrs.get("http.route") and code != 404:
                 bad("no http.route")
             if not code and not failed:
                 bad("no HTTP status code")
@@ -366,7 +422,8 @@ def check_i6(t):
             elif s.svc != BROWSER and not s.attrs.get("peer.service"):
                 bad("no peer.service")
 
-        if any(k.startswith("db.") for k in s.attrs) and not (s.attrs.get("db.system") or s.attrs.get("db.system.name")):
+        is_db = any(k.startswith("db.") for k in s.attrs) or str(s.attrs.get("peer.service", "")).lower() in DB_PEERS
+        if is_db and not (s.attrs.get("db.system") or s.attrs.get("db.system.name")):
             bad("db span without db.system")
 
         if code:
@@ -384,21 +441,37 @@ def check_i6(t):
 
 
 class LeafRegistry:
-    """tracing/leaf_spans.toml: [[leaf]] tables with service, name (fnmatch globs) and reason."""
+    """tracing/leaf_spans.toml. [[leaf]]: spans allowed to have no children (declared CPU or
+    single-I/O leaves). [[follows]]: detached work allowed to outlast its parent. Each entry has
+    service, name (fnmatch globs) and a reason."""
 
-    def __init__(self, entries=()):
-        self.entries = [(e.get("service", "*"), e["name"]) for e in entries]
+    def __init__(self, leaf=(), follows=()):
+        self.entries = [self._entry(e) for e in leaf]
+        self.follow_entries = [self._entry(e) for e in follows]
+
+    @staticmethod
+    def _entry(e):
+        if not str(e.get("reason", "")).strip():
+            raise ValueError(f"leaf_spans.toml: entry {e.get('name')!r} has no reason")
+        if not e.get("name") or not e.get("service") or set(e["name"]) <= set("*?"):
+            raise ValueError(f"leaf_spans.toml: entry {e!r} must name a service and a span")
+        return e["service"], e["name"]
 
     @classmethod
     def load(cls, path):
-        if not path or not os.path.exists(path):
-            return cls()
         with open(path, "rb") as f:
-            return cls(tomllib.load(f).get("leaf", []))
+            doc = tomllib.load(f)
+        return cls(doc.get("leaf", []), doc.get("follows", []))
+
+    @staticmethod
+    def _match(entries, s):
+        return any(fnmatch.fnmatchcase(s.svc, svc) and fnmatch.fnmatchcase(s.name, name) for svc, name in entries)
 
     def allows(self, s):
-        return any(fnmatch.fnmatchcase(s.svc, svc) and fnmatch.fnmatchcase(s.name, name)
-                   for svc, name in self.entries)
+        return self._match(self.entries, s)
+
+    def follows(self, s):
+        return self._match(self.follow_entries, s)
 
 
 def check_trace(t, rules, leaves, hops):
@@ -408,7 +481,7 @@ def check_trace(t, rules, leaves, hops):
     if "I2" in rules:
         out += check_i2(t)
     if "I3" in rules:
-        out += check_i3(t)
+        out += check_i3(t, leaves)
     if "I4" in rules:
         out += check_i4(t, leaves)
     if "I5" in rules:
@@ -437,8 +510,10 @@ def check_i8(vlogs, since, until, env, fetch=_vlogs_stats):
     elif env == "production":
         base += ' -namespace:~"-staging$"'
     total = sum(int(r["n"]) for r in fetch(vlogs, base + " | stats count() n"))
+    # The stdout JSON keeps trace_id on the span that has it (the request's), listed in `spans`.
     missing = [(r.get("namespace", ""), r.get("container", ""), r.get("span.name", ""), int(r["n"]))
-               for r in fetch(vlogs, base + " -trace_id:* | stats by (namespace, container, span.name) count() n")]
+               for r in fetch(vlogs, base + ' -trace_id:* -spans:~"trace_id" '
+                              "| stats by (namespace, container, span.name) count() n")]
     no_span_id = sum(int(r["n"]) for r in fetch(vlogs, base + " -span_id:* | stats count() n"))
     return total, sorted(missing, key=lambda m: -m[3]), no_span_id
 
@@ -476,7 +551,9 @@ def tempo_search(tempo, query, start, end, limit=500):
             continue
         qs = urllib.parse.urlencode({"q": query, "start": a, "end": b, "limit": limit, "spss": 1})
         found = [t["traceID"] for t in _get_json(f"{tempo.rstrip('/')}/api/search?{qs}").get("traces", [])]
-        if len(found) >= limit and b - a > 60:
+        if len(found) >= limit:
+            if b - a <= 1:
+                raise RuntimeError(f"Tempo search: {limit}+ traces within one second at {a}; raise the limit")
             mid = (a + b) // 2
             stack += [(a, mid), (mid, b)]
         else:
@@ -484,13 +561,17 @@ def tempo_search(tempo, query, start, end, limit=500):
     return list(dict.fromkeys(_hex_id(i) for i in ids))
 
 
-def tempo_fetch(tempo, ids, workers=8):
+def tempo_fetch(tempo, ids, failed, workers=8):
+    """Spans of each trace; IDs that couldn't be fetched (or came back empty) go into `failed`."""
     def one(tid):
         try:
-            return parse_trace(_get_json(f"{tempo.rstrip('/')}/api/traces/{tid}"))
-        except Exception as e:  # a trace that expired between search and fetch
+            spans = parse_trace(_get_json(f"{tempo.rstrip('/')}/api/traces/{tid}"))
+        except Exception as e:  # e.g. a trace that expired between search and fetch
             print(f"warning: trace {tid}: {e}", file=sys.stderr)
-            return []
+            spans = []
+        if not spans:
+            failed.append(tid)
+        return spans
 
     with concurrent.futures.ThreadPoolExecutor(workers) as ex:
         yield from ex.map(one, ids)
@@ -511,19 +592,23 @@ def _all(t, v=None):
 
 # (rule, scope description, trace in scope?, violation counts?) per phase; phases are cumulative.
 GATES = {
-    "P1": [("I3", "browser traces", lambda t: t.kind == "browser", _all)],
+    "P1": [("I3", "browser traces", lambda t: t.kind == "browser", _all),
+           ("I5", "browser requests", lambda t: t.kind == "browser", lambda t, v: v.service == BROWSER)],
     "P2": [("I1", "all traces", _all, _all),
            ("I2", "all traces", _all, _all),
            ("I6", "all traces", _all, _all),
+           ("I5", "all traces", _all, _all),
            ("I4", "server spans outside page/asset requests", _all,
             lambda t, v: v.service != BROWSER and not t.page_or_asset(v.span))],
     "P3": [("I3", "stream traces", lambda t: t.stream, _all)],
     "P4": [("I4", "page and asset requests", _all, lambda t, v: t.page_or_asset(v.span))],
-    "P5": [(r, "all traces", _all, _all) for r in ("I1", "I2", "I3", "I4", "I6")] + [("I8", "app log lines", None, None)],
+    "P5": [(r, "all traces", _all, _all) for r in ("I1", "I2", "I3", "I4", "I5", "I6")] + [("I8", "app log lines", None, None)],
 }
 
 
-def evaluate_gates(phase, traces, violations, i8, tolerance):
+def evaluate_gates(phase, traces, violations, i8, tolerance, min_traces=1):
+    """A gate passes when at most `tolerance` percent of its in-scope traces fail AND at least
+    `min_traces` were in scope: no data is not a pass."""
     if not phase or phase == "P0":
         return []
     upto = [p for p in GATES if p <= phase]
@@ -542,13 +627,13 @@ def evaluate_gates(phase, traces, violations, i8, tolerance):
                 bad = sum(m[3] for m in missing)
                 pct = 100.0 * bad / total if total else 0.0
                 results.append({"phase": p, "rule": rule, "scope": scope, "failing": bad, "in_scope": total,
-                                "pct": round(pct, 3), "pass": pct <= tolerance})
+                                "pct": round(pct, 3), "pass": pct <= tolerance and total >= min_traces})
                 continue
             scoped = [t for t in traces if in_scope(t)]
             failing = sum(1 for t in scoped if any(v.rule == rule and counts(t, v) for v in by_trace[id(t)]))
             pct = 100.0 * failing / len(scoped) if scoped else 0.0
-            results.append({"phase": p, "rule": rule, "scope": scope, "failing": failing,
-                            "in_scope": len(scoped), "pct": round(pct, 3), "pass": pct <= tolerance})
+            results.append({"phase": p, "rule": rule, "scope": scope, "failing": failing, "in_scope": len(scoped),
+                            "pct": round(pct, 3), "pass": pct <= tolerance and len(scoped) >= min_traces})
     return results
 
 
@@ -588,7 +673,7 @@ def summarize(traces, violations, hops, i8, gates, rules):
              for e, xs in sorted(hops.items(), key=lambda kv: -len(kv[1]))}
     out = {"traces": len(traces), "trace_kinds": dict(kinds), "rules": per_rule, "hops": edges, "gates": gates,
            "notes": {"I7": "pipeline loss is a metrics rule (VictoriaMetrics alerts), not checked here",
-                     "I5": "hop overhead reported only; budgets gate after P4"}}
+                     "I5": "hop overhead is reported; its budgets gate after P4. A missing SERVER child gates"}}
     if "I8" in rules:
         if i8 is None:
             out["i8"] = None
@@ -607,8 +692,7 @@ def render(s):
     for rule, r in s["rules"].items():
         if rule in ("I7", "I8"):
             continue
-        gating = " (reported, not gating)" if rule == "I5" else ""
-        lines.append(f"\n## {rule}{gating}: {r['violations']} violations in {r['traces']} traces "
+        lines.append(f"\n## {rule}: {r['violations']} violations in {r['traces']} traces "
                      f"({r['pct_traces']:.1f}%)  by kind {r['by_kind']}")
         for key, n in r["top"]:
             lines.append(f"  {n:6d}  {key}")
@@ -637,8 +721,9 @@ def render(s):
         for g in s["gates"]:
             mark = "PASS" if g["pass"] else "FAIL"
             if "in_scope" in g:
+                empty = "  (nothing in scope: no data is not a pass)" if not g["pass"] and not g["failing"] else ""
                 lines.append(f"  {mark} {g['phase']} {g['rule']} on {g['scope']}: "
-                             f"{g['failing']}/{g['in_scope']} failing ({g['pct']:.2f}%)")
+                             f"{g['failing']}/{g['in_scope']} failing ({g['pct']:.2f}%){empty}")
             else:
                 lines.append(f"  {mark} {g['phase']} {g['rule']}: {g['detail']}")
     return "\n".join(lines)
@@ -648,15 +733,24 @@ def _label(v):
     return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def prometheus_text(traces, violations, i8, rules, env_override=None):
+def prometheus_text(traces, violations, i8, rules, env_override=None, now=None):
+    """This run's counts as gauges, stamped with the run's time. Every rule x service seen gets a
+    series, zeros included, so a fixed violation reads 0 and not "no data"."""
+    ts = int((time.time() if now is None else now) * 1000)
     env_of = (lambda t: env_override) if env_override else (lambda t: t.env)
     lines = []
-    viol = collections.Counter((v.rule, v.service, env_of(v.trace)) for v in violations)
+    viol = collections.Counter()
+    checked = [r for r in rules if r not in ("I7", "I8")]
+    for t in traces:
+        for svc in {s.svc for s in t.spans}:
+            for rule in checked:
+                viol[(rule, svc, env_of(t))] += 0
+    viol.update((v.rule, v.service, env_of(v.trace)) for v in violations)
     if i8 is not None:
         for ns, container, _, n in i8[1]:
             viol[("I8", container, env_override or ("staging" if ns.endswith("-staging") else "production"))] += n
     for (rule, svc, env), n in sorted(viol.items()):
-        lines.append(f'trace_check_violations_total{{rule="{rule}",service="{_label(svc)}",env="{_label(env)}"}} {n}')
+        lines.append(f'trace_check_violations{{rule="{rule}",service="{_label(svc)}",env="{_label(env)}"}} {n} {ts}')
     envs = sorted({env_of(t) for t in traces} | ({env_override} if env_override else set()))
     kinds = collections.Counter((t.kind, env_of(t)) for t in traces)
     hit = collections.Counter()
@@ -664,12 +758,11 @@ def prometheus_text(traces, violations, i8, rules, env_override=None):
         hit[(rule, kind, env)] += 1
     for env in envs:
         for kind in TRACE_KINDS:
-            lines.append(f'trace_check_traces_total{{kind="{kind}",env="{_label(env)}"}} {kinds[(kind, env)]}')
-            for rule in rules:
-                if rule not in ("I7", "I8"):
-                    lines.append(f'trace_check_violating_traces_total{{rule="{rule}",kind="{kind}",'
-                                 f'env="{_label(env)}"}} {hit[(rule, kind, env)]}')
-        lines.append(f'trace_check_last_run_timestamp_seconds{{env="{_label(env)}"}} {int(time.time())}')
+            lines.append(f'trace_check_traces{{kind="{kind}",env="{_label(env)}"}} {kinds[(kind, env)]} {ts}')
+            for rule in checked:
+                lines.append(f'trace_check_violating_traces{{rule="{rule}",kind="{kind}",'
+                             f'env="{_label(env)}"}} {hit[(rule, kind, env)]} {ts}')
+        lines.append(f'trace_check_last_run_timestamp_seconds{{env="{_label(env)}"}} {ts // 1000} {ts}')
     return "\n".join(lines) + "\n"
 
 
@@ -690,14 +783,19 @@ def main(argv=None):
     src.add_argument("--trace-ids", help="file of trace IDs (one per line) to fetch from --tempo")
     ap.add_argument("--tempo", help="Tempo base URL, e.g. http://tempo.monitoring:3200")
     ap.add_argument("--query", default="{}", help="TraceQL query for the Tempo search (default: {})")
-    ap.add_argument("--since", default="1h", help="window start: 24h, 30m, epoch or ISO (default 1h)")
+    ap.add_argument("--since", default="62m",
+                    help="window start: 24h, 30m, epoch or ISO (default 62m: an hourly run with --until 2m "
+                         "leaves no gap)")
     ap.add_argument("--until", default="2m", help="window end (default 2m ago, so traces are complete)")
     ap.add_argument("--rules", default=",".join(RULES), help="comma-separated rules (default all)")
     ap.add_argument("--env", choices=("production", "staging"), help="only traces of this environment")
     ap.add_argument("--phase", choices=("P0", "P1", "P2", "P3", "P4", "P5"), help="exit 1 if a gate fails")
     ap.add_argument("--tolerance", type=float, default=0.0,
                     help="percent of in-scope traces a gate may fail (default 0; P1 done-when is 1)")
+    ap.add_argument("--min-traces", type=int, default=1,
+                    help="a gate with fewer in-scope traces fails (default 1; 0 for unattended monitoring)")
     ap.add_argument("--leaf-spans", help="leaf registry (default: tracing/leaf_spans.toml next to this tool)")
+    ap.add_argument("--allow-empty-registry", action="store_true", help="run I4 without a leaf registry")
     ap.add_argument("--ingress", default="istio-ingress",
                     help="regex for ingress service names whose orphan SERVER spans have a browser parent")
     ap.add_argument("--vlogs", help="VictoriaLogs base URL for I8")
@@ -710,9 +808,15 @@ def main(argv=None):
         ap.error(f"unknown rules: {sorted(unknown)}")
     since, until = parse_time(a.since), parse_time(a.until)
     leaf_path = a.leaf_spans or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "leaf_spans.toml")
-    leaves = LeafRegistry.load(leaf_path)
+    if os.path.exists(leaf_path):
+        leaves = LeafRegistry.load(leaf_path)
+    elif a.allow_empty_registry or "I4" not in rules:
+        leaves = LeafRegistry()
+    else:
+        ap.error(f"no leaf registry at {leaf_path} (I4 needs it; --allow-empty-registry to run without)")
     ingress_re = re.compile(a.ingress)
 
+    failed = []
     if a.dir:
         raw = dir_traces(a.dir)
     elif a.tempo:
@@ -721,28 +825,37 @@ def main(argv=None):
                 ids = [_hex_id(x.split("#")[0].strip()) for x in f if x.split("#")[0].strip()]
         else:
             ids = tempo_search(a.tempo, a.query, since, until)
-        raw = tempo_fetch(a.tempo, ids)
+        raw = tempo_fetch(a.tempo, ids, failed)
     elif "I8" not in rules or not a.vlogs:
         ap.error("give --dir, or --tempo (with --trace-ids or a time window), or --vlogs with --rules I8")
     else:
         raw = []
 
-    traces, violations, hops = [], [], collections.defaultdict(list)
+    traces, violations, hops, other_env = [], [], collections.defaultdict(list), 0
     for spans in raw:
         if not spans:
             continue
         t = Trace(spans, ingress_re)
         if a.env and t.env != a.env:
+            other_env += 1
             continue
         traces.append(t)
         violations += check_trace(t, rules, leaves, hops)
 
     i8 = check_i8(a.vlogs, since, until, a.env) if "I8" in rules and a.vlogs else None
-    gates = evaluate_gates(a.phase, traces, violations, i8, a.tolerance)
+    gates = evaluate_gates(a.phase, traces, violations, i8, a.tolerance, a.min_traces)
     summary = summarize(traces, violations, hops, i8, gates, rules)
+    summary["not_fetched"] = failed
+    summary["other_env"] = other_env
     print(json.dumps(summary, indent=2) if a.json else render(summary))
+    if other_env:
+        print(f"{other_env} traces left out: not --env {a.env}", file=sys.stderr)
     if a.push:
         push(a.push, prometheus_text(traces, violations, i8, rules, a.env))
+    # Trace IDs given by hand (a staging journey) must all be there: a missing one is a failure.
+    if a.trace_ids and (failed or other_env):
+        print(f"FAIL: {len(failed)} of the listed traces not in Tempo, {other_env} not in --env", file=sys.stderr)
+        return 1
     return 0 if all(g["pass"] for g in gates) else 1
 
 

@@ -1,0 +1,27 @@
+name: trace-checker
+
+# Tests of the trace contract checker (tracing/checker).
+
+on:
+  push:
+    paths:
+      - tracing/**
+      - .github/workflows/trace-checker.yml
+  pull_request:
+    paths:
+      - tracing/**
+      - .github/workflows/trace-checker.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: trace checker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m unittest tracing/checker/test_trace_check.py
