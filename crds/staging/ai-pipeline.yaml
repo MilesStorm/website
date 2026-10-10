@@ -1,0 +1,17 @@
+# Runs on eta's second GPU. Production's ai-pipeline evicts it when it needs that GPU for a rollout.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-pipeline-deployment
+spec:
+  # No surge pod: there is no third GPU, and the namespace quota has no room for it.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  template:
+    spec:
+      containers:
+        - name: ai-pipeline
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {memory: 1536Mi, nvidia.com/gpu: "1"}
