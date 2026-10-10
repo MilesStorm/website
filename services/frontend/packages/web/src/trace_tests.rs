@@ -337,6 +337,7 @@ async fn a_camera_session_traces_each_roll_and_keeps_the_trace_field_to_itself()
     let publish = span(&exporter, "roll publish").await;
     assert_eq!(publish.span_context.trace_id().to_string(), SETTLE_TRACE);
     assert_eq!(publish.parent_span_id, receive_id);
+    assert_eq!(attr(&publish, "trace.relation").as_deref(), Some("follows"));
     assert_eq!(links(&publish), std::slice::from_ref(&open.span_context));
     // ... and queued for keeping its picture, which the capture worker picks up.
     let queued = span(&exporter, "roll capture").await;

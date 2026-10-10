@@ -385,6 +385,8 @@ impl RollHub {
                     messaging.operation.name = "publish",
                     "messaging.operation.type" = "send",
                     messaging.destination.template = CHANNEL_TEMPLATE,
+                    // Queued: the span that received the roll has ended by now.
+                    trace.relation = "follows",
                     trace_id = tracing::field::Empty,
                     span_id = tracing::field::Empty,
                 );
