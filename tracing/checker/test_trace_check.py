@@ -184,6 +184,14 @@ class I4(unittest.TestCase):
         [v] = tc.check_i4(t, tc.LeafRegistry([leaf("child")]))
         self.assertAlmostEqual(v.ms, 10)
 
+    def test_cpu_parent_is_exempt_from_the_own_time_limit_but_not_from_having_children(self):
+        t = trace((1, 0, "frontend", "INTERNAL", "ssr.render", 0, 100), (2, 1, "frontend", "INTERNAL", "child", 5, 15))
+        cpu = [{"service": "frontend", "name": "ssr.render", "reason": "render"}]
+        self.assertEqual(tc.check_i4(t, tc.LeafRegistry([leaf("child", "frontend")], cpu=cpu)), [])
+        self.assertEqual(len(tc.check_i4(t, tc.LeafRegistry([leaf("child", "frontend")]))), 1)
+        alone = trace((1, 0, "frontend", "INTERNAL", "ssr.render", 0, 100))
+        self.assertEqual(len(tc.check_i4(alone, tc.LeafRegistry(cpu=cpu))), 1)
+
     def test_own_time_within_limit_passes(self):
         t = trace((1, 0, "auth", "INTERNAL", "work", 0, 100), (2, 1, "auth", "INTERNAL", "child", 1, 98))
         self.assertEqual(tc.check_i4(t, tc.LeafRegistry([leaf("child")])), [])

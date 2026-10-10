@@ -341,7 +341,7 @@ def check_i4(t, leaves):
         covered = _union([(max(k.st, s.st), min(k.en, s.en)) for k in kids if min(k.en, s.en) > max(k.st, s.st)])
         own = s.dur - covered
         limit = own_time_limit_ns(s.dur)
-        if own > limit:
+        if own > limit and not leaves.cpu(s):
             out.append(Violation("I4", t, s, f"{s.key()}: own time {own / MS:.2f} ms of {s.dur / MS:.2f} ms "
                                  f"(limit {limit / MS:.2f} ms)", own / MS, key="own: " + s.key()))
     return out
@@ -442,12 +442,14 @@ def check_i6(t):
 
 class LeafRegistry:
     """tracing/leaf_spans.toml. [[leaf]]: spans allowed to have no children (declared CPU or
-    single-I/O leaves). [[follows]]: detached work allowed to outlast its parent. Each entry has
-    service, name (fnmatch globs) and a reason."""
+    single-I/O leaves). [[follows]]: detached work allowed to outlast its parent. [[cpu]]: parents
+    whose own time is CPU work by design (a page render), exempt from the own-time limit. Each
+    entry has service, name (fnmatch globs) and a reason."""
 
-    def __init__(self, leaf=(), follows=()):
+    def __init__(self, leaf=(), follows=(), cpu=()):
         self.entries = [self._entry(e) for e in leaf]
         self.follow_entries = [self._entry(e) for e in follows]
+        self.cpu_entries = [self._entry(e) for e in cpu]
 
     @staticmethod
     def _entry(e):
@@ -461,7 +463,7 @@ class LeafRegistry:
     def load(cls, path):
         with open(path, "rb") as f:
             doc = tomllib.load(f)
-        return cls(doc.get("leaf", []), doc.get("follows", []))
+        return cls(doc.get("leaf", []), doc.get("follows", []), doc.get("cpu", []))
 
     @staticmethod
     def _match(entries, s):
@@ -472,6 +474,9 @@ class LeafRegistry:
 
     def follows(self, s):
         return self._match(self.follow_entries, s)
+
+    def cpu(self, s):
+        return self._match(self.cpu_entries, s)
 
 
 def check_trace(t, rules, leaves, hops):
