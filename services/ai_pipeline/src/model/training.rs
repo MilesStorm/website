@@ -29,6 +29,8 @@ use burn_train::{
 };
 use burn_train::{MetricEarlyStoppingStrategy, StoppingCondition};
 
+// burn's `Config` derive writes `optimizer: optimizer` in the code it generates.
+#[allow(clippy::redundant_field_names)]
 #[derive(Config, Debug)]
 pub struct TrainingConfig {
     pub optimizer: AdamConfig,
