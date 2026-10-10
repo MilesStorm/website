@@ -872,9 +872,11 @@ fn App() -> Element {
     // dx's esbuild pass turns a file it takes for an ES module into ESM, hiding the
     // top-level `var GrafanaFaroWebSdk` the other scripts need.
     let traceparent = use_hook(api::trace::traceparent);
+    let version = use_hook(api::trace::service_version);
 
     rsx! {
         document::Meta { name: "traceparent", content: traceparent }
+        document::Meta { name: "service-version", content: version }
         document::Script { src: asset!("/assets/vendor/faro-web-sdk.iife.js", AssetOptions::js().with_minify(false)) }
         document::Script { src: asset!("/assets/vendor/faro-web-tracing.iife.js", AssetOptions::js().with_minify(false)) }
         document::Script { src: asset!("/assets/vendor/otel-batch.iife.js", AssetOptions::js().with_minify(false)) }

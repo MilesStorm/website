@@ -406,7 +406,9 @@ def check_i6(t):
         if res_key not in seen_res:
             seen_res.add(res_key)
             ver = s.res.get("service.version")
-            what = ("resource has no service.version" if not ver else
+            # Envoy (Gateway, waypoints) isn't built from this repository: no commit to name.
+            what = (None if is_envoy(s) else
+                    "resource has no service.version" if not ver else
                     None if SHA_RE.match(str(ver)) else f"service.version {ver!r} is not a git SHA")
             if what:
                 out.append(Violation("I6", t, s, f"{s.svc}: {what}", key=f"{s.svc}: {what}"))

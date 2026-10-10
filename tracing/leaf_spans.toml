@@ -142,3 +142,14 @@ reason = "childless when logged out: no token, so no call to auth"
 service = "frontend"
 name = "ssr.render"
 reason = "the Dioxus page render: its own time is render CPU between the server futures (see the profiler)"
+
+
+[[leaf]]
+service = "frontend"
+name = "bff.redeem_pending_invite"
+reason = "after a login without a pending invite it only reads the session and returns"
+
+[[leaf]]
+service = "frontend"
+name = "GET /assets/*"
+reason = "a static file sent from disk: the span is the read and the send, with nothing of ours inside"

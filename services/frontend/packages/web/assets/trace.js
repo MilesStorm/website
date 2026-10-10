@@ -668,13 +668,16 @@
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'hidden') spans.forceFlush();
     });
+    // The build the page was served by, which is also this bundle's: `service.version`.
+    var versionMeta = document.querySelector('meta[name="service-version"]');
+    var version = (versionMeta && versionMeta.getAttribute('content')) || undefined;
     var faro = sdk.initializeFaro({
       // Beacons carry an unsampled traceparent so the Gateway does not trace each one.
       transports: [new sdk.FetchTransport({
         url: location.origin + '/faro/collect',
         requestOptions: { headers: { traceparent: unsampledTraceparent() } },
       })],
-      app: { name: 'milesstorm-web', namespace: 'milesstorm', environment: environment },
+      app: { name: 'milesstorm-web', namespace: 'milesstorm', environment: environment, version: version },
       // No performance, user action, navigation, CSP or console instrumentation: volume, query
       // strings (reset and verify codes) in resource URLs, and extra fetch/history patching.
       instrumentations: [

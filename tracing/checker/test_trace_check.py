@@ -302,6 +302,11 @@ class I6(unittest.TestCase):
     def test_clean_passes(self):
         self.assertEqual(self.details(good_server_trace()), [])
 
+    def test_envoy_needs_no_service_version(self):
+        t = trace((1, 0, "public-istio.istio-ingress", "SERVER", "ingress", 0, 1,
+                   {**HTTP_SRV, "component": "proxy"}, {"service.version": ""}))
+        self.assertEqual([v for v in tc.check_i6(t) if "service.version" in v.detail], [])
+
     def test_missing_service_version_and_non_sha(self):
         t = trace((1, 0, "frontend", "SERVER", "GET /", 0, 1, dict(HTTP_SRV), {"service.version": ""}),
                   (2, 1, "auth", "SERVER", "GET /", 0, 1, dict(HTTP_SRV), {"service.version": "latest"}))
