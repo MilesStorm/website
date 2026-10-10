@@ -29,8 +29,9 @@ use crate::roll::RollEvent;
 const SESSION_KIND: &str = "arcane.ws_connection";
 /// Default for `FRAME_TRACE_EVERY`: at ~140 ms per inference, a frame trace every ~1.4 s.
 const DEFAULT_FRAME_EVERY: u64 = 10;
-/// A failed frame is always traced when the session had none for this long (or ever), so
-/// an error is never invisible; failures in a run after it are sampled like other frames.
+/// A failed frame is always traced when the session's last traced failure is this long
+/// ago (or there is none), so an error is never invisible and a long run of failures has
+/// a trace at least this often; the failures in between are sampled like other frames.
 const FAILURE_QUIET: Duration = Duration::from_secs(10);
 
 /// Converts a unit's `Instant`s to wall-clock time through one reading of both clocks, so
@@ -160,7 +161,7 @@ impl UnitTracer {
             last_seq: 0,
             inferred: 0,
             failed: 0,
-            last_failed: None,
+            last_failed_trace: None,
             traced: 0,
             rolls: 0,
             superseded: 0,
@@ -183,8 +184,8 @@ pub struct SessionTrace {
     last_seq: u64,
     inferred: u64,
     failed: u64,
-    /// When the last failed frame's reply was sent, traced or not.
-    last_failed: Option<Instant>,
+    /// When the last failed frame that was traced sent its reply.
+    last_failed_trace: Option<Instant>,
     traced: u64,
     rolls: u64,
     /// Frames replaced by a newer one before they were inferred.
@@ -227,7 +228,7 @@ impl SessionTrace {
 
     fn frame_at(&mut self, anchor: Anchor, seq: u64, times: &FrameTimes, outcome: Outcome<'_>) -> Option<UnitTrace> {
         self.inferred += 1;
-        // Always traced: a frame that settles a roll, and a failure after a quiet spell.
+        // Always traced: a frame that settles a roll, and a failure when none was traced lately.
         let always = match outcome {
             Outcome::Frame { .. } => false,
             Outcome::Roll { .. } => {
@@ -236,11 +237,8 @@ impl SessionTrace {
             }
             Outcome::Failed(_) => {
                 self.failed += 1;
-                let quiet = self
-                    .last_failed
-                    .is_none_or(|last| times.done.saturating_duration_since(last) >= FAILURE_QUIET);
-                self.last_failed = Some(times.done);
-                quiet
+                self.last_failed_trace
+                    .is_none_or(|last| times.done.saturating_duration_since(last) >= FAILURE_QUIET)
             }
         };
         // The first frame, then every `frame_every`th, so a short session has one too.
@@ -250,6 +248,9 @@ impl SessionTrace {
             return None;
         }
         self.traced += 1;
+        if matches!(outcome, Outcome::Failed(_)) {
+            self.last_failed_trace = Some(times.done);
+        }
 
         let dropped = self.unreported_superseded + self.unreported_refused;
         let mut attributes = vec![
@@ -574,7 +575,7 @@ pub mod tests {
     }
 
     #[test]
-    fn a_failed_frame_is_always_traced_after_ten_seconds_without_one() {
+    fn a_failed_frame_is_always_traced_ten_seconds_after_the_last_traced_one() {
         // Frame sampling off, so only the failure rule traces anything.
         let (tracer, exporter) = in_memory(0);
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
@@ -582,12 +583,12 @@ pub mod tests {
         // (frame, seconds into the session, failed)
         let frames = [
             (1, 0, false),
-            (2, 1, true),   // the session's first failure
-            (3, 2, true),   // 1 s after a failure
-            (4, 11, true),  // 9 s after one: the quiet spell is counted from the last failure,
-            (5, 20, true),  // traced or not, so a steady run of failures is not a trace each
+            (2, 1, true),  // the session's first failure
+            (3, 2, true),  // 1 s after the traced one
+            (4, 11, true), // 10 s after it: a run of failures has a trace every 10 s
+            (5, 20, true), // 9 s after the one traced at 11 s
             (6, 25, false),
-            (7, 30, true),  // 10 s after the last failure
+            (7, 30, true), // 19 s after it
             (8, 31, true),
         ];
         for (seq, at, failed) in frames {
@@ -607,7 +608,7 @@ pub mod tests {
 
         let spans = exporter.get_finished_spans().unwrap();
         let traced: Vec<_> = named(&spans, "frame.infer").iter().map(|s| attribute(s, "frame_seq").unwrap()).collect();
-        assert_eq!(traced, vec![2.into(), 7.into()]);
+        assert_eq!(traced, vec![2.into(), 4.into(), 7.into()]);
         assert!(named(&spans, "frame.infer").iter().all(|s| s.status == Status::error("decode: bad image")));
         assert_eq!(attribute(named(&spans, "session close")[0], "frames_failed"), Some(6.into()));
     }
