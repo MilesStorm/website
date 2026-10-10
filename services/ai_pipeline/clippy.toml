@@ -1,0 +1,27 @@
+# Background work and in-process queues go through `src/trace.rs`, so none can be added
+# without deciding which trace it belongs to (TRACING.md). A raw use needs
+# `#[allow(clippy::disallowed_methods, reason = "..")]` and an entry in `allowed_raw_io.toml`.
+disallowed-methods = [
+  { path = "tokio::spawn", reason = "use crate::trace::spawn_loop for a long-lived task; add trace::spawn (a root span per unit, linked to its cause) there when a one-off task is first needed (TRACING.md)" },
+  { path = "tokio::task::spawn", reason = "use crate::trace::spawn_loop for a long-lived task; add trace::spawn (a root span per unit, linked to its cause) there when a one-off task is first needed (TRACING.md)" },
+  { path = "tokio::task::spawn_blocking", reason = "add a trace::spawn_blocking that creates the span inside the closure (TRACING.md)" },
+  { path = "tokio::task::spawn_local", reason = "use crate::trace::spawn_loop, or add the trace::spawn helper this needs (TRACING.md)" },
+  { path = "tokio::runtime::Handle::spawn", reason = "use crate::trace::spawn_loop, or add the trace::spawn helper this needs (TRACING.md)" },
+  { path = "tokio::runtime::Handle::spawn_blocking", reason = "add a trace::spawn_blocking that creates the span inside the closure (TRACING.md)" },
+  { path = "tokio::task::JoinSet::spawn", reason = "use crate::trace::spawn_loop, or add the trace::spawn helper this needs (TRACING.md)" },
+  { path = "tokio_util::task::TaskTracker::spawn", reason = "use crate::trace::spawn_loop with TaskTracker::track_future (TRACING.md)" },
+  { path = "std::thread::spawn", reason = "a thread has no trace context: hand it work as crate::trace::Carried messages and register the thread in allowed_raw_io.toml (TRACING.md)" },
+  { path = "std::thread::Builder::spawn", reason = "a thread has no trace context: hand it work as crate::trace::Carried messages and register the thread in allowed_raw_io.toml (TRACING.md)" },
+  { path = "std::process::exit", reason = "skips the exporters' flush: return from main, which shuts the telemetry providers down (TRACING.md)" },
+  { path = "tokio::sync::mpsc::channel", reason = "use crate::trace::channel: messages carry their sender's trace context (TRACING.md)" },
+  { path = "tokio::sync::mpsc::unbounded_channel", reason = "use crate::trace::channel: messages carry their sender's trace context (TRACING.md)" },
+  { path = "tokio::sync::broadcast::channel", reason = "messages must carry their sender's trace context: add a crate::trace constructor of Carried messages (TRACING.md)" },
+  { path = "tokio::sync::watch::channel", reason = "use crate::trace::watch_channel: the value carries its sender's trace context (TRACING.md)" },
+  { path = "tokio::sync::oneshot::channel", reason = "messages must carry their sender's trace context: use crate::trace::Carried, or register the channel in allowed_raw_io.toml (TRACING.md)" },
+  { path = "std::sync::mpsc::channel", reason = "use crate::trace::channel: messages carry their sender's trace context (TRACING.md)" },
+  { path = "std::sync::mpsc::sync_channel", reason = "use crate::trace::channel: messages carry their sender's trace context (TRACING.md)" },
+  { path = "tokio_tungstenite::connect_async", reason = "an outbound WebSocket needs a CLIENT span, a timeout and traceparent on the handshake: add a traced connect to crate::trace first (TRACING.md)" },
+  { path = "tokio_tungstenite::connect_async_with_config", reason = "an outbound WebSocket needs a CLIENT span, a timeout and traceparent on the handshake: add a traced connect to crate::trace first (TRACING.md)" },
+  { path = "tokio_tungstenite::client_async", reason = "an outbound WebSocket needs a CLIENT span, a timeout and traceparent on the handshake: add a traced connect to crate::trace first (TRACING.md)" },
+  { path = "tokio_tungstenite::client_async_with_config", reason = "an outbound WebSocket needs a CLIENT span, a timeout and traceparent on the handshake: add a traced connect to crate::trace first (TRACING.md)" },
+]
