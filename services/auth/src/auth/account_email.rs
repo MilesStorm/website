@@ -37,13 +37,11 @@ use chrono::{DateTime, Utc};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
-use tokio::task;
-use tracing::Instrument as _;
 
 use super::Db;
 use super::internal::InternalState;
 use super::mail::{Letter, Mailer, site_url};
+use super::trace;
 
 /// Most links of one kind per account per day, and most emails to one address per day.
 const DAILY_LIMIT: i64 = 10;
@@ -133,7 +131,16 @@ impl From<sqlx::Error> for IssueError {
 /// Creates a link code for the user, replacing any unused one of the same purpose.
 #[tracing::instrument(name = "email_code.issue", skip_all, fields(purpose = purpose.as_str()))]
 async fn issue(db: &Db, user_id: i64, purpose: Purpose, email: &str) -> Result<String, IssueError> {
-    let mut tx = db.begin().await?;
+    let result = issue_in_tx(db, user_id, purpose, email).await;
+    // `TooSoon` is an answer, not a failure.
+    if let Err(IssueError::Db(e)) = &result {
+        trace::db_failed(e);
+    }
+    result
+}
+
+async fn issue_in_tx(db: &Db, user_id: i64, purpose: Purpose, email: &str) -> Result<String, IssueError> {
+    let mut tx = trace::begin(db).await?;
     // One issuer per account at a time, so the limits below can't be raced.
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
         .bind(user_id)
@@ -157,6 +164,7 @@ async fn issue(db: &Db, user_id: i64, purpose: Purpose, email: &str) -> Result<S
     .fetch_one(&mut tx.executor())
     .await?;
     if too_soon || count >= DAILY_LIMIT || to_address >= DAILY_LIMIT {
+        trace::rollback(tx).await;
         return Err(IssueError::TooSoon);
     }
     sqlx::query(
@@ -178,7 +186,7 @@ async fn issue(db: &Db, user_id: i64, purpose: Purpose, email: &str) -> Result<S
     .bind(purpose.lifetime_secs() as f64)
     .execute(&mut tx.executor())
     .await?;
-    tx.commit().await?;
+    trace::commit(tx).await?;
     Ok(code)
 }
 
@@ -216,20 +224,19 @@ async fn redeem<'e>(
         .bind(purpose.as_str())
         .fetch_optional(db)
         .await
+        .inspect_err(trace::db_failed)
 }
 
-/// Deletes codes that expired over a day ago (kept that long for the daily limit).
-pub async fn clean_expired(db: PgPool) {
-    loop {
-        match sqlx::query("DELETE FROM email_tokens WHERE expires_at < NOW() - INTERVAL '1 day'")
-            .execute(&db)
-            .await
-        {
-            Ok(r) if r.rows_affected() > 0 => tracing::debug!(rows = r.rows_affected(), "expired email codes removed"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!(error = %e, "removing expired email codes failed"),
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+/// Deletes codes that expired over a day ago (kept that long for the daily limit). One
+/// round; `Auth::server` runs it hourly.
+pub async fn clean_expired(db: Db) {
+    match sqlx::query("DELETE FROM email_tokens WHERE expires_at < NOW() - INTERVAL '1 day'")
+        .execute(&db)
+        .await
+    {
+        Ok(r) if r.rows_affected() > 0 => tracing::debug!(rows = r.rows_affected(), "expired email codes removed"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "removing expired email codes failed"),
     }
 }
 
@@ -262,6 +269,7 @@ async fn token_account(db: &Db, token: &str) -> Result<Option<Account>, sqlx::Er
     .bind(token)
     .fetch_optional(db)
     .await
+    .inspect_err(trace::db_failed)
 }
 
 #[tracing::instrument(name = "account.by_id", skip_all)]
@@ -270,6 +278,7 @@ async fn account_by_id(db: &Db, id: i64) -> Result<Option<Account>, sqlx::Error>
         .bind(id)
         .fetch_optional(db)
         .await
+        .inspect_err(trace::db_failed)
 }
 
 /// The address as it will be stored: trimmed. `None` when it isn't a plausible
@@ -375,18 +384,26 @@ async fn issue_and_send(
             Ok(())
         }
         Err(e) => {
-            tracing::error!(user_id = account.id, kind = purpose.as_str(), error = %e, "sending an account email failed");
+            log_send_failure(account.id, purpose, &e);
             withdraw(db, &code).await;
             Err(error(StatusCode::BAD_GATEWAY, "send_failed"))
         }
     }
 }
 
+/// Resend's reason can repeat the address, and an event written in a span is exported as
+/// part of that span. So the span gets the error's type, and the reason is logged outside
+/// the span (`parent: None`); the exported log record still carries the trace's IDs, which
+/// come from the active context.
+fn log_send_failure(user_id: i64, purpose: Purpose, e: &super::mail::SendError) {
+    tracing::error!(user_id, kind = purpose.as_str(), error.type = %e.error_type, "sending an account email failed");
+    tracing::error!(parent: None, user_id, kind = purpose.as_str(), error = %e, "sending an account email failed: reason");
+}
+
 /// After registering: email a confirmation link without holding up the reply.
 pub fn send_verification_in_background(state: &InternalState, user_id: i64) {
     let (db, mailer) = (state.db.clone(), state.mailer.clone());
-    let span = super::telemetry::detached_span("email.verify_send");
-    task::spawn(async move {
+    trace::spawn_in_trace("email.verify_send", async move {
         let account = match account_by_id(&db, user_id).await {
             Ok(Some(a)) => a,
             Ok(None) => return,
@@ -398,7 +415,7 @@ pub fn send_verification_in_background(state: &InternalState, user_id: i64) {
         if let Some(email) = account.email.clone() {
             let _ = issue_and_send(&db, &mailer, &account, &email, Purpose::VerifyEmail).await;
         }
-    }.instrument(span));
+    });
 }
 
 // ---- Handlers ----
@@ -452,8 +469,9 @@ async fn verify_send(State(state): State<InternalState>, Json(req): Json<TokenRe
 #[tracing::instrument(name = "email.verify_confirm", skip_all)]
 async fn verify_confirm(State(state): State<InternalState>, Json(req): Json<CodeReq>) -> Response {
     let result: Result<Option<String>, sqlx::Error> = async {
-        let mut tx = state.db.begin().await?;
+        let mut tx = trace::begin(&state.db).await?;
         let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::VerifyEmail, true).await? else {
+            trace::rollback(tx).await;
             return Ok(None);
         };
         // Only while the address is still the one the link was sent to.
@@ -465,7 +483,7 @@ async fn verify_confirm(State(state): State<InternalState>, Json(req): Json<Code
         .bind(&email)
         .fetch_optional(&mut tx.executor())
         .await?;
-        tx.commit().await?;
+        trace::commit(tx).await?;
         if username.is_some() {
             tracing::info!(user_id, "email confirmed");
         }
@@ -494,8 +512,7 @@ async fn password_forgot(State(state): State<InternalState>, Json(req): Json<For
     // Everything else happens after replying, so the reply looks and takes the same
     // whether or not the account exists.
     let (db, mailer) = (state.db.clone(), state.mailer.clone());
-    let span = super::telemetry::detached_span("email.password_reset_send");
-    task::spawn(async move {
+    trace::spawn_in_trace("email.password_reset_send", async move {
         let by = if login.contains('@') { "LOWER(u.email) = LOWER($1)" } else { "u.username = $1" };
         let account: Result<Option<Account>, _> = sqlx::query_as(&format!(
             "SELECT {ACCOUNT_COLUMNS} FROM users u \
@@ -517,7 +534,7 @@ async fn password_forgot(State(state): State<InternalState>, Json(req): Json<For
             Ok(None) => tracing::info!("password reset asked for an unknown or password-less account"),
             Err(e) => tracing::error!(error = %e, "looking up an account for a password reset failed"),
         }
-    }.instrument(span));
+    });
     StatusCode::ACCEPTED.into_response()
 }
 
@@ -544,8 +561,7 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
         Err(e) => return db_error("checking a reset code", e),
     }
     let password = req.password;
-    let span = tracing::info_span!("password.hash");
-    let hashed = match task::spawn_blocking(move || span.in_scope(|| password_auth::generate_hash(password))).await {
+    let hashed = match trace::spawn_blocking("password.hash", move || password_auth::generate_hash(password)).await {
         Ok(h) => h,
         Err(e) => {
             tracing::error!(error = %e, "password hashing failed");
@@ -553,8 +569,9 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
         }
     };
     let result: Result<Option<(i64, String)>, sqlx::Error> = async {
-        let mut tx = state.db.begin().await?;
+        let mut tx = trace::begin(&state.db).await?;
         let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::ResetPassword, true).await? else {
+            trace::rollback(tx).await;
             return Ok(None);
         };
         // Resetting through the emailed link also proves the address is theirs.
@@ -568,7 +585,11 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
         .bind(&email)
         .fetch_optional(&mut tx.executor())
         .await?;
-        let Some((username,)) = username else { return Ok(None) };
+        // Not a password account: the code isn't used up.
+        let Some((username,)) = username else {
+            trace::rollback(tx).await;
+            return Ok(None);
+        };
         // Log out everywhere: whoever knew the old password shouldn't stay in. Their
         // outstanding links (e.g. to delete the account) stop working too.
         sqlx::query("DELETE FROM bff_tokens WHERE user_id = $1")
@@ -579,7 +600,7 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
             .bind(user_id)
             .execute(&mut tx.executor())
             .await?;
-        tx.commit().await?;
+        trace::commit(tx).await?;
         Ok(Some((user_id, username)))
     }
     .await;
@@ -626,8 +647,9 @@ async fn delete_check(State(state): State<InternalState>, Json(req): Json<CodeRe
 #[tracing::instrument(name = "account.delete_confirm", skip_all)]
 async fn delete_confirm(State(state): State<InternalState>, Json(req): Json<CodeReq>) -> Response {
     let result: Result<Option<(i64, String)>, sqlx::Error> = async {
-        let mut tx = state.db.begin().await?;
+        let mut tx = trace::begin(&state.db).await?;
         let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::DeleteAccount, true).await? else {
+            trace::rollback(tx).await;
             return Ok(None);
         };
         // Only while the address is still the one the link was sent to.
@@ -636,7 +658,7 @@ async fn delete_confirm(State(state): State<InternalState>, Json(req): Json<Code
             .bind(&email)
             .fetch_optional(&mut tx.executor())
             .await?;
-        tx.commit().await?;
+        trace::commit(tx).await?;
         Ok(deleted)
     }
     .await;
@@ -677,7 +699,64 @@ fn deleted_reply(result: Result<Option<(i64, String)>, sqlx::Error>) -> Response
 
 #[cfg(test)]
 mod tests {
+    use opentelemetry::trace::Status;
+
+    use super::super::trace::testing::{attr, pipeline, postgres, text};
     use super::*;
+
+    /// Resend's reason for refusing an email can repeat the address: it is logged, and no
+    /// span gets it.
+    #[test]
+    fn a_failed_send_logs_its_reason_and_keeps_it_off_the_span() {
+        let traced = pipeline();
+        let e = super::super::mail::SendError::new("422", "Resend returned 422: invalid: ada@example.com");
+        let span = tracing::info_span!("email.issue_and_send");
+        span.in_scope(|| log_send_failure(7, Purpose::VerifyEmail, &e));
+        drop(span);
+
+        let span = traced.span("email.issue_and_send");
+        assert!(!text(&span).contains("ada@example.com"), "{}", text(&span));
+        assert!(text(&span).contains("422"));
+        let logs = traced.logs();
+        assert!(logs.contains("invalid: ada@example.com"), "{logs}");
+        let reason = logs.lines().find(|l| l.contains("ada@example.com")).unwrap();
+        assert!(reason.contains("\"user_id\":7"), "{reason}");
+    }
+
+    /// Against a real Postgres (Docker): issuing a code is one transaction, whose statements
+    /// are spans under `email_code.issue`; "too soon" is an answer, a database error a failure.
+    #[tokio::test]
+    async fn issuing_a_code_is_a_spanned_transaction() {
+        let traced = pipeline();
+        let pg = postgres(super::super::pool_options()).await;
+        super::super::migrate(&pg.raw, &tower_sessions_sqlx_store::PostgresStore::new(pg.raw.clone())).await.unwrap();
+        let db = pg.db();
+        let (user_id,): (i64,) =
+            sqlx::query_as("INSERT INTO users (username, email, password) VALUES ('ada', 'ada@example.com', 'x') RETURNING id")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+
+        assert_eq!(issue(&db, user_id, Purpose::VerifyEmail, "ada@example.com").await.unwrap().len(), 43);
+        assert!(matches!(issue(&db, user_id, Purpose::VerifyEmail, "ada@example.com").await, Err(IssueError::TooSoon)));
+        pg.raw.close().await;
+        assert!(matches!(issue(&db, user_id, Purpose::VerifyEmail, "ada@example.com").await, Err(IssueError::Db(_))));
+
+        let [issued, too_soon, failed] = &traced.named("email_code.issue")[..] else { panic!("three issue spans") };
+        let children = |parent: &opentelemetry_sdk::trace::SpanData| -> Vec<String> {
+            let spans = traced.spans();
+            spans.iter().filter(|s| s.parent_span_id == parent.span_context.span_id()).map(|s| s.name.to_string()).collect()
+        };
+        let names = children(issued);
+        assert_eq!(names.first().map(String::as_str), Some("sqlx.begin"), "{names:?}");
+        assert_eq!(names.last().map(String::as_str), Some("sqlx.commit"), "{names:?}");
+        assert_eq!(names.len(), 7, "BEGIN, five statements, COMMIT: {names:?}");
+        assert_eq!(issued.status, Status::Unset);
+        assert_eq!(children(too_soon).last().map(String::as_str), Some("sqlx.rollback"));
+        assert_eq!(too_soon.status, Status::Unset);
+        assert_eq!(failed.status, Status::error(""));
+        assert_eq!(attr(failed, "error.type").as_deref(), Some("pool_closed"));
+    }
 
     #[test]
     fn email_codes_stay_in_the_fragment() {

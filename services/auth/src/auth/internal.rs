@@ -10,15 +10,14 @@ use axum::{
 use jsonwebtoken::{EncodingKey, Header, encode};
 use password_auth::verify_password;
 use serde::{Deserialize, Serialize};
-use tokio::task;
-use tracing::Instrument as _;
 use ulid::Ulid;
 
 use super::account_email;
 use super::invites;
 use super::mail::Mailer;
 use super::telemetry;
-use super::Db;
+use super::trace::{self, TracedClient};
+use super::{Db, GAME_HOST};
 use super::user::{Backend, BackendError, BffToken, OAuthProvider};
 
 #[derive(Clone)]
@@ -28,9 +27,8 @@ pub struct InternalState {
     pub service_secret: String,
     pub backend: Backend,
     pub mailer: Mailer,
-    /// Shared client for the ark host. `Client::new()` per request cost 40–190 ms of CPU
-    /// (TLS setup and the system certificate store), more than the call itself.
-    pub ark_http: reqwest::Client,
+    /// Shared client for the ark host (`Auth::server` builds it once).
+    pub ark_http: TracedClient,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,6 +79,7 @@ async fn create_bff_token(db: &Db, user_id: i64) -> Result<BffToken, sqlx::Error
         .bind(user_id)
         .fetch_one(db)
         .await
+        .inspect_err(trace::db_failed)
 }
 
 async fn verify_service_token(
@@ -148,9 +147,7 @@ async fn exchange_password(
     let password_hash = user.password.clone().unwrap_or_default();
     let input = req.password.clone();
 
-    // The span sits inside the closure so the hashing's CPU time shows under its own name.
-    let span = tracing::info_span!("password.verify");
-    let valid = match task::spawn_blocking(move || span.in_scope(|| verify_password(input, &password_hash).is_ok())).await {
+    let valid = match trace::spawn_blocking("password.verify", move || verify_password(input, &password_hash).is_ok()).await {
         Ok(valid) => valid,
         Err(e) => {
             tracing::error!(error = %e, "password verification failed");
@@ -414,8 +411,7 @@ async fn register(
         }
     }
     let password = req.password.clone();
-    let span = tracing::info_span!("password.hash");
-    let hashed = task::spawn_blocking(move || span.in_scope(|| password_auth::generate_hash(password)))
+    let hashed = trace::spawn_blocking("password.hash", move || password_auth::generate_hash(password))
         .await
         .expect("password hashing failed");
 
@@ -471,44 +467,15 @@ async fn register(
     }
 }
 
-// Extracts the W3C traceparent header value from the current span's OTel context
-// so it can be injected into outbound ark requests without pulling in a
-// separate HTTP middleware crate (which would conflict with oauth2's reqwest).
-fn traceparent() -> Option<String> {
-    use opentelemetry::propagation::TextMapPropagator as _;
-    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-    let propagator = opentelemetry_sdk::propagation::TraceContextPropagator::new();
-    let cx = tracing::Span::current().context();
-    let mut carrier = std::collections::HashMap::<String, String>::new();
-    propagator.inject_context(&cx, &mut carrier);
-    carrier.remove("traceparent")
-}
-
-/// GET `http://192.168.1.21:9090/ark/<path>` as a CLIENT span (`peer.service` names the ark
-/// node in the service graph). The outer error is "unreachable", the inner one a bad body.
+/// GET `<base>/ark/<path>` on the game-server host (`GAME_HOST`). The client makes the CLIENT
+/// span and sends `traceparent`. The outer error is "unreachable", the inner one a bad body.
 async fn ark_get(
-    http: &reqwest::Client,
+    http: &TracedClient,
+    base: &str,
     path: &str,
-) -> Result<Result<DockerRequestResponse, reqwest::Error>, reqwest::Error> {
-    let span = tracing::info_span!(
-        "ark.request",
-        otel.kind = "client",
-        otel.name = %format_args!("GET /ark/{path}"),
-        peer.service = "ark",
-        http.request.method = "GET",
-        http.response.status_code = tracing::field::Empty,
-    );
-    async {
-        let mut builder = http.get(format!("http://192.168.1.21:9090/ark/{path}"));
-        if let Some(tp) = traceparent() {
-            builder = builder.header("traceparent", tp);
-        }
-        let resp = builder.send().await?;
-        tracing::Span::current().record("http.response.status_code", resp.status().as_u16());
-        Ok(resp.json::<DockerRequestResponse>().await)
-    }
-    .instrument(span)
-    .await
+) -> Result<Result<DockerRequestResponse, reqwest::Error>, reqwest_middleware::Error> {
+    let resp = http.get(format!("{base}/ark/{path}")).send().await?;
+    Ok(resp.json::<DockerRequestResponse>().await)
 }
 
 // ---- Internal Ark operations ----
@@ -590,6 +557,7 @@ async fn resolve_profile(db: &Db, token: &str) -> Result<Option<ProfileResp>, sq
     .bind(token)
     .fetch_optional(db)
     .await
+    .inspect_err(trace::db_failed)
 }
 
 #[tracing::instrument(name = "profile.get", skip_all)]
@@ -771,7 +739,7 @@ async fn ark_num_players(
     };
     tracing::debug!(user_id, "ark num_players request");
 
-    match ark_get(&state.ark_http, "num_players").await {
+    match ark_get(&state.ark_http, GAME_HOST, "num_players").await {
         Ok(body) => match body {
             Ok(body) => {
                 telemetry::ark_command("num_players", "success");
@@ -779,11 +747,13 @@ async fn ark_num_players(
             }
             Err(e) => {
                 telemetry::ark_command("num_players", "error");
+                trace::fail(&tracing::Span::current(), "bad_body");
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }
         },
         Err(_) => {
             telemetry::ark_command("num_players", "unreachable");
+            trace::fail(&tracing::Span::current(), "unreachable");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Could not reach ark host",
@@ -814,7 +784,7 @@ async fn ark_command(
     };
     tracing::info!(user_id, cmd = %cmd, "ark command issued");
 
-    match ark_get(&state.ark_http, &cmd).await {
+    match ark_get(&state.ark_http, GAME_HOST, &cmd).await {
         Ok(body) => match body {
             Ok(body) => {
                 telemetry::ark_command(&cmd, "success");
@@ -822,11 +792,13 @@ async fn ark_command(
             }
             Err(e) => {
                 telemetry::ark_command(&cmd, "error");
+                trace::fail(&tracing::Span::current(), "bad_body");
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }
         },
         Err(_) => {
             telemetry::ark_command(&cmd, "unreachable");
+            trace::fail(&tracing::Span::current(), "unreachable");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Could not reach ark host",
@@ -1209,52 +1181,51 @@ async fn admin_revoke_role_permission(
 mod tests {
     use super::clean_display_name;
 
-    /// `traceparent()` carries the calling span's context across an HTTP hop, and the
-    /// callee's `OtelAxumLayer` continues that trace. A mismatched OTel matrix still builds
-    /// but breaks this (TRACING.md, "Upgrading OpenTelemetry").
-    #[tokio::test(flavor = "current_thread")]
+    /// `ark_get` makes a CLIENT span, and the callee's `OtelAxumLayer` continues the trace
+    /// under it. A mismatched OTel matrix still builds but breaks this (TRACING.md,
+    /// "Upgrading OpenTelemetry").
+    #[tokio::test]
     async fn traceparent_continues_the_trace_across_a_hop() {
         use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
-        use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
+        use opentelemetry::trace::{SpanKind, TraceContextExt as _};
         use tracing::Instrument as _;
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-        use tracing_subscriber::layer::SubscriberExt as _;
 
-        opentelemetry::global::set_text_map_propagator(
-            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-        );
-        let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder().build().tracer("test");
-        let _guard = tracing::subscriber::set_default(
-            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer)),
-        );
+        use super::super::trace::{self, Peer, testing::{attr, pipeline, serve}};
+        use super::CommandResult;
 
-        // The callee answers with the trace ID of the span it handles the request in.
-        let app = axum::Router::new()
-            .route(
-                "/",
-                axum::routing::get(|| async {
-                    tracing::Span::current().context().span().span_context().trace_id().to_string()
-                }),
-            )
-            .layer(OtelAxumLayer::default());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/", listener.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let traced = pipeline();
+        let ark = serve(
+            axum::Router::new()
+                .route(
+                    "/ark/num_players",
+                    axum::routing::get(|| async {
+                        axum::Json(serde_json::json!({ "restart_result": "ok", "command_result": { "NumPlayers": 3 } }))
+                    }),
+                )
+                .layer(OtelAxumLayer::default()),
+        )
+        .await;
+        let http = trace::client(
+            Peer { service: "ark", expected: &[] },
+            std::time::Duration::from_secs(5),
+            reqwest::redirect::Policy::default(),
+        );
 
         let caller = tracing::info_span!("caller");
         let caller_sc = caller.context().span().span_context().clone();
-        let (tp, callee_trace) = async {
-            let tp = super::traceparent().expect("no traceparent in a span");
-            let resp = reqwest::Client::new().get(&url).header("traceparent", &tp).send().await.unwrap();
-            (tp, resp.text().await.unwrap())
-        }
-        .instrument(caller)
-        .await;
+        let body = super::ark_get(&http, &ark, "num_players").instrument(caller).await.unwrap().unwrap();
+        assert!(matches!(body.command_result, Some(CommandResult::NumPlayers(3))));
 
-        let parts: Vec<&str> = tp.split('-').collect();
-        assert_eq!(parts[1], caller_sc.trace_id().to_string(), "header: {tp}");
-        assert_eq!(parts[2], caller_sc.span_id().to_string(), "header: {tp}");
-        assert_eq!(callee_trace, caller_sc.trace_id().to_string());
+        // Both sides name their span after the request.
+        let [server, client] = &traced.named("GET /ark/num_players")[..] else { panic!("a CLIENT and a SERVER span") };
+        assert_eq!(client.span_kind, SpanKind::Client);
+        assert_eq!(client.parent_span_id, caller_sc.span_id());
+        assert_eq!(attr(client, "peer.service").as_deref(), Some("ark"));
+        // The callee's SERVER span is the CLIENT span's child, in the caller's trace.
+        assert_eq!(server.span_kind, SpanKind::Server);
+        assert_eq!(server.span_context.trace_id(), caller_sc.trace_id());
+        assert_eq!(server.parent_span_id, client.span_context.span_id());
     }
 
     #[test]

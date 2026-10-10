@@ -1,0 +1,59 @@
+# Untraced I/O and background work can't be written by accident: the raw APIs are banned,
+# and src/auth/trace.rs has the traced one for each (TRACING.md). A use that has to stay raw
+# carries `#[allow(clippy::disallowed_.., reason = "..")]` and is listed in
+# allowed_raw_io.toml; tests/allowed_raw_io.rs fails on an allow that isn't.
+
+disallowed-types = [
+  { path = "reqwest::Client", reason = "use a client from auth::trace::client: a plain one sends no traceparent and makes no span" },
+  { path = "reqwest::ClientBuilder", reason = "build clients with auth::trace::client" },
+  { path = "sqlx::PgPool", reason = "query through auth::Db (sqlx-tracing): the raw pool's queries have no spans" },
+  { path = "sqlx::Pool", reason = "query through auth::Db (sqlx-tracing): the raw pool's queries have no spans" },
+]
+
+disallowed-methods = [
+  # Outbound HTTP
+  { path = "reqwest::Client::new", reason = "use auth::trace::client" },
+  { path = "reqwest::Client::builder", reason = "use auth::trace::client" },
+  { path = "reqwest::ClientBuilder::new", reason = "use auth::trace::client" },
+  { path = "reqwest::get", reason = "use a client from auth::trace::client" },
+  # Transactions: sqlx-tracing spans their queries, not these statements
+  { path = "sqlx_tracing::Pool::begin", reason = "use auth::trace::begin, which makes the BEGIN span" },
+  { path = "sqlx_tracing::Pool::try_begin", reason = "use auth::trace::begin, which makes the BEGIN span" },
+  { path = "sqlx_tracing::Transaction::commit", reason = "use auth::trace::commit, which makes the COMMIT span" },
+  { path = "sqlx_tracing::Transaction::rollback", reason = "use auth::trace::rollback, which makes the ROLLBACK span" },
+  # Background work
+  { path = "tokio::task::spawn", reason = "use auth::trace::spawn (own trace) or spawn_in_trace (the request's trace)" },
+  { path = "tokio::task::spawn_local", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::task::spawn_blocking", reason = "use auth::trace::spawn_blocking" },
+  { path = "tokio::runtime::Handle::spawn", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::runtime::Handle::spawn_blocking", reason = "use auth::trace::spawn_blocking" },
+  { path = "tokio::runtime::Runtime::spawn", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use auth::trace::spawn_blocking" },
+  { path = "tokio::task::LocalSet::spawn_local", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::task::JoinSet::spawn", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::task::JoinSet::spawn_on", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::task::JoinSet::spawn_local", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::task::JoinSet::spawn_local_on", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio::task::JoinSet::spawn_blocking", reason = "use auth::trace::spawn_blocking" },
+  { path = "tokio::task::JoinSet::spawn_blocking_on", reason = "use auth::trace::spawn_blocking" },
+  { path = "tokio_util::task::TaskTracker::spawn", reason = "use auth::trace::spawn or spawn_in_trace" },
+  { path = "tokio_util::task::TaskTracker::spawn_blocking", reason = "use auth::trace::spawn_blocking" },
+  { path = "std::thread::spawn", reason = "use auth::trace::spawn_blocking" },
+  { path = "std::thread::Builder::spawn", reason = "use auth::trace::spawn_blocking" },
+  # Queues: a message has to carry its sender's trace context. auth has none yet; when it
+  # needs one, add a context-carrying channel to auth::trace first.
+  { path = "tokio::sync::mpsc::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::mpsc::unbounded_channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::broadcast::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::watch::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::oneshot::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::watch::Sender::new", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::broadcast::Sender::new", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "futures_channel::mpsc::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "futures_channel::mpsc::unbounded", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "futures_channel::oneshot::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "std::sync::mpsc::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "std::sync::mpsc::sync_channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  # Exits without flushing spans and logs
+  { path = "std::process::exit", reason = "return from main, which flushes the tracer and logger first" },
+]

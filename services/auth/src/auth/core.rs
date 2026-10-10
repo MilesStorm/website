@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::user::AuthSession;
 
 use super::telemetry;
+use super::trace;
 use super::user::ClientUser;
 
 #[derive(Serialize)]
@@ -88,13 +89,16 @@ mod post {
                         user: None,
                     }),
                 ),
-                Err(_) => (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiResponse {
-                        message: "An unexpected error occurred".to_string(),
-                        user: None,
-                    }),
-                ),
+                Err(UserError::DatabaseError(e)) => {
+                    trace::db_failed(&e);
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse {
+                            message: "An unexpected error occurred".to_string(),
+                            user: None,
+                        }),
+                    )
+                }
             }
             .into_response()
         }
@@ -126,12 +130,14 @@ mod post {
                 }
                 Err(_) => {
                     telemetry::login_attempt("password", "error");
+                    trace::fail(&tracing::Span::current(), "authenticate");
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             };
 
             if auth_session.login(&user).await.is_err() {
                 telemetry::login_attempt("password", "error");
+                trace::fail(&tracing::Span::current(), "session");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
@@ -184,7 +190,10 @@ mod get {
                 tracing::info!("User logged out: {:?}", user);
                 StatusCode::RESET_CONTENT.into_response()
             }
-            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Err(_) => {
+                trace::fail(&tracing::Span::current(), "session");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
         }
     }
 }

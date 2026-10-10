@@ -5,13 +5,14 @@ use oauth2::{
     AuthorizationCode, CsrfToken, EndpointNotSet, EndpointSet, RedirectUrl, Scope, TokenResponse,
     basic::{BasicClient, BasicRequestTokenError},
     http::header::{AUTHORIZATION, USER_AGENT},
-    reqwest::{self, Client},
+    url::Url,
 };
 use password_auth::verify_password;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
-use tokio::task;
 use tracing::Instrument;
+
+use super::trace::{self, Peer, TracedClient};
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -168,10 +169,10 @@ pub enum BackendError {
     EmailAlreadyInUse,
 
     #[error(transparent)]
-    Reqwest(reqwest::Error),
+    Reqwest(reqwest_middleware::Error),
 
     #[error(transparent)]
-    OAuth2(BasicRequestTokenError<<Client as oauth2::AsyncHttpClient<'static>>::Error>),
+    OAuth2(BasicRequestTokenError<reqwest_middleware::Error>),
 
     #[error(transparent)]
     TaskJoin(#[from] tokio::task::JoinError),
@@ -183,23 +184,96 @@ impl From<sqlx::Error> for BackendError {
     }
 }
 
+impl BackendError {
+    /// `error.type` for a span, or `None` when it isn't a failure (a taken email is an
+    /// answer). The error's text stays off spans: it can quote the provider's reply.
+    fn error_type(&self) -> Option<std::borrow::Cow<'static, str>> {
+        match self {
+            BackendError::Sqlx(e) => Some(trace::sqlx_error_type(e)),
+            BackendError::EmailAlreadyInUse => None,
+            BackendError::Reqwest(_) => Some("provider_request".into()),
+            BackendError::OAuth2(_) => Some("token_request".into()),
+            BackendError::TaskJoin(_) => Some("task_join".into()),
+        }
+    }
+
+    /// Marks the current span as failed by this error (see [`trace::fail`]).
+    fn fail_span(&self) {
+        if let Some(error_type) = self.error_type() {
+            trace::fail(&tracing::Span::current(), error_type);
+        }
+    }
+}
+
+/// The client for an OAuth provider's token and user-info endpoints. No redirects: a token
+/// request must not be sent on to wherever a reply points (SSRF).
+fn provider_client(service: &'static str) -> TracedClient {
+    trace::client(
+        Peer { service, expected: &[] },
+        std::time::Duration::from_secs(10),
+        reqwest::redirect::Policy::none(),
+    )
+}
+
+/// oauth2's HTTP client: `request_async(&|req| oauth_http(client.clone(), req))`. The crate's
+/// own reqwest client is off (it would be untraced); this sends the request through a
+/// [`TracedClient`], so the token request is a CLIENT span and carries `traceparent`. The
+/// client is taken by value (a cheap clone): a future borrowing it isn't `Send` enough for
+/// an axum handler.
+async fn oauth_http(
+    client: TracedClient,
+    request: oauth2::HttpRequest,
+) -> Result<oauth2::HttpResponse, reqwest_middleware::Error> {
+    let (parts, body) = request.into_parts();
+    let response = client
+        .request(parts.method, parts.uri.to_string())
+        .headers(parts.headers)
+        .body(body)
+        .send()
+        .await?;
+    let (status, headers) = (response.status(), response.headers().clone());
+    let mut reply = oauth2::HttpResponse::new(response.bytes().await?.to_vec());
+    *reply.status_mut() = status;
+    *reply.headers_mut() = headers;
+    Ok(reply)
+}
+
+/// The provider's description of the user the access token belongs to.
+#[tracing::instrument(name = "oauth.user_info", skip_all)]
+async fn user_info<T: serde::de::DeserializeOwned>(
+    http: &TracedClient,
+    url: &str,
+    access_token: &str,
+) -> Result<T, BackendError> {
+    let info: Result<T, reqwest_middleware::Error> = async {
+        let response = http
+            .get(url)
+            .header(USER_AGENT.as_str(), "milesstorm-auth")
+            .header(AUTHORIZATION.as_str(), format!("Bearer {access_token}"))
+            .send()
+            .await?;
+        Ok(response.json().await?)
+    }
+    .await;
+    info.map_err(BackendError::Reqwest).inspect_err(BackendError::fail_span)
+}
+
 #[derive(Debug, Clone)]
 pub struct Backend {
     pub db: super::Db,
     client: BasicClientSet,
     g_client: BasicClientSet,
-    http_client: Client,
+    github_http: TracedClient,
+    google_http: TracedClient,
+    /// For the game-server host (the session routes in `permissions.rs`).
+    pub game_http: TracedClient,
 }
 
 pub type BasicClientSet =
     BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 impl Backend {
-    pub fn new(db: super::Db, client: BasicClientSet, g_client: BasicClientSet) -> Self {
-        let http_client = reqwest::ClientBuilder::new()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("Could not build http_Client");
+    pub fn new(db: super::Db, client: BasicClientSet, g_client: BasicClientSet, game_http: TracedClient) -> Self {
         let bff_callback_url = std::env::var("BFF_CALLBACK_URL")
             .unwrap_or_else(|_| "http://localhost:8080".to_string());
         let g_client = g_client.set_redirect_uri(
@@ -215,7 +289,9 @@ impl Backend {
             db,
             client,
             g_client,
-            http_client,
+            github_http: provider_client("github"),
+            google_http: provider_client("google"),
+            game_http,
         }
     }
 
@@ -225,32 +301,29 @@ impl Backend {
         provider: OAuthProvider,
         code: String,
     ) -> Result<User, BackendError> {
+        self.complete_oauth_steps(provider, code).await.inspect_err(BackendError::fail_span)
+    }
+
+    async fn complete_oauth_steps(
+        &self,
+        provider: OAuthProvider,
+        code: String,
+    ) -> Result<User, BackendError> {
         match provider {
             OAuthProvider::Github => {
-                let token_res = self
-                    .client
-                    .exchange_code(AuthorizationCode::new(code))
-                    .request_async(&self.http_client)
-                    .instrument(tracing::info_span!("oauth.code_exchange"))
-                    .await
-                    .map_err(BackendError::OAuth2)?;
-
-                let user_info = async {
-                    self.http_client
-                        .get("https://api.github.com/user")
-                        .header(USER_AGENT.as_str(), "milesstorm-auth")
-                        .header(
-                            AUTHORIZATION.as_str(),
-                            format!("Bearer {}", token_res.access_token().secret()),
-                        )
-                        .send()
-                        .await?
-                        .json::<UserInfo>()
+                let token_res = async {
+                    self.client
+                        .exchange_code(AuthorizationCode::new(code))
+                        .request_async(&|req| oauth_http(self.github_http.clone(), req))
                         .await
+                        .map_err(BackendError::OAuth2)
+                        .inspect_err(BackendError::fail_span)
                 }
-                .instrument(tracing::info_span!("oauth.user_info"))
-                .await
-                .map_err(BackendError::Reqwest)?;
+                .instrument(tracing::info_span!("oauth.code_exchange"))
+                .await?;
+
+                let user_info: UserInfo =
+                    user_info(&self.github_http, "https://api.github.com/user", token_res.access_token().secret()).await?;
 
                 // The `WHERE users.password IS NULL` guards against account takeover:
                 // if a password account already owns this username, the conflict update is
@@ -273,30 +346,19 @@ impl Backend {
                 user.ok_or(BackendError::EmailAlreadyInUse)
             }
             OAuthProvider::Google => {
-                let token_res = self
-                    .g_client
-                    .exchange_code(AuthorizationCode::new(code))
-                    .request_async(&self.http_client)
-                    .instrument(tracing::info_span!("oauth.code_exchange"))
-                    .await
-                    .map_err(BackendError::OAuth2)?;
-
-                let user_info = async {
-                    self.http_client
-                        .get("https://www.googleapis.com/oauth2/v2/userinfo")
-                        .header(USER_AGENT.as_str(), "milesstorm-auth")
-                        .header(
-                            AUTHORIZATION.as_str(),
-                            format!("Bearer {}", token_res.access_token().secret()),
-                        )
-                        .send()
-                        .await?
-                        .json::<GoogleUserInfo>()
+                let token_res = async {
+                    self.g_client
+                        .exchange_code(AuthorizationCode::new(code))
+                        .request_async(&|req| oauth_http(self.google_http.clone(), req))
                         .await
+                        .map_err(BackendError::OAuth2)
+                        .inspect_err(BackendError::fail_span)
                 }
-                .instrument(tracing::info_span!("oauth.user_info"))
-                .await
-                .map_err(BackendError::Reqwest)?;
+                .instrument(tracing::info_span!("oauth.code_exchange"))
+                .await?;
+
+                let user_info: GoogleUserInfo =
+                    user_info(&self.google_http, "https://www.googleapis.com/oauth2/v2/userinfo", token_res.access_token().secret()).await?;
 
                 // Identify Google users by email (unique on Google's side and in our schema).
                 // Matching on `username` would let two Googlers with the same display name
@@ -350,7 +412,7 @@ impl Backend {
         }
     }
 
-    pub fn authorize_url(&self) -> (reqwest::Url, CsrfToken) {
+    pub fn authorize_url(&self) -> (Url, CsrfToken) {
         self.client
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new(String::from("read:user")))
@@ -358,7 +420,7 @@ impl Backend {
             .url()
     }
 
-    pub fn authorize_g_url(&self) -> (reqwest::Url, CsrfToken) {
+    pub fn authorize_g_url(&self) -> (Url, CsrfToken) {
         self.g_client
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new(String::from("profile")))
@@ -378,8 +440,7 @@ impl Backend {
 
         // password is slow, so spawn off a thread to do the hashing
         let password = password.to_owned();
-        let span = tracing::info_span!("password.hash");
-        let hashed_password = task::spawn_blocking(move || span.in_scope(|| password_auth::generate_hash(password)))
+        let hashed_password = trace::spawn_blocking("password.hash", move || password_auth::generate_hash(password))
             .await
             .expect("password hashing failed");
 
@@ -425,22 +486,22 @@ impl AuthnBackend for Backend {
             sqlx::query_as("select * from users where username = $1 and password is not null")
                 .bind(password_cred.username)
                 .fetch_optional(&self.db)
-                .await?;
+                .await
+                .inspect_err(trace::db_failed)?;
 
         // Verifying the password is blocking and potentially slow, so we'll do so via
         // `spawn_blocking`.
-        let span = tracing::info_span!("password.verify");
-        task::spawn_blocking(move || {
-            span.in_scope(|| {
-                Ok(user.filter(|user| {
-                    let Some(ref password) = user.password else {
-                        return false;
-                    };
-                    verify_password(password_cred.password, password).is_ok()
-                }))
+        let verified = trace::spawn_blocking("password.verify", move || {
+            user.filter(|user| {
+                let Some(ref password) = user.password else {
+                    return false;
+                };
+                verify_password(password_cred.password, password).is_ok()
             })
         })
-        .await?
+        .await
+        .inspect_err(|_| trace::fail(&tracing::Span::current(), "task_join"))?;
+        Ok(verified)
     }
 
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
@@ -453,3 +514,91 @@ impl AuthnBackend for Backend {
 
 // type alias for convenience
 pub type AuthSession = axum_login::AuthSession<Backend>;
+
+#[cfg(test)]
+mod tests {
+    use axum::routing::{get, post};
+    use oauth2::{AuthUrl, ClientId, TokenUrl};
+    use opentelemetry::trace::{SpanKind, Status, TraceContextExt as _};
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    use super::super::trace::testing::{attr, echo_traceparent, pipeline, serve, text};
+    use super::*;
+
+    /// A token endpoint whose access token is the `traceparent` it was sent.
+    async fn token(headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
+        Json(serde_json::json!({ "access_token": echo_traceparent(headers).await, "token_type": "bearer" }))
+    }
+
+    #[tokio::test]
+    async fn token_requests_are_client_spans_and_follow_no_redirect() {
+        let traced = pipeline();
+        let provider = serve(
+            axum::Router::new()
+                .route("/token", post(token))
+                .route("/moved", post(|| async { axum::response::Redirect::temporary("/token") })),
+        )
+        .await;
+        let http = provider_client("github");
+        let oauth = |path: &str| {
+            BasicClient::new(ClientId::new("id".into()))
+                .set_auth_uri(AuthUrl::new(format!("{provider}/authorize")).unwrap())
+                .set_token_uri(TokenUrl::new(format!("{provider}{path}")).unwrap())
+        };
+
+        let caller = tracing::info_span!("oauth.code_exchange");
+        let caller_sc = caller.context().span().span_context().clone();
+        let (token, moved) = async {
+            let token = oauth("/token")
+                .exchange_code(AuthorizationCode::new("code".into()))
+                .request_async(&|req| oauth_http(http.clone(), req))
+                .await
+                .unwrap();
+            let moved = oauth("/moved")
+                .exchange_code(AuthorizationCode::new("code".into()))
+                .request_async(&|req| oauth_http(http.clone(), req))
+                .await;
+            (token, moved)
+        }
+        .instrument(caller)
+        .await;
+
+        // One request to /token: the redirect from /moved wasn't followed.
+        let span = traced.span("POST /token");
+        assert_eq!(span.span_kind, SpanKind::Client);
+        assert_eq!(span.parent_span_id, caller_sc.span_id());
+        assert_eq!(attr(&span, "peer.service").as_deref(), Some("github"));
+        assert_eq!(
+            token.access_token().secret(),
+            &format!("00-{}-{}-01", caller_sc.trace_id(), span.span_context.span_id())
+        );
+        assert!(moved.is_err());
+        assert_eq!(attr(&traced.span("POST /moved"), "http.response.status_code").as_deref(), Some("307"));
+    }
+
+    #[tokio::test]
+    async fn user_info_failures_mark_the_span_without_the_reply() {
+        let traced = pipeline();
+        let provider = serve(
+            axum::Router::new()
+                .route("/user", get(|headers: axum::http::HeaderMap| async move {
+                    assert_eq!(headers["authorization"], "Bearer token");
+                    Json(serde_json::json!({ "login": "ada" }))
+                }))
+                .route("/odd", get(|| async { Json(serde_json::json!({ "login": 5 })) })),
+        )
+        .await;
+        let http = provider_client("github");
+
+        let info: UserInfo = user_info(&http, &format!("{provider}/user"), "token").await.unwrap();
+        assert_eq!(info.login, "ada");
+        assert!(user_info::<UserInfo>(&http, &format!("{provider}/odd"), "token").await.is_err());
+
+        let [ok, failed] = &traced.named("oauth.user_info")[..] else { panic!("two user-info spans") };
+        assert_eq!(ok.status, Status::Unset);
+        assert_eq!(traced.span("GET /user").parent_span_id, ok.span_context.span_id());
+        assert_eq!(failed.status, Status::error(""));
+        assert_eq!(attr(failed, "error.type").as_deref(), Some("provider_request"));
+        assert!(!text(failed).contains("invalid type"), "the decode error's text is on the span");
+    }
+}

@@ -35,14 +35,3 @@ pub fn email(kind: &str, status: &str) {
     )
     .increment(1);
 }
-
-/// A span for a task that outlives the request (`tokio::spawn`): in the request's trace,
-/// but parented through OTel only, so the request span still closes (and is exported) when
-/// the response goes out. `.in_current_span()` would hold it open until the task ends.
-pub fn detached_span(name: &'static str) -> tracing::Span {
-    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-    let span = tracing::info_span!(parent: None, "background", otel.name = name);
-    // Fails only without the OTel layer (no export anyway): the span is new, so not started.
-    let _ = span.set_parent(tracing::Span::current().context());
-    span
-}
