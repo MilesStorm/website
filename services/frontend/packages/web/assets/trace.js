@@ -8,10 +8,14 @@
 //   - turns the page load into a span that is a child of the server render span named by
 //     <meta name="traceparent">, current until the page has loaded and gone quiet;
 //   - wraps window.fetch so each request runs inside the current span's context, which is what
-//     Faro's fetch instrumentation reads as the parent.
+//     Faro's fetch instrumentation reads as the parent;
+//   - starts a `navigate <route>` root on client-side route changes, and a `camera session` span
+//     for the arcane WebSocket, whose context it passes in the URL;
+//   - sits between Faro's tracer and exporter (a SpanProcessor), so a click or page load ends
+//     after its last child span, and a trace is held back until its clock offset is known.
 // Labels come from data-trace-name, aria-label or button text (buttons whose text is dynamic need
 // data-trace-name), links use their templated path, and input values are never read.
-// Faro only starts on milesstorm.com, so dev builds send nothing.
+// Faro only starts on milesstorm.com and staging.milesstorm.com, so dev builds send nothing.
 (function () {
   'use strict';
   if (globalThis.__msTrace) return;
@@ -124,8 +128,10 @@
   // (POSTs, never cached by the browser or Cloudflare). A replayed stamp would be hours old. HTML
   // must therefore stay uncached at Cloudflare (it is today: cf-cache-status DYNAMIC).
   // The lowest-delay of the last CLOCK_SAMPLES wins (NTP's clock filter). Each trace keeps the
-  // estimate it was first sent with, so all its spans move together; beforeSend adds the offset
-  // to every browser span and records it on the span, so the raw time stays readable.
+  // estimate it had when its root started (`pin`), so all its spans move together; a trace started
+  // before any sample takes the first one (the span processor holds its spans back until then).
+  // beforeSend adds the offset to every browser span and records it on the span, so the raw time
+  // stays readable.
   var CLOCK_SAMPLES = 8;
   var CLOCK_MAX_OFFSET_MS = 3600000;
   var CLOCK_TRACES = 200;
@@ -134,6 +140,7 @@
     var samples = [];
     var byTrace = {};
     var traceOrder = [];
+    var listeners = [];
 
     function usable(entry) {
       if (entry.entryType === 'navigation') return true;
@@ -158,21 +165,33 @@
       if (delay < -2 || Math.abs(offset) > CLOCK_MAX_OFFSET_MS) return;
       samples.push({ offset: offset, delay: Math.max(0, delay) });
       if (samples.length > CLOCK_SAMPLES) samples.shift();
+      listeners.forEach(function (fn) { fn(); });
     }
 
     function best() {
       return samples.reduce(function (a, s) { return !a || s.delay < a.delay ? s : a; }, null);
     }
 
-    // The estimate a trace was first sent with; the current best for a trace not seen yet. A trace
-    // first sent before any sample existed stays uncorrected (false), so it is never half shifted.
-    function forTrace(traceId) {
-      if (traceId in byTrace) return byTrace[traceId] || null;
-      var b = best() || false;
+    function keep(traceId, b) {
       byTrace[traceId] = b;
       traceOrder.push(traceId);
       if (traceOrder.length > CLOCK_TRACES) delete byTrace[traceOrder.shift()];
-      return b || null;
+    }
+
+    // Fixes a trace's estimate to the current best. False while there is no sample; with
+    // `uncorrected`, fixes it to none instead, so the trace is never half shifted.
+    function pin(traceId, uncorrected) {
+      if (traceId in byTrace) return true;
+      var b = best();
+      if (!b && !uncorrected) return false;
+      keep(traceId, b || false);
+      return true;
+    }
+
+    // The estimate a trace was pinned to; a trace not pinned yet is pinned now.
+    function forTrace(traceId) {
+      pin(traceId, true);
+      return byTrace[traceId] || null;
     }
 
     function shift(nanos, by) {
@@ -223,13 +242,98 @@
       });
     }
 
-    return { addEntry: addEntry, apply: apply, observe: observe, best: best };
+    return {
+      addEntry: addEntry, apply: apply, observe: observe, best: best, pin: pin,
+      listen: function (fn) { listeners.push(fn); },
+    };
   }
+
+  // The OTel SpanProcessor Faro's tracer reports to (TracingInstrumentation `spanProcessor`):
+  //   - a trace's offset is pinned when its root (its first span on this page) starts. Until a
+  //     sample exists its ended spans are held, then sent when the first sample arrives, or
+  //     uncorrected when the root ends (no sample by then means the page has none coming, and
+  //     holding longer would lose the trace when the tab closes) or the page is hidden;
+  //   - other spans' starts and ends are reported to `watch`ers, so a click or page load can end
+  //     after its last child (OTel's fetch span ends after the response body, 300 ms late);
+  // Spans it lets through go to `deps.next`: OTel's BatchSpanProcessor in front of Faro's exporter,
+  // as in Faro's default chain.
+
+  function hrMillis(t) {
+    return Array.isArray(t) ? t[0] * 1e3 + t[1] / 1e6 : t;
+  }
+
+  function spanProcessor(deps) {
+    var traces = {};
+    var traceOrder = [];
+    var watchers = [];
+
+    function queue(spans) {
+      spans.forEach(function (span) {
+        try { deps.next.onEnd(span); } catch (err) { /* this span is dropped */ }
+      });
+    }
+
+    function release(t, uncorrected) {
+      if (t.fixed || !deps.clock.pin(t.id, uncorrected)) return;
+      t.fixed = true;
+      queue(t.held);
+      t.held = [];
+    }
+
+    function notify(kind, span, t) {
+      watchers.forEach(function (w) { try { w[kind](t.id, hrMillis(span.endTime)); } catch (err) { /* skip */ } });
+    }
+
+    deps.clock.listen(function () {
+      Object.keys(traces).forEach(function (id) { release(traces[id]); });
+    });
+
+    return {
+      onStart: function (span) {
+        var sc = span.spanContext();
+        var t = traces[sc.traceId];
+        if (t) return notify('start', span, t);
+        t = traces[sc.traceId] = { id: sc.traceId, root: sc.spanId, held: [], fixed: false };
+        traceOrder.push(sc.traceId);
+        if (traceOrder.length > CLOCK_TRACES) {
+          var oldest = traces[traceOrder.shift()];
+          if (oldest) release(oldest, true);
+          if (oldest) delete traces[oldest.id];
+        }
+        release(t);
+      },
+      onEnd: function (span) {
+        var sc = span.spanContext();
+        var t = traces[sc.traceId];
+        if (!t) return queue([span]);
+        if (sc.spanId !== t.root) notify('end', span, t);
+        if (t.fixed) return queue([span]);
+        t.held.push(span);
+        if (sc.spanId === t.root) release(t, true);
+      },
+      // Everything goes now; held traces uncorrected.
+      forceFlush: function () {
+        Object.keys(traces).forEach(function (id) { release(traces[id], true); });
+        return deps.next.forceFlush();
+      },
+      shutdown: function () {
+        Object.keys(traces).forEach(function (id) { release(traces[id], true); });
+        return deps.next.shutdown();
+      },
+      watch: function (w) { watchers.push(w); },
+    };
+  }
+
+  // Navigation timing marks recorded on the page load span (those after its start).
+  var NAV_MARKS = ['responseEnd', 'domInteractive', 'domContentLoadedEventStart', 'domContentLoadedEventEnd',
+    'domComplete', 'loadEventStart', 'loadEventEnd'];
+  var CAMERA_PATH = '/ws/arcane';
 
   function create(deps) {
     var otel = deps.otel;
     var win = deps.window;
     var doc = deps.document;
+    var perf = deps.performance;
     var now = deps.now;
     var setTimer = deps.setTimeout;
     var clearTimer = deps.clearTimeout;
@@ -238,9 +342,15 @@
     var current = null;
     var pending = null;
     var loadedAt = doc.readyState === 'complete' ? now() : 0;
+    var lastRoute = null;
 
     function pathOf(href) {
       try { return templatePath(new URL(href, win.location.href).pathname); } catch (e) { return '/'; }
+    }
+
+    // A performance timestamp (monotonic) on now()'s clock; see pageLoad.
+    function wallTime(t) {
+      return now() - Math.max(0, perf.now() - t);
     }
 
     // A form with nothing naming it is labelled by the button that submitted it.
@@ -263,33 +373,56 @@
       clearTimer(it.firstTimer);
     }
 
-    // With nothing in flight, ends at the last settle (a page load: no earlier than window load);
-    // otherwise now.
+    // With nothing in flight, ends at the last settle or child span end (a page load: no earlier
+    // than window load); otherwise now.
     function endTime(it) {
-      if (it.inflight > 0) return now();
+      if (it.inflight > 0 || it.children > 0) return now();
       if (it.waitLoad) return loadedAt ? Math.max(loadedAt, it.lastSettle || loadedAt) : now();
       return it.lastSettle || now();
+    }
+
+    function navigationMarks(it, end) {
+      var nav = perf && perf.getEntriesByType && perf.getEntriesByType('navigation')[0];
+      if (!nav) return;
+      NAV_MARKS.forEach(function (mark) {
+        var at = nav[mark] > 0 && wallTime(nav[mark]);
+        if (at && at >= it.startTime && at <= end) it.span.addEvent(mark, at);
+      });
     }
 
     function finish(it) {
       clear(it);
       if (current === it) current = null;
       if (pending === it) pending = null;
-      if (it.span) it.span.end(endTime(it));
+      if (!it.span) return;
+      var end = endTime(it);
+      if (it.waitLoad) {
+        try { navigationMarks(it, end); } catch (err) { /* marks are optional */ }
+      }
+      it.span.end(end);
     }
 
+    // The quiet window runs from the last settle or child span end, not from now: a fetch span
+    // reaches the processor 300 ms after it ended (OTel's fetch instrumentation waits for its
+    // resource timing entry), and the root must still end after it.
     function maybeQuiet(it) {
       clearTimer(it.quietTimer);
-      if (current !== it || it.inflight > 0 || (it.waitLoad && !loadedAt)) return;
-      it.quietTimer = setTimer(function () { finish(it); }, it.waitLoad ? PAGE_QUIET_MS : QUIET_MS);
+      if (current !== it || it.inflight > 0 || it.children > 0 || (it.waitLoad && !loadedAt)) return;
+      var from = Math.max(it.lastSettle || 0, it.waitLoad ? loadedAt : 0) || now();
+      var quiet = it.waitLoad ? PAGE_QUIET_MS : QUIET_MS;
+      it.quietTimer = setTimer(function () { finish(it); }, Math.max(0, from + quiet - now()));
     }
 
     // A new interaction replaces a pending one, but only takes over `current` at its first request.
-    function interaction(type, el, submitter) {
+    function interaction(type, label) {
       if (pending) finish(pending);
-      var it = pending = { name: type + ' ' + labelFor(el, submitter), type: type, startTime: now(), span: null, inflight: 0 };
+      var it = pending = { name: type + ' ' + label, type: type, startTime: now(), span: null, inflight: 0, children: 0 };
       it.maxTimer = setTimer(function () { finish(it); }, MAX_MS);
       it.firstTimer = setTimer(function () { if (!it.span) finish(it); }, FIRST_FETCH_MS);
+    }
+
+    function traceIdOf(span) {
+      return span && span.spanContext ? span.spanContext().traceId : null;
     }
 
     function startPending() {
@@ -298,20 +431,51 @@
       clearTimer(it.firstTimer);
       it.span = tracer.startSpan(it.name, { root: true, startTime: it.startTime, attributes: { 'ui.event': it.type } },
         otel.context.active());
+      it.traceId = traceIdOf(it.span);
       if (current) finish(current);
       current = it;
     }
 
+    // Child spans of the current interaction, from the span processor.
+    var watcher = {
+      start: function (traceId) {
+        var it = current;
+        if (!it || it.traceId !== traceId) return;
+        it.children++;
+        clearTimer(it.quietTimer);
+      },
+      end: function (traceId, endMs) {
+        var it = current;
+        if (!it || it.traceId !== traceId || it.children <= 0) return;
+        it.children--;
+        if (endMs > 0) it.lastSettle = Math.max(it.lastSettle || 0, Math.min(endMs, now()));
+        maybeQuiet(it);
+      },
+    };
+
     function onClick(e) {
       try {
         var el = e.target && e.target.closest ? e.target.closest(CLICKABLE) : null;
-        if (el) interaction('click', el);
+        if (el) interaction('click', labelFor(el));
       } catch (err) { /* never break the page */ }
     }
 
     function onSubmit(e) {
       try {
-        if (e.target && e.target.tagName) interaction('submit', e.target, e.submitter);
+        if (e.target && e.target.tagName) interaction('submit', labelFor(e.target, e.submitter));
+      } catch (err) { /* never break the page */ }
+    }
+
+    // A client-side route change, named by templated path only (no query string: reset and invite
+    // codes). The click or submit that caused it already names the trace, and calls made while
+    // the page load is current belong to the page load.
+    function onRoute() {
+      try {
+        var route = templatePath(win.location.pathname);
+        if (route === lastRoute) return;
+        lastRoute = route;
+        if ((pending && pending.type !== 'navigate') || (current && current.waitLoad)) return;
+        interaction('navigate', route);
       } catch (err) { /* never break the page */ }
     }
 
@@ -319,16 +483,29 @@
       var meta = doc.querySelector('meta[name="traceparent"]');
       var parent = meta && parseTraceparent(meta.getAttribute('content'));
       if (!parent) return;
-      var perf = deps.performance;
       var nav = perf && perf.getEntriesByType && perf.getEntriesByType('navigation')[0];
       // Elapsed time from the monotonic clock, anchored to now(): timeOrigin can lag the wall clock
       // by days after the machine sleeps.
-      var startTime = nav && nav.responseStart && perf.now ? now() - Math.max(0, perf.now() - nav.responseStart) : now();
-      var it = current = { name: 'page load ' + templatePath(win.location.pathname), waitLoad: true, inflight: 0 };
-      it.span = tracer.startSpan(it.name, { startTime: startTime, attributes: { 'ui.event': 'load' } },
+      var startTime = nav && nav.responseStart && perf.now ? wallTime(nav.responseStart) : now();
+      var it = current = { name: 'page load ' + templatePath(win.location.pathname), waitLoad: true, startTime: startTime, inflight: 0, children: 0 };
+      // The page load outlives the server render it's a child of (OTel's document-load pattern),
+      // so it is marked as following it rather than contained in it (TRACING.md, "Page loads").
+      it.span = tracer.startSpan(it.name, { startTime: startTime, attributes: { 'ui.event': 'load', 'trace.relation': 'follows' } },
         otel.trace.setSpanContext(otel.context.active(), parent));
+      it.traceId = traceIdOf(it.span);
       it.maxTimer = setTimer(function () { finish(it); }, PAGE_LOAD_MAX_MS);
       maybeQuiet(it);
+    }
+
+    // Long tasks (Chromium only) become events on the open click, navigation or page load span:
+    // they label its own time, which no child span covers.
+    function onLongTasks(list) {
+      list.getEntries().forEach(function (e) {
+        var it = current;
+        var at = wallTime(e.startTime);
+        if (!it || !it.span || at < it.startTime) return;
+        it.span.addEvent('longtask', { 'longtask.duration_ms': Math.round(e.duration) }, at);
+      });
     }
 
     function urlOf(input) {
@@ -372,6 +549,48 @@
       };
     }
 
+    // The arcane camera WebSocket gets a `camera session` span: a child of the click that opened
+    // it, else (no click, or only the page load) a root. It ends at `open` (the handshake); the session's work is in its own traces.
+    // Browsers can't set WebSocket headers, so its context goes in the URL (`traceparent` query
+    // parameter), which the frontend links its session span to.
+    function cameraSpan(url) {
+      if (new URL(String(url), win.location.href).pathname !== CAMERA_PATH) return null;
+      if (pending) startPending();
+      var it = current && !current.waitLoad ? current : null;
+      var parent = it ? otel.trace.setSpan(otel.context.active(), it.span) : otel.context.active();
+      var span = tracer.startSpan('camera session', { root: !it, startTime: now(), attributes: { 'url.path': CAMERA_PATH } }, parent);
+      var sc = span.spanContext();
+      var flags = (sc.traceFlags & 0xff).toString(16);
+      var tp = '00-' + sc.traceId + '-' + sc.spanId + '-' + (flags.length < 2 ? '0' : '') + flags;
+      return { span: span, url: String(url) + (String(url).indexOf('?') >= 0 ? '&' : '?') + 'traceparent=' + tp };
+    }
+
+    function wrapWebSocket(Inner) {
+      function WebSocket(url, protocols) {
+        var camera = null;
+        try { camera = cameraSpan(url); } catch (err) { camera = null; }
+        var target = camera ? camera.url : url;
+        var ws = arguments.length > 1 ? new Inner(target, protocols) : new Inner(target);
+        if (!camera) return ws;
+        var done = function (e) {
+          try {
+            ws.removeEventListener('open', done);
+            ws.removeEventListener('error', done);
+            ws.removeEventListener('close', done);
+            if (e.type !== 'open') camera.span.setStatus({ code: 2, message: 'WebSocket ' + e.type + ' before open' });
+            camera.span.end(now());
+          } catch (err) { /* never break the page */ }
+        };
+        ws.addEventListener('open', done);
+        ws.addEventListener('error', done);
+        ws.addEventListener('close', done);
+        return ws;
+      }
+      WebSocket.prototype = Inner.prototype;
+      ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(function (k) { WebSocket[k] = Inner[k]; });
+      return WebSocket;
+    }
+
     function install() {
       doc.addEventListener('click', onClick, true);
       doc.addEventListener('submit', onSubmit, true);
@@ -380,6 +599,22 @@
         if (current) maybeQuiet(current);
       });
       win.fetch = wrapFetch(win.fetch);
+      if (typeof win.WebSocket === 'function') win.WebSocket = wrapWebSocket(win.WebSocket);
+      var history = win.history;
+      if (history && typeof history.pushState === 'function') {
+        var push = history.pushState;
+        history.pushState = function () {
+          var result = push.apply(this, arguments);
+          onRoute();
+          return result;
+        };
+        win.addEventListener('popstate', onRoute);
+      }
+      lastRoute = templatePath(win.location.pathname);
+      if (deps.spans) deps.spans.watch(watcher);
+      if (deps.PerformanceObserver) {
+        try { new deps.PerformanceObserver(onLongTasks).observe({ type: 'longtask', buffered: true }); } catch (err) { /* unsupported */ }
+      }
       pageLoad();
     }
 
@@ -400,22 +635,46 @@
     parseTraceparent: parseTraceparent,
     scrubItem: scrubItem,
     clockSync: clockSync,
+    spanProcessor: spanProcessor,
     isIgnored: isIgnored,
   };
+
+  // Hosts that send telemetry, and the deployment environment their spans are tagged with.
+  var ENVIRONMENTS = { 'milesstorm.com': 'production', 'staging.milesstorm.com': 'staging' };
 
   try {
     var sdk = globalThis.GrafanaFaroWebSdk;
     var tracing = globalThis.GrafanaFaroWebTracing;
-    if (!sdk || !tracing || typeof document === 'undefined' || location.hostname !== 'milesstorm.com') return;
+    var environment = typeof location === 'undefined' ? undefined : ENVIRONMENTS[location.hostname];
+    if (!sdk || !tracing || typeof document === 'undefined' || !environment) return;
+    var Observer = typeof PerformanceObserver === 'function' && globalThis.performance ? PerformanceObserver : null;
     var clock = clockSync({ now: Date.now, performance: globalThis.performance });
-    if (typeof PerformanceObserver === 'function' && globalThis.performance) clock.observe(PerformanceObserver);
+    if (Observer) clock.observe(Observer);
+    // Faro's own chain (session and user attributes, batch, export) with ours before the batch.
+    // The Faro bundle doesn't export OTel's BatchSpanProcessor, so it is vendored next to it
+    // (scripts/vendor.mjs), with Faro's settings. `sdk.faro` is the live Faro instance once
+    // initializeFaro has run.
+    var Batch = (globalThis.OtelSdkTraceWeb || {}).BatchSpanProcessor;
+    if (!Batch) return;
+    var spans = spanProcessor({
+      next: new Batch(new tracing.FaroTraceExporter({ get api() { return sdk.faro.api; } }), {
+        scheduledDelayMillis: 1000,
+        maxExportBatchSize: 30,
+      }),
+      clock: clock,
+    });
+    // Registered before Faro's own listener, so held and batched spans reach Faro's transport
+    // before it flushes for a hidden page.
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') spans.forceFlush();
+    });
     var faro = sdk.initializeFaro({
       // Beacons carry an unsampled traceparent so the Gateway does not trace each one.
       transports: [new sdk.FetchTransport({
         url: location.origin + '/faro/collect',
         requestOptions: { headers: { traceparent: unsampledTraceparent() } },
       })],
-      app: { name: 'milesstorm-web', namespace: 'milesstorm', environment: 'production' },
+      app: { name: 'milesstorm-web', namespace: 'milesstorm', environment: environment },
       // No performance, user action, navigation, CSP or console instrumentation: volume, query
       // strings (reset and verify codes) in resource URLs, and extra fetch/history patching.
       instrumentations: [
@@ -424,6 +683,7 @@
         new sdk.SessionInstrumentation(),
         new sdk.ViewInstrumentation(),
         new tracing.TracingInstrumentation({
+          spanProcessor: new tracing.FaroMetaAttributesSpanProcessor(spans, { get value() { return sdk.faro.metas.value; } }),
           instrumentationOptions: {
             fetchInstrumentationOptions: {
               // Faro turns these off. OTel's fetch span events (fetchStart, DNS, connect, TLS,
@@ -451,6 +711,8 @@
       window: window,
       document: document,
       performance: globalThis.performance,
+      PerformanceObserver: Observer,
+      spans: spans,
       now: Date.now,
       setTimeout: setTimeout.bind(globalThis),
       clearTimeout: clearTimeout.bind(globalThis),

@@ -224,6 +224,7 @@ fn server_launch() -> ! {
                     get(move || async move { metric_handle.render() }),
                 )
                 .layer(axum::Extension(roll_hub))
+                .layer(axum::middleware::from_fn(no_store))
                 .layer(layer)
                 .layer(axum::middleware::from_fn(api::trace::capture_request_context))
                 .layer(axum::middleware::from_fn(name_page_span))
@@ -284,6 +285,29 @@ async fn name_page_span(req: axum::extract::Request, next: axum::middleware::Nex
     next.run(req).await
 }
 
+/// `Cache-Control` on server-function responses (`no-store`) and rendered pages (`private,
+/// no-cache`), unless the handler chose its own. Neither may be replayed by a shared cache: pages carry the request's
+/// `<meta name="traceparent">`, and the browser's clock correction takes its samples from both
+/// (TRACING.md, "Browser clock"). Cloudflare caches neither today; this keeps a future rule from
+/// changing that.
+#[cfg(not(target_arch = "wasm32"))]
+async fn no_store(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
+    let bff = req.uri().path().starts_with("/bff/");
+    let mut res = next.run(req).await;
+    let html = res
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"));
+    if (bff || html) && !res.headers().contains_key(CACHE_CONTROL) {
+        // Pages may stay in the browser's back/forward cache, which `no-store` turns off.
+        let value = if bff { "no-store" } else { "private, no-cache" };
+        res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static(value));
+    }
+    res
+}
+
 /// `/bff/get_account` for `/bff/get_account12855143162362325647`: Dioxus appends a hash to
 /// each server function's path, which the browser's span (assets/trace.js) leaves out, so
 /// both sides of a call carry the same name. None for other paths.
@@ -316,6 +340,7 @@ fn page_name(path: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 async fn arcane_ws_proxy(
     ws: axum::extract::ws::WebSocketUpgrade,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::Extension(hub): axum::Extension<rolls::RollHub>,
     session: tower_sessions::Session,
@@ -345,6 +370,10 @@ async fn arcane_ws_proxy(
     // The camera session outlives this request (it ends at the 101), so it gets a span of
     // its own in the same trace, which ai_pipeline's connection joins.
     let session_span = api::detached_span!("arcane.ws_session", user = %user);
+    // The browser's `camera session` span (assets/trace.js), passed in the URL.
+    if let Some(tp) = query_traceparent(&uri) {
+        api::trace::link_traceparent(&session_span, tp);
+    }
     // Camera frames are a few hundred KB; anything much larger isn't a frame.
     ws.max_message_size(4 * 1024 * 1024).on_upgrade(move |socket| {
         use tracing::Instrument as _;
@@ -450,6 +479,13 @@ async fn proxy_ws(
             tracing::info!("arcane WebSocket closed: session ended or permission removed");
         }
     }
+}
+
+/// The `traceparent` query parameter of the camera WebSocket URL. Its value is hex and
+/// dashes, so it needs no percent-decoding.
+#[cfg(not(target_arch = "wasm32"))]
+fn query_traceparent(uri: &axum::http::Uri) -> Option<&str> {
+    uri.query()?.split('&').find_map(|pair| pair.strip_prefix("traceparent="))
 }
 
 /// From an ai_pipeline reply (parsed once): whether it is a roll event, and its
@@ -642,6 +678,7 @@ fn App() -> Element {
         document::Meta { name: "traceparent", content: traceparent }
         document::Script { src: asset!("/assets/vendor/faro-web-sdk.iife.js", AssetOptions::js().with_minify(false)) }
         document::Script { src: asset!("/assets/vendor/faro-web-tracing.iife.js", AssetOptions::js().with_minify(false)) }
+        document::Script { src: asset!("/assets/vendor/otel-batch.iife.js", AssetOptions::js().with_minify(false)) }
         document::Script { src: asset!("/assets/trace.js", AssetOptions::js().with_minify(false)) }
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: TAILWIND }
@@ -731,6 +768,46 @@ mod tests {
             let server_route = path.parse::<Route>().unwrap();
             assert_eq!(server_route.to_string(), path);
         }
+    }
+
+    #[test]
+    fn camera_websocket_traceparent_comes_from_the_query() {
+        let tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let uri = |s: &str| s.parse::<axum::http::Uri>().unwrap();
+        assert_eq!(super::query_traceparent(&uri(&format!("/ws/arcane?traceparent={tp}"))), Some(tp));
+        assert_eq!(super::query_traceparent(&uri(&format!("/ws/arcane?x=1&traceparent={tp}"))), Some(tp));
+        assert_eq!(super::query_traceparent(&uri("/ws/arcane?x=1")), None);
+        assert_eq!(super::query_traceparent(&uri("/ws/arcane")), None);
+    }
+
+    #[tokio::test]
+    async fn bff_responses_and_pages_are_not_stored() {
+        use axum::http::header::CACHE_CONTROL;
+        use axum::response::{Html, IntoResponse};
+        use axum::routing::{get, post};
+
+        let app = axum::Router::new()
+            .route("/bff/login_password123456", post(|| async { "{}" }))
+            .route("/login", get(|| async { Html("<html></html>") }))
+            .route("/assets/app.css", get(|| async { ([(axum::http::header::CONTENT_TYPE, "text/css")], "") }))
+            .route("/bff/picture123456", get(|| async { ([(CACHE_CONTROL, "private, max-age=60")], "").into_response() }))
+            .layer(axum::middleware::from_fn(super::no_store));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let client = reqwest::Client::new();
+        let cache_control = |res: reqwest::Response| {
+            res.headers().get(CACHE_CONTROL).map(|v| v.to_str().unwrap().to_string())
+        };
+        let post = client.post(format!("{base}/bff/login_password123456")).send().await.unwrap();
+        assert_eq!(cache_control(post).as_deref(), Some("no-store"));
+        let page = client.get(format!("{base}/login")).send().await.unwrap();
+        assert_eq!(cache_control(page).as_deref(), Some("private, no-cache"));
+        let asset = client.get(format!("{base}/assets/app.css")).send().await.unwrap();
+        assert_eq!(cache_control(asset), None);
+        let own = client.get(format!("{base}/bff/picture123456")).send().await.unwrap();
+        assert_eq!(cache_control(own).as_deref(), Some("private, max-age=60"), "the handler's own is kept");
     }
 
     #[test]

@@ -264,6 +264,19 @@ mod server {
         opentelemetry::global::get_text_map_propagator(|p| p.inject_context(&cx, &mut Headers(headers)));
     }
 
+    /// Links `span` to the span a W3C `traceparent` value names, for a context that arrives
+    /// outside the headers: the browser's camera session puts it in the WebSocket URL, which
+    /// can't carry headers. A link, not a parent: the request already has its parent (the
+    /// Gateway's span). Invalid values are ignored.
+    pub fn link_traceparent(span: &tracing::Span, traceparent: &str) {
+        let carrier = std::collections::HashMap::from([("traceparent".to_string(), traceparent.to_string())]);
+        let cx = opentelemetry::global::get_text_map_propagator(|p| p.extract(&carrier));
+        let sc = cx.span().span_context().clone();
+        if sc.is_valid() {
+            span.add_link(sc);
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use std::sync::{Arc, Mutex};
@@ -526,6 +539,42 @@ mod server {
             );
             assert_eq!(in_request(TraceFlags::default()).await, None);
             assert_eq!(super::super::traceparent(), None, "outside a request");
+        }
+
+        #[test]
+        fn traceparent_becomes_a_link_not_a_parent() {
+            use opentelemetry::trace::{SpanId, TraceId};
+            use opentelemetry_sdk::trace::InMemorySpanExporter;
+
+            opentelemetry::global::set_text_map_propagator(
+                opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+            );
+            let exporter = InMemorySpanExporter::default();
+            let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let subscriber = tracing_subscriber::registry()
+                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+            tracing::subscriber::with_default(subscriber, || {
+                let linked = tracing::info_span!("linked");
+                super::link_traceparent(&linked, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
+                let ignored = tracing::info_span!("ignored");
+                super::link_traceparent(&ignored, "00-garbage");
+            });
+            let spans = exporter.get_finished_spans().unwrap();
+            let span = |name: &str| spans.iter().find(|s| s.name == name).unwrap();
+            let linked = span("linked");
+            let links: Vec<_> = linked.links.iter().map(|l| (l.span_context.trace_id(), l.span_context.span_id())).collect();
+            assert_eq!(
+                links,
+                [(
+                    TraceId::from_hex("4bf92f3577b34da6a3ce929d0e0e4736").unwrap(),
+                    SpanId::from_hex("00f067aa0ba902b7").unwrap()
+                )]
+            );
+            assert_eq!(linked.parent_span_id, SpanId::INVALID, "still a root");
+            assert_ne!(linked.span_context.trace_id(), links[0].0);
+            assert!(span("ignored").links.is_empty());
         }
 
         #[test]

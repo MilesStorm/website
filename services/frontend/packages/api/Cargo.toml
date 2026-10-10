@@ -39,5 +39,6 @@ server = [
 axum = { workspace = true }
 tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
 tracing-subscriber = { workspace = true }
-opentelemetry_sdk = { workspace = true }
+# `testing`: the in-memory span exporter.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 axum-tracing-opentelemetry = { workspace = true }
