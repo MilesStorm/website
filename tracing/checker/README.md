@@ -77,3 +77,9 @@ python3 -m unittest tracing/checker/test_trace_check.py
 | P5 | I1–I6 on all traces; I8 |
 
 Phases are cumulative.
+
+## Hourly run
+
+`tracing/kustomization.yaml` and `cronjob.yaml` run the checker every hour in the cluster (Argo app
+`trace-checker` in the homelab repo), once for production and once for staging, and push the
+counts. Violations don't fail the job; they show on the "Trace health" dashboard.
