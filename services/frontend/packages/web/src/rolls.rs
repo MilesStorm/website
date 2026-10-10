@@ -80,44 +80,71 @@ pub struct Envelope {
     published: Option<SystemTime>,
 }
 
+/// The top-level `_trace` member of a roll message, as written in the message.
+#[derive(serde::Deserialize)]
+struct Traced<'a> {
+    #[serde(borrow, rename = "_trace")]
+    trace: Option<&'a serde_json::value::RawValue>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct TraceField {
+    traceparent: Option<String>,
+    published_ms: Option<u64>,
+}
+
 /// Takes the `_trace` field off a roll message: its trace context, and the message as
-/// everyone else gets it. Messages without the field come back untouched.
+/// everyone else gets it, which is the sender's text byte for byte apart from that field
+/// (key order, spacing and how numbers are written stay the sender's). Messages without
+/// the field come back untouched.
 pub fn split_trace(text: &str) -> (Envelope, Cow<'_, str>) {
+    let untouched = || (Envelope::default(), Cow::Borrowed(text));
     if !text.contains("\"_trace\"") {
-        return (Envelope::default(), Cow::Borrowed(text));
+        return untouched();
     }
-    let Ok(serde_json::Value::Object(mut message)) = serde_json::from_str(text) else {
-        return (Envelope::default(), Cow::Borrowed(text));
-    };
-    let Some(trace) = message.remove(TRACE_FIELD) else {
-        return (Envelope::default(), Cow::Borrowed(text));
-    };
+    let Ok(Traced { trace: Some(raw) }) = serde_json::from_str::<Traced>(text) else { return untouched() };
+    let Some(rest) = without_member(text, raw.get()) else { return untouched() };
+    let trace: TraceField = serde_json::from_str(raw.get()).unwrap_or_default();
     let envelope = Envelope {
-        cx: trace
-            .get("traceparent")
-            .and_then(|t| t.as_str())
-            .map(api::trace::context_from_traceparent)
-            .unwrap_or_default(),
-        published: trace
-            .get("published_ms")
-            .and_then(|ms| ms.as_u64())
-            .and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms))),
+        cx: trace.traceparent.as_deref().map(api::trace::context_from_traceparent).unwrap_or_default(),
+        published: trace.published_ms.and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms))),
     };
-    (envelope, Cow::Owned(serde_json::Value::Object(message).to_string()))
+    (envelope, Cow::Owned(rest))
+}
+
+/// The JSON object `text` without its member `"_trace": value` and that member's comma.
+/// `value` is the member's value as serde_json borrowed it from `text`. None when it isn't
+/// where it should be (a key written with escapes, a message that is an array).
+fn without_member(text: &str, value: &str) -> Option<String> {
+    let start = (value.as_ptr() as usize).checked_sub(text.as_ptr() as usize)?;
+    let end = start.checked_add(value.len())?;
+    if text.get(start..end) != Some(value) {
+        return None;
+    }
+    let before = text[..start].trim_end().strip_suffix(':')?.trim_end().strip_suffix("\"_trace\"")?;
+    let after = &text[end..];
+    Some(match after.trim_start().strip_prefix(',') {
+        // Not the last member: its comma is the one after it.
+        Some(rest) => format!("{before}{}", rest.trim_start()),
+        None => format!("{}{after}", before.trim_end().strip_suffix(',').unwrap_or(before)),
+    })
 }
 
 /// `roll` with a `_trace` field naming `span` and the time, for Redis: the replicas that
-/// receive it take the field off again. `roll` as it is when it isn't a JSON object or
-/// there is no trace to carry.
+/// receive it take the field off again and have `roll` byte for byte. `roll` as it is when
+/// it isn't a JSON object or there is no trace to carry.
 fn with_trace(roll: &str, span: &tracing::Span) -> String {
     let Some(traceparent) = api::trace::traceparent_of(span) else { return roll.to_string() };
-    let Ok(serde_json::Value::Object(mut message)) = serde_json::from_str(roll) else { return roll.to_string() };
+    let end = roll.trim_end().len();
+    let object = roll.trim_start().strip_prefix('{').zip(roll[..end].strip_suffix('}'));
+    let Some((members, head)) = object.filter(|_| serde_json::from_str::<serde::de::IgnoredAny>(roll).is_ok()) else {
+        return roll.to_string();
+    };
+    // `members` still ends with the closing brace.
+    let comma = if members.trim() == "}" { "" } else { "," };
     let published_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-    message.insert(
-        TRACE_FIELD.to_string(),
-        serde_json::json!({ "traceparent": traceparent, "published_ms": published_ms }),
-    );
-    serde_json::Value::Object(message).to_string()
+    let trace = serde_json::json!({ "traceparent": traceparent, "published_ms": published_ms });
+    format!("{head}{comma}\"{TRACE_FIELD}\":{trace}}}{}", &roll[end..])
 }
 
 /// A long-lived connection (a camera WebSocket, a roll stream) in traces: not one span,
@@ -736,7 +763,7 @@ mod tests {
         let message = format!(r#"{{"type":"roll","_trace":{{"traceparent":"{traceparent}"}},"roll_id":"18f3a2b-0badf00d","dice":[],"complete":true}}"#);
 
         let (envelope, roll) = split_trace(&message);
-        assert_eq!(roll, ROLL);
+        assert_eq!(roll, r#"{"type":"roll","roll_id":"18f3a2b-0badf00d","dice":[],"complete":true}"#);
         let sc = envelope.cx.span().span_context().clone();
         assert_eq!(format!("00-{}-{}-01", sc.trace_id(), sc.span_id()), traceparent);
         assert!(sc.is_remote());
@@ -782,6 +809,35 @@ mod tests {
 
         // Not a JSON object: published as it is.
         assert_eq!(with_trace("[1]", &publish), "[1]");
+        assert_eq!(with_trace("{1}", &publish), "{1}");
+    }
+
+    #[test]
+    fn everything_but_the_trace_field_is_the_senders_text() {
+        let (_exporter, _guard) = exporting();
+        let publish = tracing::info_span!("roll.publish");
+        // Keys out of alphabetical order, Python's spacing, a number that doesn't survive
+        // being read as a float and written again, an escaped character.
+        let trace = r#""_trace": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}"#;
+        let roll = r#"{"type": "roll", "roll_id": "b", "confidence": 0.12345678901234567890, "big": 1e400, "dice": [{"label": "d\u0032"}], "complete": true}"#;
+        for message in [
+            roll.replacen(r#""roll_id""#, &format!(r#"{trace}, "roll_id""#), 1),
+            roll.replacen('{', &format!("{{{trace}, "), 1),
+            format!("{}, {trace}}}", &roll[..roll.len() - 1]),
+            format!("{} ,\n {trace} }}", &roll[..roll.len() - 1]),
+        ] {
+            let (envelope, stripped) = split_trace(&message);
+            assert!(envelope.cx.span().span_context().is_valid(), "{message}");
+            assert_eq!(stripped.split_whitespace().collect::<String>(), roll.split_whitespace().collect::<String>(), "{message}");
+        }
+        assert_eq!(split_trace(&roll.replacen(r#""roll_id""#, &format!(r#"{trace}, "roll_id""#), 1)).1, roll);
+
+        // Over Redis and back: exactly what went in, so a stream's stored roll and the
+        // same roll arriving live compare equal.
+        for roll in [roll, "{}", " { } ", "{\"a\":1}\n", ROLL] {
+            assert_eq!(split_trace(&with_trace(roll, &publish)).1, roll);
+        }
+        assert_eq!(split_trace(r#"{"_trace":{}}"#).1, "{}");
     }
 
     #[test]

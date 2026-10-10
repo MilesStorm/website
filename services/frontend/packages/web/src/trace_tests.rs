@@ -37,6 +37,7 @@ pub(crate) fn exporting() -> (InMemorySpanExporter, tracing::subscriber::Default
         .build();
     let subscriber =
         tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+    api::trace::several_subscribers();
     (exporter, tracing::subscriber::set_default(subscriber))
 }
 

@@ -1189,6 +1189,7 @@ mod tests {
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
+        crate::trace::several_subscribers();
         let _guard = tracing::subscriber::set_default(
             tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test"))),
         );

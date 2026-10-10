@@ -195,6 +195,10 @@ mod server {
     /// a large asset or a streamed page is inside the span (OTel HTTP semconv). Not for
     /// event streams and protocol upgrades: those last as long as the session, and their
     /// work is traced per unit (TRACING.md, "Streams").
+    ///
+    /// tower-http's `TraceLayer` also runs to the end of the body, but with a span of its
+    /// own and for every response alike: it can't keep `OtelAxumLayer`'s span open, and it
+    /// can't leave event streams and upgrades out.
     pub async fn end_span_with_body(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
         use axum::http::{header::CONTENT_TYPE, StatusCode};
         let res = next.run(req).await;
@@ -228,7 +232,12 @@ mod server {
         ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
             let this = &mut *self;
             let _entered = this.span.enter();
-            Pin::new(&mut this.inner).poll_frame(cx)
+            let polled = Pin::new(&mut this.inner).poll_frame(cx);
+            if let Poll::Ready(Some(Err(_))) = &polled {
+                // The status line said 200, but the client did not get the whole body.
+                failed("response_body");
+            }
+            polled
         }
 
         fn is_end_stream(&self) -> bool {
@@ -672,8 +681,6 @@ mod server {
                 "session_store",
                 otel.name = format!("{} {op}", self.system),
                 otel.kind = "client",
-                otel.status_code = tracing::field::Empty,
-                error.message = tracing::field::Empty,
                 db.system = self.system,
                 db.system.name = self.system,
                 db.operation.name = op,
@@ -681,8 +688,14 @@ mod server {
             );
             let res = fut.instrument(span.clone()).await;
             if let Err(e) = &res {
-                span.record("otel.status_code", "error");
-                span.record("error.message", tracing::field::display(e));
+                // By kind only: a store's error text can quote the record (session data).
+                let error_type = match e {
+                    session_store::Error::Encode(_) => "encode",
+                    session_store::Error::Decode(_) => "decode",
+                    session_store::Error::Backend(_) => "backend",
+                };
+                span.set_attribute("error.type", error_type);
+                span.set_status(Status::error(error_type));
             }
             res
         }
@@ -737,6 +750,17 @@ mod server {
         }
     }
 
+    /// For tests (here so that web's can use it too): call before `set_default`. While a
+    /// test's subscriber is the only one alive, tracing asks whichever thread reaches a span first whether anyone wants it, and keeps
+    /// the answer: another test's thread says no, and the span is never made (the flaky "no
+    /// span" failure). With a second subscriber alive it asks each thread's own.
+    #[doc(hidden)]
+    pub fn several_subscribers() {
+        static SECOND: std::sync::LazyLock<tracing::Dispatch> =
+            std::sync::LazyLock::new(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+        std::sync::LazyLock::force(&SECOND);
+    }
+
     #[cfg(test)]
     #[allow(clippy::disallowed_methods, clippy::disallowed_types, reason = "tests: stand-in servers on bare tasks and raw queues, with no trace to keep")]
     mod tests {
@@ -777,6 +801,7 @@ mod server {
             let subscriber = tracing_subscriber::registry()
                 .with(tracing_opentelemetry::layer().with_tracer(tracer))
                 .with(Closed(closed.clone()));
+            super::several_subscribers();
             (closed, tracing::subscriber::set_default(subscriber))
         }
 
@@ -942,6 +967,7 @@ mod server {
         #[tokio::test(flavor = "current_thread")]
         async fn client_names_the_peer() {
             let opened = Opened::default();
+            super::several_subscribers();
             let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(opened.clone()));
             let (url, _) = keep_alive_server().await;
             let database = super::Peer { service: "surrealdb", system: Some("surrealdb") };
@@ -967,6 +993,7 @@ mod server {
             use tower_sessions::SessionStore as _;
 
             let opened = Opened::default();
+            super::several_subscribers();
             let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(opened.clone()));
             let store = super::TracedStore::new(tower_sessions::MemoryStore::default(), "redis");
 
@@ -1061,6 +1088,7 @@ mod server {
                 .build();
             let subscriber = tracing_subscriber::registry()
                 .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+            super::several_subscribers();
             (exporter, tracing::subscriber::set_default(subscriber))
         }
 
@@ -1409,6 +1437,69 @@ mod server {
             assert_eq!(response.chunk().await.unwrap().as_deref(), Some(&b"first"[..]));
             tokio::time::sleep(Duration::from_millis(50)).await;
             assert_eq!(server_spans(&exporter), 1, "the stream is still open");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn a_response_body_that_fails_marks_the_server_span_failed() {
+            use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
+
+            let (exporter, _guard) = exporting();
+            let broken = || async {
+                let chunks = futures_util::stream::iter([Ok("first"), Err(std::io::Error::other("disk"))]);
+                axum::body::Body::from_stream(chunks)
+            };
+            let app = axum::Router::new()
+                .route("/broken", axum::routing::get(broken))
+                .layer(axum::middleware::from_fn(super::end_span_with_body))
+                .layer(OtelAxumLayer::default());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/broken", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+            let client = super::client(TEST_PEER, TIMEOUT, |b| b).unwrap();
+            // Cut off before or after the headers, depending on when the server wrote them.
+            let cut_off = match client.get(&url).send().await {
+                Ok(response) => response.bytes().await.is_err(),
+                Err(_) => true,
+            };
+            assert!(cut_off);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let server = span(&exporter, "GET /broken");
+            assert_eq!(attr(&server, "http.response.status_code").as_deref(), Some("200"));
+            assert!(matches!(server.status, Status::Error { .. }), "{:?}", server.status);
+            assert_eq!(attr(&server, "error.type").as_deref(), Some("response_body"));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn a_failed_session_store_call_is_an_error_by_kind_only() {
+            use tower_sessions::session::{Id, Record};
+            use tower_sessions::session_store::{Error, Result};
+            use tower_sessions::SessionStore as _;
+
+            #[derive(Debug)]
+            struct Down;
+            #[async_trait::async_trait]
+            impl tower_sessions::SessionStore for Down {
+                async fn save(&self, _: &Record) -> Result<()> {
+                    Err(Error::Backend("no".into()))
+                }
+                async fn load(&self, _: &Id) -> Result<Option<Record>> {
+                    Err(Error::Backend("could not read the session of miles@example.com".into()))
+                }
+                async fn delete(&self, _: &Id) -> Result<()> {
+                    Err(Error::Backend("no".into()))
+                }
+            }
+
+            let (exporter, _guard) = exporting();
+            let store = super::TracedStore::new(Down, "redis");
+            assert!(store.load(&Id::default()).await.is_err());
+
+            let call = span(&exporter, "redis session.load");
+            assert!(matches!(&call.status, Status::Error { description } if description == "backend"), "{:?}", call.status);
+            assert_eq!(attr(&call, "error.type").as_deref(), Some("backend"));
+            // The store's own words can name the session's owner: none of them are kept.
+            assert!(!format!("{call:?}").contains("miles"));
         }
 
         #[tokio::test(flavor = "current_thread")]

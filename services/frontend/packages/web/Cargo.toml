@@ -9,7 +9,7 @@ ui = { workspace = true }
 api = { workspace = true }
 manganis = { version = "0.7.7", features = ["dioxus"] }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dotenvy = { workspace = true }
