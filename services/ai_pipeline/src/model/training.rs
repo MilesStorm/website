@@ -1,3 +1,7 @@
+// burn's `Config` derive writes `optimizer: optimizer` in the code it generates for
+// `TrainingConfig`; an attribute on the struct doesn't reach that code.
+#![allow(clippy::redundant_field_names)]
+
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
