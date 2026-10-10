@@ -193,17 +193,21 @@ restart, and would say nothing about where time went. So:
   - ai_pipeline `roll.settle`: a roll that settled, with `frame.pending`, `infer.queue`,
     `infer.decode`, `infer.yolo`, `infer.crop`, `infer.head` and `ws.send` under it. Their
     times are measured in the inference thread and written as spans afterwards, so the
-    per-frame code creates no spans. `infer.crop` leaves out the crop's upload.
+    per-frame code creates no spans. `infer.crop` leaves out the crop's upload. A roll's
+    `ws.send` is a PRODUCER span, started before the send: the roll message names it.
   - ai_pipeline `frame.infer`: the same breakdown for one frame in `FRAME_TRACE_EVERY`
     (default 10) that settled nothing, and for a failed frame (the first, then at most one
     per 10 s).
-  - frontend `arcane.capture` (camera side), `roll publish` (PRODUCER, to Redis),
+  - frontend `roll receive` (CONSUMER, the roll arriving from ai_pipeline), under it
+    `roll publish` (PRODUCER, to Redis) and `roll capture` → `arcane.capture` (camera side),
     `roll deliver` (CONSUMER, to one browser's stream), `arcane.rolls_replay` (rolls sent on
     connect) and `permission recheck` (once a minute per stream).
 - **A roll is one trace across services.** ai_pipeline adds a top-level
-  `"_trace": {"traceparent": "…"}` to the roll message. The frontend continues that trace,
-  passes it through Redis (adding `published_ms`) to the other replicas, and removes `_trace`
-  before the browser gets the message. A roll delivered more than 10 s after it was published
+  `"_trace": {"traceparent": "…"}` to the roll message, naming its `ws.send` span. The
+  frontend's `roll receive` is that span's child (send, then process: the pair gives the
+  service graph its ai-pipeline → frontend edge). The frontend passes the trace through Redis
+  (adding `published_ms`) to the other replicas, and cuts `_trace` out before the browser
+  gets the message: the rest is ai_pipeline's text byte for byte. A roll delivered more than 10 s after it was published
   (a replay) starts a new trace that links back instead.
 - **Drops.** When a slow reader skips messages, the next unit (or the close span) gets a
   `dropped` event with `dropped.count`.
@@ -238,7 +242,7 @@ hot reload and doesn't drain.
   signals, tower-sessions, axum-login) become thousands of one-span traces. The defaults in the
   frontend's and auth's `main.rs` keep the services' own logs at `info` and those libraries at
   `warn` (ai_pipeline's libraries make no such spans); the deployments don't set `RUST_LOG`. Targets match by prefix: `sqlx=warn` also hides `sqlx_tracing`,
-  so auth adds `sqlx_tracing=info`, and `sqlx::pool::acquire=info` for the event behind `db.pool.acquire` (a wait for a pool connection). `opentelemetry=warn` keeps the OTel SDK's own logs to its
+  so auth adds `sqlx_tracing=info`, and `sqlx::pool::acquire=info` for the event behind `db.pool.acquire` (a wait for a pool connection; the event itself is kept out of the logs and off spans unless the wait was 2 s or more). `opentelemetry=warn` keeps the OTel SDK's own logs to its
   warnings (spans dropped, an export failed); they go to stdout only, never through the OTLP log
   bridge, which would feed them back to itself.
 

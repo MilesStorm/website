@@ -23,7 +23,8 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use crate::rolls::RollHub;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-/// What ai_pipeline's `roll.settle` span would send as the roll's `_trace`.
+/// What ai_pipeline would send as the roll's `_trace`: its `ws.send` span, in the trace
+/// of `roll.settle`.
 const SETTLE_TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SETTLE_SPAN: &str = "00f067aa0ba902b7";
 
@@ -325,16 +326,22 @@ async fn a_camera_session_traces_each_roll_and_keeps_the_trace_field_to_itself()
         Some(format!("00-{}-{}-01", connect_sc.trace_id(), connect_sc.span_id())),
     );
 
-    // The roll continues ai_pipeline's trace: published to Redis ...
-    let settle_span = SpanId::from_hex(SETTLE_SPAN).unwrap();
+    // The roll continues ai_pipeline's trace: received as the child of the span that sent
+    // it, published to Redis ...
+    let receive = span(&exporter, "roll receive").await;
+    assert_eq!(receive.span_kind, SpanKind::Consumer);
+    assert_eq!(receive.span_context.trace_id().to_string(), SETTLE_TRACE);
+    assert_eq!(receive.parent_span_id, SpanId::from_hex(SETTLE_SPAN).unwrap());
+    assert_eq!(links(&receive), std::slice::from_ref(&open.span_context));
+    let receive_id = receive.span_context.span_id();
     let publish = span(&exporter, "roll publish").await;
     assert_eq!(publish.span_context.trace_id().to_string(), SETTLE_TRACE);
-    assert_eq!(publish.parent_span_id, settle_span);
+    assert_eq!(publish.parent_span_id, receive_id);
     assert_eq!(links(&publish), std::slice::from_ref(&open.span_context));
     // ... and queued for keeping its picture, which the capture worker picks up.
     let queued = span(&exporter, "roll capture").await;
     assert_eq!(queued.span_kind, SpanKind::Producer);
-    assert_eq!(queued.parent_span_id, settle_span);
+    assert_eq!(queued.parent_span_id, receive_id);
     assert_eq!(links(&queued), std::slice::from_ref(&open.span_context));
     let capture = span(&exporter, "arcane.capture").await;
     assert_eq!(capture.span_kind, SpanKind::Consumer);

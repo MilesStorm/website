@@ -603,7 +603,25 @@ async fn proxy_ws(
                         let (is_roll, seq) = reply_info(&t);
                         if is_roll {
                             session.roll();
-                            if rolls_tx.try_send(Carried::with_context(trace.cx.clone(), t.to_string())).is_err() {
+                            // The CONSUMER of the message ai_pipeline's `ws.send` span sent
+                            // (its child): handing the roll to the Redis publisher and the
+                            // capture queue, whose spans are this one's children.
+                            let receive = tracing::info_span!(
+                                parent: None,
+                                "roll.receive",
+                                otel.name = "roll receive",
+                                otel.kind = "consumer",
+                                messaging.system = "websocket",
+                                messaging.operation.name = "process",
+                                "messaging.operation.type" = "process",
+                                trace_id = tracing::field::Empty,
+                                span_id = tracing::field::Empty,
+                            );
+                            api::trace::continue_from(&receive, trace.cx);
+                            session.unit(&receive);
+                            let received = tracing_opentelemetry::OpenTelemetrySpanExt::context(&receive);
+                            let _receiving = receive.enter();
+                            if rolls_tx.try_send(Carried::with_context(received.clone(), t.to_string())).is_err() {
                                 tracing::warn!("arcane roll dropped: Redis publish queue full");
                                 session.dropped(1);
                             }
@@ -622,7 +640,7 @@ async fn proxy_ws(
                                         trace_id = tracing::field::Empty,
                                         span_id = tracing::field::Empty,
                                     );
-                                    api::trace::continue_from(&span, trace.cx);
+                                    api::trace::continue_from(&span, received);
                                     session.unit(&span);
                                     permit.send(span.in_scope(|| Carried::new(capture::CaptureJob {
                                         roll: t.to_string(),
