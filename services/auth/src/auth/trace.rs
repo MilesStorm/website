@@ -5,9 +5,11 @@
 
 use std::borrow::Cow;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime};
 
+use futures_util::FutureExt as _;
 use opentelemetry::trace::{
     Span as _, SpanContext, SpanKind, Status, TraceContextExt as _, Tracer as _,
 };
@@ -318,6 +320,23 @@ impl<S: ExpiredDeletion> ExpiredDeletion for TracedStore<S> {
 /// The tasks [`finish_tasks`] waits for at shutdown.
 static TASKS: LazyLock<TaskTracker> = LazyLock::new(TaskTracker::new);
 
+/// A panic in background work: its span ends with status ERROR and `error.type=panic`, and
+/// an error is logged in it. The payload stays out (it can quote data; the panic hook has
+/// printed it to stderr). The panic then goes on to the task's `JoinHandle` as usual.
+fn panicked(span: &tracing::Span, payload: Box<dyn std::any::Any + Send>) -> ! {
+    fail(span, "panic");
+    tracing::error!(parent: span, "background work panicked");
+    std::panic::resume_unwind(payload)
+}
+
+/// `fut` in `span`, with a panic marked on the span ([`panicked`]).
+async fn in_task_span<F: Future>(span: tracing::Span, fut: F) -> F::Output {
+    match AssertUnwindSafe(fut).catch_unwind().instrument(span.clone()).await {
+        Ok(output) => output,
+        Err(payload) => panicked(&span, payload),
+    }
+}
+
 /// A unit of background work as a trace of its own: `name` is its root span, with a link to
 /// `link` when something caused it (`span.context().span().span_context()`). For work no
 /// request is waiting on and that isn't part of one: an iteration of a [`spawn_loop`].
@@ -332,7 +351,7 @@ where
         span.add_link(link);
     }
     record_ids(&span);
-    TASKS.spawn(fut.instrument(span))
+    TASKS.spawn(in_task_span(span, fut))
 }
 
 /// Work a request starts and doesn't wait for (sending an email after replying), as a span
@@ -357,7 +376,7 @@ where
     // Fails only without the OTel layer (no export anyway): the span is new, so not started.
     let _ = span.set_parent(tracing::Span::current().context());
     record_ids(&span);
-    TASKS.spawn(fut.instrument(span))
+    TASKS.spawn(in_task_span(span, fut))
 }
 
 /// A loop that runs for the life of the process (`name` is for the log). It gets no span: a
@@ -384,7 +403,9 @@ where
 {
     let span = tracing::info_span!("blocking", otel.name = name, trace_id = Empty, span_id = Empty);
     record_ids(&span);
-    TASKS.spawn_blocking(move || span.in_scope(f))
+    TASKS.spawn_blocking(move || {
+        span.in_scope(|| std::panic::catch_unwind(AssertUnwindSafe(f))).unwrap_or_else(|payload| panicked(&span, payload))
+    })
 }
 
 /// At shutdown: waits for the tasks from [`spawn`], [`spawn_in_trace`] and [`spawn_blocking`]
@@ -705,6 +726,32 @@ mod tests {
         let span = traced.span("password.hash");
         assert_eq!(span.parent_span_id, caller_sc.span_id());
         assert_eq!(inside, span.span_context.span_id(), "the closure runs in the span");
+    }
+
+    #[tokio::test]
+    async fn a_panic_in_spawned_work_is_an_error_on_its_span() {
+        let traced = pipeline();
+        let async_panic = |name: &'static str| async move { panic!("{name}: ada@example.com") };
+
+        assert!(spawn("unit", None, async_panic("unit")).await.unwrap_err().is_panic());
+        assert!(spawn_in_trace("follower", async_panic("follower")).await.unwrap_err().is_panic());
+        let blocking: JoinHandle<()> = spawn_blocking("blocking", || panic!("blocking: ada@example.com"));
+        assert!(blocking.await.unwrap_err().is_panic());
+
+        for name in ["unit", "follower", "blocking"] {
+            let span = traced.span(name);
+            assert_eq!(span.status, Status::error(""), "{name}");
+            assert_eq!(attr(&span, "error.type").as_deref(), Some("panic"), "{name}");
+            assert!(!super::testing::text(&span).contains("ada@example.com"), "{name} holds the payload");
+        }
+        // Logged at error, in the span (the blocking thread has no subscriber in a test).
+        let logs = traced.logs();
+        let lines: Vec<_> = logs.lines().filter(|l| l.contains("background work panicked")).collect();
+        assert_eq!(lines.len(), 2, "{logs}");
+        for line in lines {
+            assert!(line.contains("\"level\":\"ERROR\"") && line.contains("\"trace_id\""), "{line}");
+            assert!(!line.contains("ada@example.com"), "{line}");
+        }
     }
 
     #[tokio::test]

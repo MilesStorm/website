@@ -43,6 +43,8 @@ async-trait = "0.1"
 http = "1"
 # `LevelFilter` for sqlx's pool options
 log = "0.4"
+# `catch_unwind` on a future: a panic in background work marks its span (src/auth/trace.rs)
+futures-util = "0.3"
 # TaskTracker: background tasks are awaited at shutdown
 tokio-util = { version = "0.7", features = ["rt"] }
 jsonwebtoken = "9"
