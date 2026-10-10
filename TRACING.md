@@ -227,8 +227,9 @@ Bump `@grafana/faro-web-sdk` and `@grafana/faro-web-tracing` together (exact ver
   `window.fetch` while `initializeFaro` runs, before `trace.js` wraps it;
 - `TracingInstrumentation`'s `spanProcessor` option, with `FaroMetaAttributesSpanProcessor` and
   `FaroTraceExporter` from the tracing bundle and the live `GrafanaFaroWebSdk.faro` instance
-  (`trace.js` rebuilds Faro's default chain around its own processor: the bundle doesn't export
-  OTel's `BatchSpanProcessor`, so trace.js batches like it, 1 s or 30 spans);
+  (`trace.js` rebuilds Faro's default chain around its own processor. The Faro bundle doesn't
+  export OTel's `BatchSpanProcessor`, so `npm run vendor` builds `otel-batch.iife.js` from
+  `@opentelemetry/sdk-trace-web`; keep that package on the version Faro depends on);
 - `FetchTransport`'s `requestOptions.headers` (the unsampled `traceparent` on uploads);
 - the fetch instrumentation's `requestHook`, reading `http.request.method` and `url.full` from the
   span to name it;
