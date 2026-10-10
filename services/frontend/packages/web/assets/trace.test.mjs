@@ -871,6 +871,18 @@ test('staging starts Faro tagged staging, with the span processor in Faro\'s cha
   assert.deepEqual({ ...chain.metas.value }, {});
 });
 
+test('the version comes from the page the server rendered', () => {
+  const sandbox = bootSandbox('milesstorm.com');
+  sandbox.document.querySelector = (selector) =>
+    selector === 'meta[name="service-version"]' ? { getAttribute: () => '0123abc' } : null;
+  vm.runInContext(SRC, sandbox);
+  assert.equal(sandbox.cfg.app.version, '0123abc');
+
+  const without = bootSandbox('milesstorm.com');
+  vm.runInContext(SRC, without);
+  assert.equal(without.cfg.app.version, undefined);
+});
+
 test('the environment comes from the host, so one bundle serves staging and production', () => {
   const envs = {};
   for (const host of ['staging.milesstorm.com', 'milesstorm.com']) {

@@ -59,6 +59,18 @@ pub fn traceparent() -> Option<String> {
     None
 }
 
+/// The commit this build was made from (the image's `GIT_SHA`), for the `<meta>` the
+/// browser's tracer reads its `service.version` from: the browser runs the bundle of the
+/// same build. `None` in the browser and where the image doesn't say.
+pub fn service_version() -> Option<String> {
+    #[cfg(feature = "server")]
+    {
+        std::env::var("GIT_SHA").ok().filter(|sha| !sha.is_empty())
+    }
+    #[cfg(not(feature = "server"))]
+    None
+}
+
 /// An INFO span for work that outlives the current span: a spawned task, a queued job,
 /// a WebSocket session. It belongs to the current trace, but through OTel only, so it
 /// holds no reference that would keep the current span open (and unexported) until the
