@@ -265,8 +265,8 @@ async fn name_page_span(req: axum::extract::Request, next: axum::middleware::Nex
     next.run(req).await
 }
 
-/// `Cache-Control: no-store` on server-function responses and rendered pages, unless the
-/// handler chose its own. Neither may be replayed by a cache: pages carry the request's
+/// `Cache-Control` on server-function responses (`no-store`) and rendered pages (`private,
+/// no-cache`), unless the handler chose its own. Neither may be replayed by a shared cache: pages carry the request's
 /// `<meta name="traceparent">`, and the browser's clock correction takes its samples from both
 /// (TRACING.md, "Browser clock"). Cloudflare caches neither today; this keeps a future rule from
 /// changing that.
@@ -281,7 +281,9 @@ async fn no_store(req: axum::extract::Request, next: axum::middleware::Next) -> 
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.starts_with("text/html"));
     if (bff || html) && !res.headers().contains_key(CACHE_CONTROL) {
-        res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        // Pages may stay in the browser's back/forward cache, which `no-store` turns off.
+        let value = if bff { "no-store" } else { "private, no-cache" };
+        res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static(value));
     }
     res
 }
@@ -656,6 +658,7 @@ fn App() -> Element {
         document::Meta { name: "traceparent", content: traceparent }
         document::Script { src: asset!("/assets/vendor/faro-web-sdk.iife.js", AssetOptions::js().with_minify(false)) }
         document::Script { src: asset!("/assets/vendor/faro-web-tracing.iife.js", AssetOptions::js().with_minify(false)) }
+        document::Script { src: asset!("/assets/vendor/otel-batch.iife.js", AssetOptions::js().with_minify(false)) }
         document::Script { src: asset!("/assets/trace.js", AssetOptions::js().with_minify(false)) }
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: TAILWIND }
@@ -775,7 +778,7 @@ mod tests {
         let post = client.post(format!("{base}/bff/login_password123456")).send().await.unwrap();
         assert_eq!(cache_control(post).as_deref(), Some("no-store"));
         let page = client.get(format!("{base}/login")).send().await.unwrap();
-        assert_eq!(cache_control(page).as_deref(), Some("no-store"));
+        assert_eq!(cache_control(page).as_deref(), Some("private, no-cache"));
         let asset = client.get(format!("{base}/assets/app.css")).send().await.unwrap();
         assert_eq!(cache_control(asset), None);
         let own = client.get(format!("{base}/bff/picture123456")).send().await.unwrap();

@@ -255,10 +255,8 @@
   //     holding longer would lose the trace when the tab closes) or the page is hidden;
   //   - other spans' starts and ends are reported to `watch`ers, so a click or page load can end
   //     after its last child (OTel's fetch span ends after the response body, 300 ms late);
-  //   - spans are sent in batches like Faro's default BatchSpanProcessor (1 s, at most 30), which
-  //     the Faro bundle doesn't export.
-  var BATCH_MS = 1000;
-  var BATCH_MAX = 30;
+  // Spans it lets through go to `deps.next`: OTel's BatchSpanProcessor in front of Faro's exporter,
+  // as in Faro's default chain.
 
   function hrMillis(t) {
     return Array.isArray(t) ? t[0] * 1e3 + t[1] / 1e6 : t;
@@ -267,23 +265,12 @@
   function spanProcessor(deps) {
     var traces = {};
     var traceOrder = [];
-    var ready = [];
-    var timer = null;
     var watchers = [];
 
-    function send() {
-      deps.clearTimeout(timer);
-      timer = null;
-      if (!ready.length) return;
-      var batch = ready;
-      ready = [];
-      try { deps.exporter.export(batch, function () {}); } catch (err) { /* dropped */ }
-    }
-
     function queue(spans) {
-      ready = ready.concat(spans);
-      if (ready.length >= BATCH_MAX) send();
-      else if (!timer && ready.length) timer = deps.setTimeout(send, BATCH_MS);
+      spans.forEach(function (span) {
+        try { deps.next.onEnd(span); } catch (err) { /* this span is dropped */ }
+      });
     }
 
     function release(t, uncorrected) {
@@ -308,7 +295,11 @@
         if (t) return notify('start', span, t);
         t = traces[sc.traceId] = { id: sc.traceId, root: sc.spanId, held: [], fixed: false };
         traceOrder.push(sc.traceId);
-        if (traceOrder.length > CLOCK_TRACES) delete traces[traceOrder.shift()];
+        if (traceOrder.length > CLOCK_TRACES) {
+          var oldest = traces[traceOrder.shift()];
+          if (oldest) release(oldest, true);
+          if (oldest) delete traces[oldest.id];
+        }
         release(t);
       },
       onEnd: function (span) {
@@ -323,10 +314,12 @@
       // Everything goes now; held traces uncorrected.
       forceFlush: function () {
         Object.keys(traces).forEach(function (id) { release(traces[id], true); });
-        send();
-        return Promise.resolve();
+        return deps.next.forceFlush();
       },
-      shutdown: function () { return this.forceFlush(); },
+      shutdown: function () {
+        Object.keys(traces).forEach(function (id) { release(traces[id], true); });
+        return deps.next.shutdown();
+      },
       watch: function (w) { watchers.push(w); },
     };
   }
@@ -657,13 +650,18 @@
     var Observer = typeof PerformanceObserver === 'function' && globalThis.performance ? PerformanceObserver : null;
     var clock = clockSync({ now: Date.now, performance: globalThis.performance });
     if (Observer) clock.observe(Observer);
-    // Faro's own chain (session and user attributes, then export), with ours in place of its
-    // BatchSpanProcessor. `sdk.faro` is the live Faro instance once initializeFaro has run.
+    // Faro's own chain (session and user attributes, batch, export) with ours before the batch.
+    // The Faro bundle doesn't export OTel's BatchSpanProcessor, so it is vendored next to it
+    // (scripts/vendor.mjs), with Faro's settings. `sdk.faro` is the live Faro instance once
+    // initializeFaro has run.
+    var Batch = (globalThis.OtelSdkTraceWeb || {}).BatchSpanProcessor;
+    if (!Batch) return;
     var spans = spanProcessor({
-      exporter: new tracing.FaroTraceExporter({ get api() { return sdk.faro.api; } }),
+      next: new Batch(new tracing.FaroTraceExporter({ get api() { return sdk.faro.api; } }), {
+        scheduledDelayMillis: 1000,
+        maxExportBatchSize: 30,
+      }),
       clock: clock,
-      setTimeout: setTimeout.bind(globalThis),
-      clearTimeout: clearTimeout.bind(globalThis),
     });
     // Registered before Faro's own listener, so held and batched spans reach Faro's transport
     // before it flushes for a hidden page.

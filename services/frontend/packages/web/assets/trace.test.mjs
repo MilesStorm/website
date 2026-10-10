@@ -94,8 +94,8 @@ function setup({ meta = null, readyState = 'loading', fetchSpans = false, path =
   const perfNow = () => 30 + (clk.now() - 1_000_000);
   const clockSync = api.clockSync({ now: clk.now, performance: { now: perfNow } });
   const processor = api.spanProcessor({
-    exporter: { export: (batch, done) => { exported.push(...batch); done({ code: 0 }); } },
-    clock: clockSync, setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
+    next: { onEnd: (span) => exported.push(span), forceFlush: () => Promise.resolve(), shutdown: () => Promise.resolve() },
+    clock: clockSync,
   });
   const { otel, spans, tracer: otelTracer } = fakeOtel(clk, processor);
   const listeners = {};
@@ -404,6 +404,14 @@ function bootSandbox(hostname) {
       ViewInstrumentation: class {},
       faro: { api: { pushTraces: (t) => sandbox.pushed.push(t) }, metas: { value: {} } },
       initializeFaro: (cfg) => { sandbox.inits++; sandbox.cfg = cfg; return { api: { getOTEL: () => fakeOtel(clock()).otel } }; },
+    },
+    OtelSdkTraceWeb: {
+      BatchSpanProcessor: class {
+        constructor(exporter, opts) { this.exporter = exporter; sandbox.batchOpts = opts; }
+        onEnd(span) { this.exporter.export([span], () => {}); }
+        forceFlush() { return Promise.resolve(); }
+        shutdown() { return Promise.resolve(); }
+      },
     },
     GrafanaFaroWebTracing: {
       TracingInstrumentation: class { constructor(opts) { sandbox.tracingOpts = opts; } },
@@ -718,21 +726,46 @@ test('a held trace whose root ends without a sample is sent uncorrected, and sta
   assert.deepEqual([late.startTimeUnixNano, late.attributes], ['0', undefined]);
 });
 
-test('a trace started after a sample is sent without holding, in batches', async () => {
+test('a trace started after a sample goes straight to the batch processor', async () => {
   const h = setup({ fetchSpans: true });
   h.clockSync.addEntry(skewEntry());
   h.click(el('button', {}, 'Go'));
   await h.win.fetch('/bff/a');
   await tick();
   h.endFetchSpan(0, h.clk.now());
-  assert.equal(h.exported.length, 0, 'batched');
-  h.clk.advance(999);
-  assert.equal(h.exported.length, 0);
-  h.clk.advance(1);
-  assert.deepEqual(ids(h.exported), ['POST', 'click Go'], 'the batch went 1 s after its first span');
-  // 30 ended spans go at once.
-  for (let i = 0; i < 30; i++) h.processor.onEnd({ spanContext: () => ({ traceId: 'x' + i, spanId: 's' }), endTime: [1, 0] });
-  assert.equal(h.exported.length, 32);
+  assert.deepEqual(ids(h.exported), ['POST'], 'not held');
+});
+
+test('a held trace pushed out by newer ones is sent, not dropped', () => {
+  const h = setup();
+  const span = (trace, id) => ({ name: trace, spanContext: () => ({ traceId: trace, spanId: id }), endTime: [1, 0] });
+  h.processor.onStart(span('old', 'root'));
+  h.processor.onEnd(span('old', 'child'));
+  assert.equal(h.exported.length, 0, 'held: no clock sample yet');
+  for (let i = 0; i < 200; i++) h.processor.onStart(span('t' + i, 'root'));
+  assert.deepEqual(h.exported.map((s) => s.name), ['old']);
+});
+
+// The real vendored bundle (npm run vendor), behind our processor: a span reaches the exporter.
+test('the vendored BatchSpanProcessor exports what the span processor lets through', async (t) => {
+  let bundle;
+  try { bundle = readFileSync(new URL('./vendor/otel-batch.iife.js', import.meta.url), 'utf8'); } catch (err) { return t.skip('run npm run vendor'); }
+  const sandbox = { URL, Date, crypto, setTimeout, clearTimeout, performance, Promise, console };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(bundle + ';globalThis.OtelSdkTraceWeb = OtelSdkTraceWeb;' + SRC, sandbox);
+  const sent = [];
+  const batch = new sandbox.OtelSdkTraceWeb.BatchSpanProcessor(
+    { export: (spans, done) => { sent.push(...spans); done({ code: 0 }); }, shutdown: () => Promise.resolve() },
+    { scheduledDelayMillis: 1000, maxExportBatchSize: 30 },
+  );
+  const clockSync = sandbox.__msTrace.clockSync({ now: Date.now, performance: { now: () => 0 } });
+  const processor = sandbox.__msTrace.spanProcessor({ next: batch, clock: clockSync });
+  const span = { name: 'click', spanContext: () => ({ traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1 }), endTime: [1, 0], resource: { asyncAttributesPending: false } };
+  processor.onStart(span);
+  processor.onEnd(span);
+  await processor.forceFlush();
+  assert.deepEqual(sent.map((s) => s.name), ['click']);
+  await processor.shutdown();
 });
 
 test('forceFlush sends held traces uncorrected', () => {
