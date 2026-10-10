@@ -1,0 +1,22 @@
+# Every `#[allow(clippy::disallowed_..)]` in auth: the places that use a raw I/O or task API
+# banned in clippy.toml. tests/allowed_raw_io.rs fails when the code and this list differ, so
+# a new exception is a reviewed change to this file. `count` is the number of allowed lints
+# in the file (an attribute that allows two lints counts twice).
+
+[[allow]]
+file = "src/auth/trace.rs"
+lint = "disallowed_methods"
+count = 9
+reason = "the traced wrappers themselves: client (reqwest::Client::builder), begin / commit / rollback (sqlx-tracing's), spawn / spawn_in_trace / spawn_blocking (the task tracker's), spawn_loop (tokio::spawn: a forever-loop is no unit of work); and the tests' stand-in HTTP server (tokio::spawn)"
+
+[[allow]]
+file = "src/auth/trace.rs"
+lint = "disallowed_types"
+count = 2
+reason = "client builds the reqwest::Client it wraps; the tests' TestDb holds the raw pool it builds"
+
+[[allow]]
+file = "src/auth.rs"
+lint = "disallowed_types"
+count = 3
+reason = "the raw sqlx::PgPool where nothing else will do: Auth owns the pool it builds, sqlx's migrator takes only a raw pool (migrate, one db.migrate span), and the pool's size and idle count are only on it (poll_pool_metrics)"
