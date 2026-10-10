@@ -394,7 +394,8 @@ impl UnitTrace {
     }
 
     /// Records the `ws.send` span for the replies (`sent`: whether the client took them
-    /// all) and ends the unit with it.
+    /// all) and ends the unit with it. A roll's `ws.send` was started by [`Self::roll_send`],
+    /// just before `send_started`, and is ended here.
     pub fn sent(mut self, send_started: Instant, send_ended: Instant, sent: bool) {
         let tracer = &self.tracer.tracer;
         let end = self.anchor.wall(send_ended);
@@ -409,6 +410,16 @@ impl UnitTrace {
         }
         span.end_with_timestamp(end);
         self.cx.span().end_with_timestamp(end);
+    }
+}
+
+impl Drop for UnitTrace {
+    /// A roll's send span that was started and never finished (the session was cut off
+    /// in the middle of the send) ends as a failure, not as a send that went well.
+    fn drop(&mut self) {
+        if let Some(mut span) = self.send.take() {
+            span.set_status(Status::error("send interrupted"));
+        }
     }
 }
 
@@ -662,6 +673,20 @@ pub mod tests {
         assert_eq!(attribute(settle, "roll.id"), Some(roll.roll_id.clone().into()));
         assert_eq!(attribute(settle, "roll.dice"), Some(1.into()));
         assert_eq!(attribute(settle, "roll.complete"), Some(true.into()));
+    }
+
+    #[test]
+    fn a_roll_send_that_is_cut_off_ends_as_an_error() {
+        let (tracer, exporter) = in_memory(0);
+        let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
+        let mut tracker = RollTracker::new(0.7, class_value);
+        let roll = (1..=10).find_map(|now| tracker.update(&steady_die(), now)).unwrap();
+        let mut unit = session.frame(6, &times(Instant::now()), Outcome::Roll { detections: 1, roll: &roll }).unwrap();
+        unit.roll_send(&roll.roll_id).unwrap();
+        drop(unit);
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(named(&spans, "ws.send")[0].status, Status::error("send interrupted"));
     }
 
     #[test]

@@ -137,6 +137,29 @@ mod tests {
             reason: String,
         }
 
+        /// `source` without whitespace and with each string literal replaced by its number
+        /// (`"0"`, `"1"`, ...), and the literals: attribute syntax, however it is laid out.
+        fn syntax_only(source: &str) -> (String, Vec<String>) {
+            let (mut out, mut strings, mut current, mut escaped) = (String::new(), Vec::new(), None::<String>, false);
+            // A quote as a character literal opens no string.
+            for c in source.replace(concat!("'", "\"", "'"), "").chars() {
+                match &mut current {
+                    Some(_) if escaped => escaped = false,
+                    Some(_) if c == '\\' => escaped = true,
+                    Some(text) if c == '"' => {
+                        out.push_str(&format!("\"{}\"", strings.len()));
+                        strings.push(std::mem::take(text));
+                        current = None;
+                    }
+                    Some(text) => text.push(c),
+                    None if c == '"' => current = Some(String::new()),
+                    None if !c.is_whitespace() => out.push(c),
+                    None => {}
+                }
+            }
+            (out, strings)
+        }
+
         fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
                 let path = entry.path();
@@ -161,18 +184,18 @@ mod tests {
             let file = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
             // An allow wide enough to cover the bans without naming them (`disallowed_*` are
             // in `clippy::style`) is an exception too: listed, with its reason.
+            let (syntax, strings) = syntax_only(&source);
             for opener in [concat!("al", "low("), concat!("exp", "ect(")] {
-                for (at, _) in source.match_indices(opener) {
-                    let attr = &source[at + opener.len()..];
-                    let attr = &attr[..attr.find(")]").unwrap_or(attr.len())];
-                    let (lints, reason) = match attr.split_once("reason") {
-                        Some((lints, reason)) => (lints, reason.split('"').nth(1)),
-                        None => (attr, None),
-                    };
-                    for lint in lints.split(',').map(str::trim) {
+                for (at, _) in syntax.match_indices(opener) {
+                    let group = syntax[at + opener.len()..].split(')').next().unwrap_or_default();
+                    let reason = group
+                        .split(',')
+                        .find_map(|part| part.strip_prefix("reason=\"")?.strip_suffix('"')?.parse::<usize>().ok())
+                        .map(|n| strings[n].clone());
+                    for lint in group.split(',') {
                         if [concat!("warn", "ings"), concat!("clippy::", "all"), concat!("clippy::", "style")].contains(&lint) {
-                            let reason = reason.unwrap_or_else(|| panic!("{file}: allowing `{lint}` turns the bans off: it needs a reason"));
-                            found.push(Entry { file: file.clone(), lint: lint.to_string(), reason: reason.to_string() });
+                            let reason = reason.clone().unwrap_or_else(|| panic!("{file}: allowing `{lint}` turns the bans off: it needs a reason"));
+                            found.push(Entry { file: file.clone(), lint: lint.to_string(), reason });
                         }
                     }
                 }
@@ -206,5 +229,9 @@ mod tests {
         registered.sort();
 
         assert_eq!(found, registered, "left: #[allow] sites in the source, right: allowed_raw_io.toml");
+
+        // However the attribute is written.
+        let (syntax, strings) = syntax_only("#[cfg_attr(test, allow(clippy :: all, reason = \"a (b)\") ) ]");
+        assert_eq!((syntax.as_str(), &strings[..]), ("#[cfg_attr(test,allow(clippy::all,reason=\"0\"))]", &["a (b)".to_string()][..]));
     }
 }
