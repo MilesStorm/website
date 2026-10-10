@@ -1156,7 +1156,7 @@ mod tests {
             let upstream = async {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buf = [0; 4096];
-                socket.read(&mut buf).await.unwrap();
+                let _ = socket.read(&mut buf).await.unwrap(); // the request; its content is not checked
                 socket.write_all(format!(
                     "HTTP/1.1 {status} Rejected\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
                 ).as_bytes()).await.unwrap();

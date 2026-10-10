@@ -44,5 +44,8 @@ spec:
             value: "0.7"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: "http://alloy.monitoring.svc.cluster.local:4317"
+          # Read by the OTel SDK into every span's and log's resource; staging overrides it.
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: "deployment.environment.name=production"
       imagePullSecrets:
         - name: dockerconfigjson-github-com

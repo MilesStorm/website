@@ -152,14 +152,19 @@ async fn handle_connection(
     // connection's span joins the visitor's trace.
     let mut parent = opentelemetry::Context::new();
     let ws = accept_hdr_async(stream, |req: &Request, resp: Response| {
-        parent = opentelemetry::global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(req.headers())));
+        parent = trace_parent(req.headers());
         Ok(resp)
     })
     .await?;
     let span = tracing::info_span!("arcane.ws_connection", otel.kind = "server", model = %model);
-    span.set_parent(parent);
+    let _ = span.set_parent(parent); // fails only without the OTel layer
     run_session(ws, handle, dice_threshold, model).instrument(span).await;
     Ok(())
+}
+
+/// The trace context the handshake's `traceparent` carries (empty without one).
+fn trace_parent(headers: &tokio_tungstenite::tungstenite::http::HeaderMap) -> opentelemetry::Context {
+    opentelemetry::global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(headers)))
 }
 
 struct HeaderExtractor<'a>(&'a tokio_tungstenite::tungstenite::http::HeaderMap);
@@ -264,4 +269,53 @@ async fn run_session(
     }
 
     reader.abort();
+}
+
+#[cfg(test)]
+mod tests {
+    use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    /// A `traceparent` sent on the WebSocket handshake (as the frontend's camera session
+    /// does) puts the connection's span in the sender's trace. A mismatched OTel matrix
+    /// still builds but breaks this (TRACING.md, "Upgrading OpenTelemetry").
+    #[tokio::test(flavor = "current_thread")]
+    #[expect(clippy::result_large_err, reason = "the handshake callback's error type is tungstenite's")]
+    async fn handshake_traceparent_continues_the_trace() {
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+        let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder().build().tracer("test");
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer)),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut parent = opentelemetry::Context::new();
+            let _ws = tokio_tungstenite::accept_hdr_async(stream, |req: &Request, resp: Response| {
+                parent = super::trace_parent(req.headers());
+                Ok(resp)
+            })
+            .await
+            .unwrap();
+            let span = tracing::info_span!("arcane.ws_connection");
+            let _ = span.set_parent(parent);
+            span.context().span().span_context().trace_id()
+        });
+
+        let caller = tracing::info_span!("caller");
+        let mut headers = std::collections::HashMap::new();
+        opentelemetry::global::get_text_map_propagator(|p| p.inject_context(&caller.context(), &mut headers));
+        let mut request = url.into_client_request().unwrap();
+        request.headers_mut().insert("traceparent", headers["traceparent"].parse().unwrap());
+        let _client = tokio_tungstenite::connect_async(request).await.unwrap();
+
+        assert_eq!(server.await.unwrap(), caller.context().span().span_context().trace_id());
+    }
 }

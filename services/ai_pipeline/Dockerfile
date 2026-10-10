@@ -53,6 +53,10 @@ RUN mkdir -p /cuda/lib64 \
 # Plain Ubuntu plus the files above, instead of an NVIDIA image: none of the
 # CUDA libraries those ship (cudart, cuBLAS, cuDNN, ...) are used.
 FROM ubuntu:24.04 AS runtime
+# The commit this image is built from (CI passes github.sha): `service.version` on traces and
+# logs. Declared in this stage only, so a new commit doesn't invalidate the build cache.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

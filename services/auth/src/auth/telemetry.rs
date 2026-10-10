@@ -42,6 +42,7 @@ pub fn email(kind: &str, status: &str) {
 pub fn detached_span(name: &'static str) -> tracing::Span {
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
     let span = tracing::info_span!(parent: None, "background", otel.name = name);
-    span.set_parent(tracing::Span::current().context());
+    // Fails only without the OTel layer (no export anyway): the span is new, so not started.
+    let _ = span.set_parent(tracing::Span::current().context());
     span
 }

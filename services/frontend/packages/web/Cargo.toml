@@ -36,6 +36,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 # auto-resubscribing client used for live arcane rolls (src/rolls.rs); `i-scripts`
 # the compare-and-delete of the schema lock (src/dataset.rs).
 fred = { version = "10.1", default-features = false, features = ["subscriber-client", "i-scripts"] }
+# fred's socket2, with `all` for `TcpKeepalive::with_retries` (src/main.rs). tonic 0.12 (OTel
+# 0.27) used to turn it on for us.
+socket2 = { version = "0.5", features = ["all"] }
 # Roll-sharing store (SurrealDB over HTTP /rpc; src/dataset.rs).
 reqwest = { workspace = true }
 # Applies the roll-sharing tables (surreal/database/schema) at startup.
@@ -45,6 +48,10 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# InMemoryLogExporter for the log bridge test
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
