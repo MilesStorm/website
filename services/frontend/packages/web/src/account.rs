@@ -143,9 +143,14 @@ mod server {
         if body.len() > PICTURE_MAX_UPLOAD {
             return error(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
         }
-        // The span sits inside the closure so the conversion's CPU time shows under its own name.
-        let span = tracing::info_span!("profile_picture.convert", bytes = body.len());
-        let jpeg = match tokio::task::spawn_blocking(move || span.in_scope(|| to_profile_jpeg(&body))).await {
+        // In a span of its own (made inside the closure), so the conversion's CPU time shows
+        // under its own name.
+        let convert = move || {
+            use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+            tracing::Span::current().set_attribute("bytes", body.len() as i64);
+            to_profile_jpeg(&body)
+        };
+        let jpeg = match api::trace::spawn_blocking("profile_picture.convert", convert).await {
             Ok(Ok(jpeg)) => jpeg,
             Ok(Err(e)) => {
                 tracing::info!(error = %e, "profile picture upload is not a usable image");
@@ -232,7 +237,7 @@ fn account_error(status: axum::http::StatusCode) -> ServerFnError {
 
 /// The logged-in user's account settings.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.get_account", skip_all)]
+#[tracing::instrument(name = "bff.get_account", skip_all, err)]
 pub async fn get_account() -> Result<AccountInfo, ServerFnError> {
     let session = session().await?;
     let (_, profile) = server::session_account(&session).await.map_err(account_error)?;
@@ -241,7 +246,7 @@ pub async fn get_account() -> Result<AccountInfo, ServerFnError> {
 
 /// Set the display name; blank clears it. Errors carry a message for the page.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.set_account_display_name", skip_all)]
+#[tracing::instrument(name = "bff.set_account_display_name", skip_all, err)]
 pub async fn set_account_display_name(name: String) -> Result<AccountInfo, ServerFnError> {
     let session = session().await?;
     let (token, _) = server::session_account(&session).await.map_err(account_error)?;
@@ -260,7 +265,7 @@ pub async fn set_account_display_name(name: String) -> Result<AccountInfo, Serve
 
 /// Remove the profile picture (back to the default one).
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.remove_profile_picture", skip_all)]
+#[tracing::instrument(name = "bff.remove_profile_picture", skip_all, err)]
 pub async fn remove_profile_picture() -> Result<AccountInfo, ServerFnError> {
     let session = session().await?;
     let (_, profile) = server::session_account(&session).await.map_err(account_error)?;

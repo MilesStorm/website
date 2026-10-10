@@ -57,7 +57,7 @@ mod session {
 /// fixation) would be logged in as whoever logs in there next. Call before storing
 /// the login; on failure, don't log in.
 #[cfg(feature = "server")]
-#[tracing::instrument(name = "bff.fresh_session_id", skip_all)]
+#[tracing::instrument(name = "bff.fresh_session_id", skip_all, err)]
 pub async fn fresh_session_id(sess: &tower_sessions::Session) -> Result<(), String> {
     sess.cycle_id().await.map_err(|e| {
         tracing::error!(error = %e, "giving the session a new ID on login failed");
@@ -65,12 +65,20 @@ pub async fn fresh_session_id(sess: &tower_sessions::Session) -> Result<(), Stri
     })
 }
 
+/// The longest a call to auth may take. Auth answers in milliseconds, except the ark
+/// commands, which wait for the game server's container.
+#[cfg(feature = "server")]
+const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The BFF's client for calls to auth: every request gets a CLIENT span and carries
 /// the trace context (see `trace::client`).
 #[cfg(feature = "server")]
-fn http_client() -> &'static reqwest_middleware::ClientWithMiddleware {
-    static CLIENT: std::sync::OnceLock<reqwest_middleware::ClientWithMiddleware> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| trace::client(reqwest::Client::new()))
+fn http_client() -> &'static trace::TracedClient {
+    static CLIENT: std::sync::OnceLock<trace::TracedClient> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        trace::client(trace::Peer { service: "auth", system: None }, AUTH_TIMEOUT, |b| b)
+            .expect("failed to build the HTTP client")
+    })
 }
 
 /// Builds the client for calls to auth before the server takes requests. Building it loads the
@@ -84,7 +92,7 @@ pub fn init_http_client() {
 
 /// Ask the auth service to begin an OAuth flow. Returns `(auth_url, csrf_state)`.
 #[cfg(feature = "server")]
-#[tracing::instrument(name = "bff.start_oauth", skip_all, fields(provider = %provider))]
+#[tracing::instrument(name = "bff.start_oauth", skip_all, err, fields(provider = %provider))]
 pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
     use session::{auth_url, service_secret};
 
@@ -140,15 +148,25 @@ pub async fn exchange_oauth_code(
         .json(&Req { provider, code })
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            trace::failed("auth_unreachable");
+            e.to_string()
+        })?;
 
     if !resp.status().is_success() {
+        // A 4xx is auth's answer (the provider refused the code, the email is taken).
+        if !resp.status().is_client_error() {
+            trace::failed("auth_status");
+        }
         let body = resp.text().await.unwrap_or_default();
         metrics::counter!("bff_login_attempts_total", "method" => provider.to_string(), "status" => "failure").increment(1);
         return Err(body);
     }
 
-    let data: Resp = resp.json().await.map_err(|e| e.to_string())?;
+    let data: Resp = resp.json().await.map_err(|e| {
+        trace::failed("auth_reply");
+        e.to_string()
+    })?;
     metrics::counter!("bff_login_attempts_total", "method" => provider.to_string(), "status" => "success").increment(1);
     Ok((data.token, data.username))
 }
@@ -170,68 +188,72 @@ pub async fn login_password(
     username: String,
     password: String,
 ) -> Result<LoginStatus, ServerFnError> {
-    use session::*;
+    trace::rejectable(async move {
+        use session::*;
 
-    #[derive(Serialize)]
-    struct Req {
-        username: String,
-        password: String,
-    }
-    #[derive(Deserialize)]
-    struct Resp {
-        token: String,
-        username: String,
-    }
-
-    let resp = http_client()
-        .post(format!("{}/internal/token/exchange", auth_url()))
-        .header("x-service-token", service_secret())
-        .json(&Req { username: username.clone(), password })
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "password login failed: reaching auth failed");
-            metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "error").increment(1);
-            auth_error(502, "Login is unavailable right now. Try again later.")
-        })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        let error = password_login_error(status, &body);
-        let expected = http::StatusCode::from(error.clone()).is_client_error();
-        if expected {
-            tracing::warn!(username = %username, "password login failed: invalid credentials");
-        } else {
-            tracing::error!(status, "password login failed: auth unavailable");
+        #[derive(Serialize)]
+        struct Req {
+            username: String,
+            password: String,
         }
-        metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => if expected { "failure" } else { "error" }).increment(1);
-        return Err(error);
-    }
+        #[derive(Deserialize)]
+        struct Resp {
+            token: String,
+            username: String,
+        }
 
-    let data: Resp = resp
-        .json()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        let resp = http_client()
+            .post(format!("{}/internal/token/exchange", auth_url()))
+            .with_extension(trace::WRONG_TOKEN_OK)
+            .header("x-service-token", service_secret())
+            .json(&Req { username: username.clone(), password })
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "password login failed: reaching auth failed");
+                metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "error").increment(1);
+                auth_error(502, "Login is unavailable right now. Try again later.")
+            })?;
 
-    let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-    fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
-    sess.insert("opaque_token", &data.token)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    sess.insert("username", data.username.clone())
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    redeem_pending_invite(&sess, &data.token).await;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            let error = password_login_error(status, &body);
+            let expected = http::StatusCode::from(error.clone()).is_client_error();
+            if expected {
+                tracing::warn!(username = %username, "password login failed: invalid credentials");
+            } else {
+                tracing::error!(status, "password login failed: auth unavailable");
+            }
+            metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => if expected { "failure" } else { "error" }).increment(1);
+            return Err(error);
+        }
 
-    tracing::info!(username = %data.username, "password login succeeded");
-    metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "success").increment(1);
-    Ok(LoginStatus::LoggedIn(data.username))
+        let data: Resp = resp
+            .json()
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
+        fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
+        sess.insert("opaque_token", &data.token)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        sess.insert("username", data.username.clone())
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        redeem_pending_invite(&sess, &data.token).await;
+
+        tracing::info!(username = %data.username, "password login succeeded");
+        metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "success").increment(1);
+        Ok(LoginStatus::LoggedIn(data.username))
+    })
+    .await
 }
 
 /// Clear the current session.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.logout", skip_all)]
+#[tracing::instrument(name = "bff.logout", skip_all, err)]
 pub async fn logout() -> Result<(), ServerFnError> {
     use session::*;
 
@@ -247,7 +269,7 @@ pub async fn logout() -> Result<(), ServerFnError> {
 
 /// Check the current login status from the BFF session.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.check_login_status", skip_all)]
+#[tracing::instrument(name = "bff.check_login_status", skip_all, err)]
 pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
     use session::*;
 
@@ -275,6 +297,8 @@ pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
         None => false,
         Some(token) => match http_client()
             .post(format!("{}/internal/token/introspect", auth_url()))
+        .with_extension(trace::WRONG_TOKEN_OK)
+            .with_extension(trace::WRONG_TOKEN_OK)
             .header("x-service-token", service_secret())
             .json(&Req { token })
             .send()
@@ -308,73 +332,76 @@ pub async fn register_password(
     email: String,
     password: String,
 ) -> Result<LoginStatus, ServerFnError> {
-    use session::*;
+    trace::rejectable(async move {
+        use session::*;
 
-    #[derive(Serialize)]
-    struct Req {
-        username: String,
-        email: String,
-        password: String,
-    }
-    #[derive(Deserialize)]
-    struct Resp {
-        token: String,
-        username: String,
-    }
+        #[derive(Serialize)]
+        struct Req {
+            username: String,
+            email: String,
+            password: String,
+        }
+        #[derive(Deserialize)]
+        struct Resp {
+            token: String,
+            username: String,
+        }
 
-    let resp = http_client()
-        .post(format!("{}/internal/register", auth_url()))
-        .header("x-service-token", service_secret())
-        .json(&Req { username: username.clone(), email, password })
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        let resp = http_client()
+            .post(format!("{}/internal/register", auth_url()))
+            .header("x-service-token", service_secret())
+            .json(&Req { username: username.clone(), email, password })
+            .send()
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    if resp.status() == reqwest::StatusCode::CONFLICT {
-        let body = resp.text().await.unwrap_or_default();
-        tracing::warn!(username = %username, reason = %body, "registration conflict");
-        metrics::counter!("bff_register_attempts_total", "status" => "conflict").increment(1);
-        return Err(auth_error(409, body));
-    }
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(username = %username, reason = %body, "registration conflict");
+            metrics::counter!("bff_register_attempts_total", "status" => "conflict").increment(1);
+            return Err(auth_error(409, body));
+        }
 
-    if resp.status() == reqwest::StatusCode::BAD_REQUEST {
-        // Auth says what's wrong ("Invalid email address", password too short);
-        // anything else (e.g. a malformed request) gets a generic message.
-        let body = resp.text().await.unwrap_or_default();
-        metrics::counter!("bff_register_attempts_total", "status" => "invalid").increment(1);
-        let known = body == "Invalid email address" || body.starts_with("Password must be at least");
-        return Err(auth_error(400, if known { body.as_str() } else { "Registration failed" }));
-    }
+        if resp.status() == reqwest::StatusCode::BAD_REQUEST {
+            // Auth says what's wrong ("Invalid email address", password too short);
+            // anything else (e.g. a malformed request) gets a generic message.
+            let body = resp.text().await.unwrap_or_default();
+            metrics::counter!("bff_register_attempts_total", "status" => "invalid").increment(1);
+            let known = body == "Invalid email address" || body.starts_with("Password must be at least");
+            return Err(auth_error(400, if known { body.as_str() } else { "Registration failed" }));
+        }
 
-    if !resp.status().is_success() {
-        tracing::error!(username = %username, status = %resp.status(), "registration failed");
-        metrics::counter!("bff_register_attempts_total", "status" => "error").increment(1);
-        return Err(ServerFnError::new("Registration failed"));
-    }
+        if !resp.status().is_success() {
+            tracing::error!(username = %username, status = %resp.status(), "registration failed");
+            metrics::counter!("bff_register_attempts_total", "status" => "error").increment(1);
+            return Err(ServerFnError::new("Registration failed"));
+        }
 
-    let data: Resp = resp
-        .json()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        let data: Resp = resp
+            .json()
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-    fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
-    sess.insert("opaque_token", &data.token)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    sess.insert("username", data.username.clone())
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    redeem_pending_invite(&sess, &data.token).await;
+        let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
+        fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
+        sess.insert("opaque_token", &data.token)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        sess.insert("username", data.username.clone())
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        redeem_pending_invite(&sess, &data.token).await;
 
-    tracing::info!(username = %data.username, "registration succeeded");
-    metrics::counter!("bff_register_attempts_total", "status" => "success").increment(1);
-    Ok(LoginStatus::LoggedIn(data.username))
+        tracing::info!(username = %data.username, "registration succeeded");
+        metrics::counter!("bff_register_attempts_total", "status" => "success").increment(1);
+        Ok(LoginStatus::LoggedIn(data.username))
+    })
+    .await
 }
 
 /// Returns the list of permission names held by the current session's user.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.get_my_permissions", skip_all)]
+#[tracing::instrument(name = "bff.get_my_permissions", skip_all, err)]
 pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
     use session::*;
 
@@ -404,6 +431,7 @@ pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
 
     let resp = http_client()
         .post(format!("{}/internal/token/introspect", auth_url()))
+        .with_extension(trace::WRONG_TOKEN_OK)
         .header("x-service-token", service_secret())
         .json(&Req { token })
         .send()
@@ -441,6 +469,7 @@ pub async fn has_arcane_permission(token: &str) -> bool {
 
     let result = http_client()
         .post(format!("{}/internal/token/introspect", auth_url()))
+        .with_extension(trace::WRONG_TOKEN_OK)
         .header("x-service-token", service_secret())
         .json(&Req { token })
         .send()
@@ -452,12 +481,16 @@ pub async fn has_arcane_permission(token: &str) -> bool {
             .await
             .map(|data| data.permissions.iter().any(|p| p == "arcane"))
             .unwrap_or(false),
+        // The token is gone (logged out elsewhere): an answer, not a failure.
+        Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => false,
         Ok(r) => {
             tracing::warn!(status = %r.status(), "arcane permission introspect returned non-success");
+            trace::failed("auth_status");
             false
         }
         Err(e) => {
             tracing::error!(error = %e, "arcane permission introspect request failed");
+            trace::failed("auth_unreachable");
             false
         }
     }
@@ -467,7 +500,7 @@ pub async fn has_arcane_permission(token: &str) -> bool {
 /// (stored by auth; see `dataset_consent` there). Err when the user lacks
 /// `arcane` or auth can't be reached.
 #[cfg(feature = "server")]
-#[tracing::instrument(name = "bff.dataset_consent", skip_all)]
+#[tracing::instrument(name = "bff.dataset_consent", skip_all, err)]
 pub async fn dataset_consent(token: &str) -> Result<bool, String> {
     use session::{auth_url, service_secret};
 
@@ -495,7 +528,7 @@ pub async fn dataset_consent(token: &str) -> Result<bool, String> {
 /// Record the token's user's choice to share roll pictures, with the version of
 /// the consent wording they saw.
 #[cfg(feature = "server")]
-#[tracing::instrument(name = "bff.set_dataset_consent", skip_all, fields(share))]
+#[tracing::instrument(name = "bff.set_dataset_consent", skip_all, err, fields(share))]
 pub async fn set_dataset_consent(token: &str, share: bool, consent_version: &str) -> Result<(), String> {
     use session::{auth_url, service_secret};
 
@@ -608,7 +641,10 @@ pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) 
     match auth_json("/internal/invite/redeem", &serde_json::json!({ "code": code, "token": token })).await {
         Ok((200..=299, reply)) => tracing::info!(role = ?reply.get("role"), "pending invite redeemed"),
         Ok((status, reply)) => tracing::warn!(status, reply = %reply, "pending invite not redeemed"),
-        Err(e) => tracing::error!(error = %e, "redeeming a pending invite failed"),
+        Err(e) => {
+            tracing::error!(error = %e, "redeeming a pending invite failed");
+            trace::failed("auth_unreachable");
+        }
     }
     let page = format!("/invite#{code}");
     if let Err(e) = sess.insert(INVITE_RETURN_KEY, &page).await {
@@ -638,13 +674,21 @@ async fn profile_call<T: Serialize>(path: &str, body: &T) -> Result<AccountProfi
         .json(body)
         .send()
         .await
-        .map_err(|e| ProfileError::Other(e.to_string()))?;
-    match resp.status() {
-        s if s.is_success() => resp.json().await.map_err(|e| ProfileError::Other(e.to_string())),
-        reqwest::StatusCode::BAD_REQUEST => Err(ProfileError::Invalid),
-        reqwest::StatusCode::UNAUTHORIZED => Err(ProfileError::LoggedOut),
-        s => Err(ProfileError::Other(format!("auth returned {s}"))),
+        .map_err(|e| ProfileError::Other(e.to_string()));
+    let result = match resp {
+        Err(e) => Err(e),
+        Ok(resp) => match resp.status() {
+            s if s.is_success() => resp.json().await.map_err(|e| ProfileError::Other(e.to_string())),
+            reqwest::StatusCode::BAD_REQUEST => Err(ProfileError::Invalid),
+            reqwest::StatusCode::UNAUTHORIZED => Err(ProfileError::LoggedOut),
+            s => Err(ProfileError::Other(format!("auth returned {s}"))),
+        },
+    };
+    // Refusing a value or a stale token is an answer; anything else failed the caller's span.
+    if matches!(result, Err(ProfileError::Other(_))) {
+        trace::failed("auth");
     }
+    result
 }
 
 /// The token's account.
@@ -672,7 +716,7 @@ pub async fn set_display_name(token: &str, display_name: Option<&str>) -> Result
 
 /// Check whether the current user holds a specific permission.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.check_permission", skip_all, fields(permission = %name))]
+#[tracing::instrument(name = "bff.check_permission", skip_all, err, fields(permission = %name))]
 pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
     let result = get_my_permissions().await?.contains(&name);
     tracing::debug!(permission = %name, granted = result, "permission check");
@@ -681,7 +725,7 @@ pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
 
 /// Get the number of active players on the Ark server.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.ark_player_count", skip_all)]
+#[tracing::instrument(name = "bff.ark_player_count", skip_all, err)]
 pub async fn ark_player_count() -> Result<i32, ServerFnError> {
     use session::*;
 
@@ -724,7 +768,7 @@ pub async fn ark_player_count() -> Result<i32, ServerFnError> {
 
 /// Execute an Ark server command (start | stop | restart).
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.ark_command", skip_all, fields(cmd = %cmd))]
+#[tracing::instrument(name = "bff.ark_command", skip_all, err, fields(cmd = %cmd))]
 pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
     use session::*;
 
@@ -770,7 +814,7 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
 // ---- Admin RBAC server functions ----
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_users", skip_all)]
+#[tracing::instrument(name = "bff.admin_list_users", skip_all, err)]
 pub async fn admin_list_users(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminUser>, ServerFnError> {
     use session::*;
 
@@ -816,7 +860,7 @@ pub async fn admin_list_users(page: u32, limit: u32, search: String) -> Result<P
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_roles", skip_all)]
+#[tracing::instrument(name = "bff.admin_list_roles", skip_all, err)]
 pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminRole>, ServerFnError> {
     use session::*;
 
@@ -862,7 +906,7 @@ pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<P
 
 /// Returns all roles (names only, no permissions) for use in assignment dropdowns.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_all_roles", skip_all)]
+#[tracing::instrument(name = "bff.admin_list_all_roles", skip_all, err)]
 pub async fn admin_list_all_roles() -> Result<Vec<AdminRole>, ServerFnError> {
     use session::*;
 
@@ -889,7 +933,7 @@ pub async fn admin_list_all_roles() -> Result<Vec<AdminRole>, ServerFnError> {
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_permissions", skip_all)]
+#[tracing::instrument(name = "bff.admin_list_permissions", skip_all, err)]
 pub async fn admin_list_permissions() -> Result<Vec<AdminPermission>, ServerFnError> {
     use session::*;
 
@@ -919,7 +963,7 @@ pub async fn admin_list_permissions() -> Result<Vec<AdminPermission>, ServerFnEr
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_assign_user_role", skip_all, fields(user_id, role_id))]
+#[tracing::instrument(name = "bff.admin_assign_user_role", skip_all, err, fields(user_id, role_id))]
 pub async fn admin_assign_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
     use session::*;
 
@@ -941,7 +985,7 @@ pub async fn admin_assign_user_role(user_id: i64, role_id: i32) -> Result<(), Se
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_revoke_user_role", skip_all, fields(user_id, role_id))]
+#[tracing::instrument(name = "bff.admin_revoke_user_role", skip_all, err, fields(user_id, role_id))]
 pub async fn admin_revoke_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
     use session::*;
 
@@ -963,7 +1007,7 @@ pub async fn admin_revoke_user_role(user_id: i64, role_id: i32) -> Result<(), Se
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_assign_role_permission", skip_all, fields(role_id, permission_id))]
+#[tracing::instrument(name = "bff.admin_assign_role_permission", skip_all, err, fields(role_id, permission_id))]
 pub async fn admin_assign_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
     use session::*;
 
@@ -985,7 +1029,7 @@ pub async fn admin_assign_role_permission(role_id: i32, permission_id: i32) -> R
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_revoke_role_permission", skip_all, fields(role_id, permission_id))]
+#[tracing::instrument(name = "bff.admin_revoke_role_permission", skip_all, err, fields(role_id, permission_id))]
 pub async fn admin_revoke_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
     use session::*;
 
@@ -1010,7 +1054,7 @@ pub async fn admin_revoke_role_permission(role_id: i32, permission_id: i32) -> R
 
 /// The latest invite links, newest first.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_invites", skip_all)]
+#[tracing::instrument(name = "bff.admin_list_invites", skip_all, err)]
 pub async fn admin_list_invites() -> Result<Vec<AdminInvite>, ServerFnError> {
     use session::*;
 
@@ -1034,7 +1078,7 @@ pub async fn admin_list_invites() -> Result<Vec<AdminInvite>, ServerFnError> {
 /// Makes an invite link that gives `role_id`, working for `days` days and for up
 /// to `max_uses` people (`None`: any number). The reply's `link` is shown only now.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_create_invite", skip_all, fields(role_id, days))]
+#[tracing::instrument(name = "bff.admin_create_invite", skip_all, err, fields(role_id, days))]
 pub async fn admin_create_invite(
     role_id: i32,
     days: i64,
@@ -1086,7 +1130,7 @@ pub async fn admin_create_invite(
 
 /// Stops an invite link from letting anyone else in. People who already joined keep the role.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_revoke_invite", skip_all, fields(invite_id))]
+#[tracing::instrument(name = "bff.admin_revoke_invite", skip_all, err, fields(invite_id))]
 pub async fn admin_revoke_invite(invite_id: i32) -> Result<(), ServerFnError> {
     use session::*;
 
@@ -1137,7 +1181,18 @@ mod tests {
     #[tokio::test]
     async fn password_login_preserves_rejections_over_http() {
         use axum::response::IntoResponse;
+        use opentelemetry::trace::TracerProvider as _;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let exporter = opentelemetry_sdk::trace::InMemorySpanExporter::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        crate::trace::several_subscribers();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test"))),
+        );
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1163,6 +1218,20 @@ mod tests {
             };
             let (result, ()) = tokio::join!(request, upstream);
             assert_eq!(result.unwrap_err().into_response().status().as_u16(), expected);
+
+            // In the trace, a wrong password is an answer (the status code is recorded, no
+            // span is an error); auth being unusable fails the server function's span.
+            let spans = exporter.get_finished_spans().unwrap();
+            exporter.reset();
+            let span = |name: &str| spans.iter().find(|s| s.name == name).unwrap();
+            let failed = |name: &str| matches!(span(name).status, opentelemetry::trace::Status::Error { .. });
+            let call = span("POST /internal/token/exchange");
+            let recorded = call.attributes.iter().find(|kv| kv.key.as_str() == "http.response.status_code");
+            assert_eq!(recorded.map(|kv| kv.value.to_string()), Some(status.to_string()));
+            assert_eq!(failed("bff.login_password"), expected == 502, "{status} {body}");
+            // 401 is the token endpoints' expected answer (so is auth's own 401 for a bad
+            // service secret, which the server function's span reports instead).
+            assert_eq!(failed("POST /internal/token/exchange"), status != 401, "{status} {body}");
         }
         drop(listener);
         let result = super::login_password("tester".into(), "wrong-password".into()).await;

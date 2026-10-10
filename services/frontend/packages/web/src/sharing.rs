@@ -58,7 +58,7 @@ fn store_error(e: impl std::fmt::Display) -> ServerFnError {
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.get_dataset_sharing", skip_all)]
+#[tracing::instrument(name = "bff.get_dataset_sharing", skip_all, err)]
 pub async fn get_dataset_sharing() -> Result<SharingState, ServerFnError> {
     let (_, token, _) = caller(true).await?;
     if crate::dataset::dataset().is_none() {
@@ -69,7 +69,7 @@ pub async fn get_dataset_sharing() -> Result<SharingState, ServerFnError> {
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.set_dataset_sharing", skip_all, fields(share = share))]
+#[tracing::instrument(name = "bff.set_dataset_sharing", skip_all, err, fields(share = share))]
 pub async fn set_dataset_sharing(share: bool) -> Result<SharingState, ServerFnError> {
     let (_, token, _) = caller(true).await?;
     if crate::dataset::dataset().is_none() {
@@ -88,7 +88,7 @@ pub async fn set_dataset_sharing(share: bool) -> Result<SharingState, ServerFnEr
 /// Deleting never depends on auth being reachable. A save that was already under
 /// way can land just after the delete, so the delete runs again a few seconds later.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.delete_my_dataset", skip_all)]
+#[tracing::instrument(name = "bff.delete_my_dataset", skip_all, err)]
 pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
     let (user, token, hub) = caller(false).await?;
     // Deleting works whenever the store is configured, even while the schema step
@@ -104,8 +104,7 @@ pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
     let n = ds.delete_user_data(&user).await.map_err(store_error)?;
     tracing::info!(rolls = n, "user deleted shared roll pictures");
     let (ds, hub) = (ds.clone(), hub.clone());
-    let span = api::detached_span!("dataset.delete_again");
-    tokio::spawn(tracing::Instrument::instrument(async move {
+    api::trace::spawn_in_trace("dataset.delete_again", async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         if let Some(hub) = &hub {
             hub.clear_held(&user).await;
@@ -115,6 +114,6 @@ pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
             Ok(late) => tracing::info!(rolls = late, "deleted rolls saved during a delete"),
             Err(e) => tracing::error!(error = %e, "second delete pass failed"),
         }
-    }, span));
+    });
     Ok(n)
 }

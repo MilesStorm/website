@@ -1,0 +1,80 @@
+# Every `#[allow(clippy::disallowed_*)]` in packages/api and packages/web: the places allowed
+# to use an I/O constructor that clippy.toml bans (TRACING.md, "Chokepoints"). A site is
+# matched by its file, lints and `reason` text; packages/api/tests/allowed_raw_io.rs fails
+# when a site isn't listed here or an entry here has no site. Adding one is a reviewed change.
+
+# --- The chokepoints themselves ---
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::use_server_future is the wrapper the lint points to"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods", "disallowed_types"]
+reason = "trace::client is the traced HTTP client constructor"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::connect_ws is the traced WebSocket connect"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::spawn is the chokepoint for units of background work"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::spawn_in_trace is the chokepoint for a request's detached work"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::spawn_loop is the chokepoint for background loops"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::spawn_blocking is the chokepoint for blocking work"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::channel is the Carried channel constructor"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::broadcast is the Carried broadcast constructor"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::redis_pool builds Redis clients with an explicit tracing choice"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::redis_client builds Redis clients with an explicit tracing choice"
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods"]
+reason = "trace::redis_subscriber builds Redis clients with an explicit tracing choice"
+
+# --- Raw uses outside the chokepoints ---
+
+[[allow]]
+file = "packages/web/src/rolls.rs"
+lints = ["disallowed_methods"]
+reason = "the roll subscriber is gone for good: exit (after flushing telemetry) so the orchestrator restarts the replica"
+
+# --- Tests ---
+
+[[allow]]
+file = "packages/api/src/trace.rs"
+lints = ["disallowed_methods", "disallowed_types"]
+reason = "tests: stand-in servers on bare tasks and raw queues, with no trace to keep"
