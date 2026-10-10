@@ -471,13 +471,14 @@ async fn register(
     }
 }
 
-// Extracts the W3C traceparent header value from the current OTel span context
+// Extracts the W3C traceparent header value from the current span's OTel context
 // so it can be injected into outbound ark requests without pulling in a
 // separate HTTP middleware crate (which would conflict with oauth2's reqwest).
 fn traceparent() -> Option<String> {
     use opentelemetry::propagation::TextMapPropagator as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
     let propagator = opentelemetry_sdk::propagation::TraceContextPropagator::new();
-    let cx = opentelemetry::Context::current();
+    let cx = tracing::Span::current().context();
     let mut carrier = std::collections::HashMap::<String, String>::new();
     propagator.inject_context(&cx, &mut carrier);
     carrier.remove("traceparent")
@@ -1207,6 +1208,54 @@ async fn admin_revoke_role_permission(
 #[cfg(test)]
 mod tests {
     use super::clean_display_name;
+
+    /// `traceparent()` carries the calling span's context across an HTTP hop, and the
+    /// callee's `OtelAxumLayer` continues that trace. A mismatched OTel matrix still builds
+    /// but breaks this (TRACING.md, "Upgrading OpenTelemetry").
+    #[tokio::test(flavor = "current_thread")]
+    async fn traceparent_continues_the_trace_across_a_hop() {
+        use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
+        use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
+        use tracing::Instrument as _;
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+        let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder().build().tracer("test");
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer)),
+        );
+
+        // The callee answers with the trace ID of the span it handles the request in.
+        let app = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::get(|| async {
+                    tracing::Span::current().context().span().span_context().trace_id().to_string()
+                }),
+            )
+            .layer(OtelAxumLayer::default());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let caller = tracing::info_span!("caller");
+        let caller_sc = caller.context().span().span_context().clone();
+        let (tp, callee_trace) = async {
+            let tp = super::traceparent().expect("no traceparent in a span");
+            let resp = reqwest::Client::new().get(&url).header("traceparent", &tp).send().await.unwrap();
+            (tp, resp.text().await.unwrap())
+        }
+        .instrument(caller)
+        .await;
+
+        let parts: Vec<&str> = tp.split('-').collect();
+        assert_eq!(parts[1], caller_sc.trace_id().to_string(), "header: {tp}");
+        assert_eq!(parts[2], caller_sc.span_id().to_string(), "header: {tp}");
+        assert_eq!(callee_trace, caller_sc.trace_id().to_string());
+    }
 
     #[test]
     fn display_name_is_trimmed_and_blank_clears_it() {

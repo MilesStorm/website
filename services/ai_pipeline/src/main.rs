@@ -153,8 +153,8 @@ async fn main() -> anyhow::Result<()> {
 
 // Kept alive for the process lifetime so batch exporters flush on drop.
 struct OtelProviders {
-    _tracer: opentelemetry_sdk::trace::TracerProvider,
-    _logger: opentelemetry_sdk::logs::LoggerProvider,
+    _tracer: opentelemetry_sdk::trace::SdkTracerProvider,
+    _logger: opentelemetry_sdk::logs::SdkLoggerProvider,
 }
 
 async fn setup_tracing(stdout_logging: bool) -> Option<OtelProviders> {
@@ -162,17 +162,23 @@ async fn setup_tracing(stdout_logging: bool) -> Option<OtelProviders> {
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::{
-        Resource,
-        logs::LoggerProvider as SdkLoggerProvider,
-        runtime::Tokio as OtelTokio,
-        trace::TracerProvider as SdkTracerProvider,
+    use opentelemetry_sdk::{Resource, logs::SdkLoggerProvider, trace::SdkTracerProvider};
+    use tracing_subscriber::{
+        EnvFilter, Layer as _, filter::filter_fn, layer::SubscriberExt, util::SubscriberInitExt,
     };
-    use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-    let resource = Resource::new([KeyValue::new("service.name", "ai-pipeline")]);
+    // `service.version` is the commit the image was built from (Dockerfile `GIT_SHA`);
+    // `OTEL_RESOURCE_ATTRIBUTES` adds the rest (`deployment.environment.name`).
+    let resource = Resource::builder()
+        .with_service_name("ai-pipeline")
+        .with_attribute(KeyValue::new(
+            "service.version",
+            std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".into()),
+        ))
+        .build();
+    // The SDK's own logs only at `warn` (e.g. dropped spans).
     let env_filter = EnvFilter::new(
-        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "info,opentelemetry=warn".into()),
     );
 
     let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") else {
@@ -194,7 +200,7 @@ async fn setup_tracing(stdout_logging: bool) -> Option<OtelProviders> {
         .expect("failed to build OTLP span exporter");
 
     let tracer_provider = SdkTracerProvider::builder()
-        .with_batch_exporter(span_exporter, OtelTokio)
+        .with_batch_exporter(span_exporter)
         .with_resource(resource.clone())
         .build();
 
@@ -211,14 +217,25 @@ async fn setup_tracing(stdout_logging: bool) -> Option<OtelProviders> {
         .expect("failed to build OTLP log exporter");
 
     let logger_provider = SdkLoggerProvider::builder()
-        .with_batch_exporter(log_exporter, OtelTokio)
+        .with_batch_exporter(log_exporter)
         .with_resource(resource)
         .build();
 
     tracing_subscriber::registry()
         .with(env_filter)
+        // The bridge leaves out the SDK's own warnings, so they go to stdout instead.
+        .with(stdout_logging.then(|| {
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_filter(filter_fn(|meta| meta.target().starts_with("opentelemetry")))
+        }))
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
-        .with(OpenTelemetryTracingBridge::new(&logger_provider))
+        // Log records take trace_id/span_id from the OTel context tracing-opentelemetry
+        // activates with each span. The SDK's own logs stay out: exporting them would log more.
+        .with(
+            OpenTelemetryTracingBridge::new(&logger_provider)
+                .with_filter(filter_fn(|meta| !meta.target().starts_with("opentelemetry"))),
+        )
         .init();
 
     Some(OtelProviders {

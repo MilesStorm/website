@@ -119,8 +119,9 @@ there is no standard one for browser traces):
 - Only responses no cache can replay are used: the page's own navigation and `/bff/` server calls
   (POSTs). A sample whose round trip comes out negative, or whose offset is over an hour, is
   dropped as not belonging to that request. The frontend sends `Cache-Control: no-store` on
-  `/bff/` responses and rendered pages (`no_store` in `packages/web/src/main.rs`), so a future
-  Cloudflare cache rule can't replay a stamp either.
+  `/bff/` responses and `private, no-cache` on rendered pages (`no_store` in
+  `packages/web/src/main.rs`), so a future Cloudflare cache rule can't replay a stamp either.
+  Pages don't get `no-store`: it would turn off the browser's back/forward cache.
 - For each such request the browser has its own `requestStart` and `responseStart` (Resource
   Timing). With the Gateway's two times that gives the offset, accurate to within half the network
   round trip; the lowest-round-trip of the last 8 wins.
@@ -169,7 +170,9 @@ browser and the Gateway: the internet and Cloudflare.
   signals, tower-sessions, axum-login) become thousands of one-span traces. The defaults in the
   frontend's and auth's `main.rs` keep the services' own logs at `info` and those libraries at
   `warn` (ai_pipeline's libraries make no such spans); the deployments don't set `RUST_LOG`. Targets match by prefix: `sqlx=warn` also hides `sqlx_tracing`,
-  so auth adds `sqlx_tracing=info`.
+  so auth adds `sqlx_tracing=info`. `opentelemetry=warn` keeps the OTel SDK's own logs to its
+  warnings (spans dropped, an export failed); they go to stdout only, never through the OTLP log
+  bridge, which would feed them back to itself.
 
 ## Profiles
 
@@ -184,16 +187,18 @@ the profiler hasn't read that binary yet. Narrow the time range past it or filte
 
 ## Checks
 
-CI only builds images. It runs neither clippy nor the tests, so run these before merging changes
-to dependencies or tracing code:
+`.github/workflows/checks.yml` runs clippy (`-D warnings`) and the tests of all three services
+on every push and pull request. The same locally:
 
 ```sh
 cd services/frontend
 npm install && npm run vendor                 # asset! needs the vendored Faro bundles
-cargo clippy -p web --features server -- -D clippy::disallowed-methods
+node_modules/.bin/tailwindcss -i packages/ui/tailwind.css -o packages/ui/assets/styling/tailwind.css
+cargo clippy -p api -p web --features web/server --all-targets -- -D warnings
 cargo test -p api -p web --features web/server
 npm run test:trace                            # browser script
-cd ../auth && cargo clippy && cargo test
+cd ../auth && cargo clippy --all-targets -- -D warnings && cargo test
+cd ../ai_pipeline && cargo clippy --all-targets -- -D warnings && cargo test   # no GPU needed
 ```
 
 ## Upgrading OpenTelemetry
@@ -206,8 +211,12 @@ auth and ai_pipeline pin their own copies. Upgrade them together:
    for the version that pairs with your `opentelemetry` version.
 2. Set reqwest-tracing's feature to `opentelemetry_0_NN` for the same `opentelemetry` version.
    reqwest-tracing 0.7.1 goes up to `opentelemetry_0_32`.
-3. Run `cargo test -p api -p web --features web/server`. If the versions are mismatched, the build
-   still passes but propagation silently stops, and the trace tests are what catch it.
+3. Run every service's tests (see Checks). If the versions are mismatched, the build still passes
+   but propagation silently stops, and the trace tests are what catch it: each service has one
+   that sends `traceparent` across a real hop (frontend `server_continues_the_clients_trace`, auth
+   `traceparent_continues_the_trace_across_a_hop`, ai_pipeline
+   `handshake_traceparent_continues_the_trace`), and `log_records_carry_the_span_and_skip_sdk_logs`
+   checks that OTLP log records carry the span's trace_id/span_id.
 
 ## Upgrading Faro
 

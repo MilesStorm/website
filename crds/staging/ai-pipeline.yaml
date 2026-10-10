@@ -12,6 +12,8 @@ spec:
     spec:
       containers:
         - name: ai-pipeline
+          env:
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: "deployment.environment.name=staging"}
           resources:
             requests: {cpu: 50m, memory: 256Mi}
             limits: {memory: 1536Mi, nvidia.com/gpu: "1"}

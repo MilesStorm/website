@@ -34,9 +34,9 @@ pub fn in_request_trace<F: Future>(name: &'static str, fut: F) -> Instrumented<F
     if let Some(cx) = server::request_context() {
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
         // Parented through OTel only, so the span holds no reference that would keep
-        // the request's span open.
+        // the request's span open. Fails only without the OTel layer: the span is new.
         let span = tracing::info_span!(parent: None, "ssr.server_future", otel.name = name);
-        span.set_parent(cx);
+        let _ = span.set_parent(cx);
         return fut.instrument(span);
     }
     let _ = name;
@@ -81,7 +81,8 @@ pub use tracing as __tracing;
 #[cfg(feature = "server")]
 pub fn continue_current_trace(span: &tracing::Span) {
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-    span.set_parent(tracing::Span::current().context());
+    // Fails only without the OTel layer, or once `span` has been entered.
+    let _ = span.set_parent(tracing::Span::current().context());
 }
 
 #[cfg(feature = "server")]
@@ -306,7 +307,7 @@ mod server {
             opentelemetry::global::set_text_map_propagator(
                 opentelemetry_sdk::propagation::TraceContextPropagator::new(),
             );
-            let tracer = opentelemetry_sdk::trace::TracerProvider::builder().build().tracer("test");
+            let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder().build().tracer("test");
             let closed = Arc::new(Mutex::new(Vec::new()));
             let subscriber = tracing_subscriber::registry()
                 .with(tracing_opentelemetry::layer().with_tracer(tracer))
@@ -372,6 +373,34 @@ mod server {
             let closed = closed.lock().unwrap();
             assert!(closed.iter().any(|n| n == "caller"), "caller span held open: {closed:?}");
             assert!(closed.iter().any(|n| n == "HTTP request"), "client span held open: {closed:?}");
+        }
+
+        /// The callee side of the hop: `OtelAxumLayer` (as in web's and auth's routers)
+        /// continues the trace that [`client`](super::client) sent.
+        #[tokio::test(flavor = "current_thread")]
+        async fn server_continues_the_clients_trace() {
+            use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
+
+            let (_, _guard) = pipeline();
+            let app = axum::Router::new()
+                .route(
+                    "/",
+                    axum::routing::get(|| async {
+                        tracing::Span::current().context().span().span_context().trace_id().to_string()
+                    }),
+                )
+                .layer(OtelAxumLayer::default());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let client = super::client(reqwest::Client::new());
+
+            let caller = tracing::info_span!("caller");
+            let caller_trace = caller.context().span().span_context().trace_id().to_string();
+            let callee_trace = async { client.get(&url).send().await.unwrap().text().await.unwrap() }
+                .instrument(caller)
+                .await;
+            assert_eq!(callee_trace, caller_trace);
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -515,13 +544,13 @@ mod server {
         #[test]
         fn traceparent_becomes_a_link_not_a_parent() {
             use opentelemetry::trace::{SpanId, TraceId};
-            use opentelemetry_sdk::testing::trace::InMemorySpanExporter;
+            use opentelemetry_sdk::trace::InMemorySpanExporter;
 
             opentelemetry::global::set_text_map_propagator(
                 opentelemetry_sdk::propagation::TraceContextPropagator::new(),
             );
             let exporter = InMemorySpanExporter::default();
-            let provider = opentelemetry_sdk::trace::TracerProvider::builder()
+            let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_simple_exporter(exporter.clone())
                 .build();
             let subscriber = tracing_subscriber::registry()

@@ -122,6 +122,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # service.version on every span, log and profile (TRACING.md).
+          build-args: GIT_SHA=${{ github.sha }}
 
       # Each build moves the tags to a new image and leaves the old one behind
       # untagged on eta, so disk use grew with every deploy. Remove those
