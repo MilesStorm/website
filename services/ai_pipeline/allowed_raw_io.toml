@@ -1,0 +1,43 @@
+# Every `#[allow(clippy::disallowed_methods)]` in this crate: the raw spawns and channels
+# that don't go through `src/trace.rs` (clippy.toml bans them; TRACING.md says why).
+# `every_raw_use_is_registered` (src/trace.rs) fails when a site in the source is missing
+# here or an entry here no longer exists, so adding one is a reviewed change to this file.
+# `reason` is the site's own `reason = ".."`, word for word.
+
+# The chokepoints themselves.
+[[allow]]
+file = "src/trace.rs"
+lint = "disallowed_methods"
+reason = "trace::channel is the Carried queue constructor"
+
+[[allow]]
+file = "src/trace.rs"
+lint = "disallowed_methods"
+reason = "trace::watch_channel is the Carried slot constructor"
+
+[[allow]]
+file = "src/trace.rs"
+lint = "disallowed_methods"
+reason = "trace::spawn_loop is the long-lived task spawner"
+
+# Raw uses in the service.
+[[allow]]
+file = "src/serve.rs"
+lint = "disallowed_methods"
+reason = "the inference thread owns the GPU pipeline for the life of the process; frames reach it as Carried messages"
+
+[[allow]]
+file = "src/serve.rs"
+lint = "disallowed_methods"
+reason = "one-shot reply to the task that sent the frame; the request it answers is Carried"
+
+# Tests.
+[[allow]]
+file = "src/serve.rs"
+lint = "disallowed_methods"
+reason = "test: the client stands in for the frontend's traced connect"
+
+[[allow]]
+file = "src/trace.rs"
+lint = "disallowed_methods"
+reason = "test: a plain thread stands in for the inference thread"

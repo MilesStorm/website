@@ -3,6 +3,8 @@ mod helper;
 pub mod model;
 mod roll;
 mod serve;
+mod trace;
+mod unit_trace;
 
 use std::{env, path::Path};
 
@@ -25,10 +27,6 @@ const DEV_HEAD_PATH: &str = "./runs/head_torch/resnet18_final";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // f32, not bf16: the head is ~0.9M params on 64x64 crops, so f32 costs
-    // little, while bf16 training diverged to NaN by epoch 3 (experiment_37).
-    type MyBackend = Autodiff<Cuda<f32>>;
-
     let args: Vec<String> = env::args().collect();
 
     // Only the serve path logs to stdout. The `folder`/`eval` paths hand stdout
@@ -38,7 +36,31 @@ async fn main() -> anyhow::Result<()> {
     // When we skip it, burn-train installs its own file logger
     // (experiment.log) instead and the dashboard stays clean.
     let is_serve = args.contains(&String::from("yolo"));
-    let _otel = setup_tracing(is_serve).await;
+    let otel = setup_tracing(is_serve).await;
+
+    let result = run(args).await;
+    // Whatever was recorded last (a shutdown's `session close` spans) is still in the
+    // batch exporters' queues: send it before the process exits.
+    if let Some(otel) = otel {
+        otel.shutdown();
+    }
+    result
+}
+
+/// Resolves on SIGTERM (Kubernetes stopping the pod) or Ctrl-C.
+async fn shutdown_signal() {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to install the SIGTERM handler");
+    tokio::select! {
+        _ = terminate.recv() => tracing::info!("received SIGTERM"),
+        _ = tokio::signal::ctrl_c() => tracing::info!("received Ctrl-C"),
+    }
+}
+
+async fn run(args: Vec<String>) -> anyhow::Result<()> {
+    // f32, not bf16: the head is ~0.9M params on 64x64 crops, so f32 costs
+    // little, while bf16 training diverged to NaN by epoch 3 (experiment_37).
+    type MyBackend = Autodiff<Cuda<f32>>;
 
     if args.contains(&String::from("yolo")) {
         // WebSocket inference server: browser camera → YOLO → ResNet18 head → frame + roll JSON.
@@ -61,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
         };
         tracing::info!(path = %head_path.display(), dice_threshold, "loading model weights");
 
-        serve::serve(addr, head_path, dice_threshold).await?;
+        serve::serve(addr, head_path, dice_threshold, shutdown_signal()).await?;
         return Ok(());
     }
 
@@ -151,10 +173,24 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Kept alive for the process lifetime so batch exporters flush on drop.
+// The global tracer keeps a clone of the provider, so dropping these flushes nothing:
+// `shutdown` does.
 struct OtelProviders {
-    _tracer: opentelemetry_sdk::trace::SdkTracerProvider,
-    _logger: opentelemetry_sdk::logs::SdkLoggerProvider,
+    tracer: opentelemetry_sdk::trace::SdkTracerProvider,
+    logger: opentelemetry_sdk::logs::SdkLoggerProvider,
+}
+
+impl OtelProviders {
+    /// Flushes and stops the exporters: spans first, then the logs (which include
+    /// anything the span export logged). Each waits at most the SDK's 5 s.
+    fn shutdown(self) {
+        if let Err(e) = self.tracer.shutdown() {
+            tracing::warn!(error = %e, "tracer shutdown failed; the last spans may be lost");
+        }
+        if let Err(e) = self.logger.shutdown() {
+            eprintln!("logger shutdown failed; the last log records may be lost: {e}");
+        }
+    }
 }
 
 async fn setup_tracing(stdout_logging: bool) -> Option<OtelProviders> {
@@ -239,7 +275,7 @@ async fn setup_tracing(stdout_logging: bool) -> Option<OtelProviders> {
         .init();
 
     Some(OtelProviders {
-        _tracer: tracer_provider,
-        _logger: logger_provider,
+        tracer: tracer_provider,
+        logger: logger_provider,
     })
 }
