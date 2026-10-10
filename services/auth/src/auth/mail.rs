@@ -145,7 +145,7 @@ pub struct SendError {
 }
 
 impl SendError {
-    fn new(error_type: impl Into<std::borrow::Cow<'static, str>>, reason: impl Into<String>) -> Self {
+    pub(super) fn new(error_type: impl Into<std::borrow::Cow<'static, str>>, reason: impl Into<String>) -> Self {
         Self { error_type: error_type.into(), reason: reason.into() }
     }
 }

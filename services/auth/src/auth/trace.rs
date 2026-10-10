@@ -211,31 +211,61 @@ pub async fn rollback(tx: Tx<'_>) {
 /// reports the slow ones as an event (`acquire_slow_threshold`, set in `pool_options`); this
 /// layer turns that event into a span of the same length, so the wait reads as its own bar
 /// and not as time in Postgres. Needs `sqlx::pool::acquire=info` in the log filter.
+///
+/// The event is for this layer: with a threshold of a millisecond it would otherwise be a
+/// log line and a span event per acquire that waits. The other layers take
+/// [`QuietPoolAcquire`] as their filter, which lets through only the waits of
+/// [`SLOW_ACQUIRE`] or more (sqlx's own default for reporting one). An acquire outside any
+/// span (startup, a metrics tick) makes no span: it would be a trace of its own, of one bar.
 pub struct PoolAcquireSpans(pub opentelemetry_sdk::trace::SdkTracer);
+
+const POOL_ACQUIRE: &str = "sqlx::pool::acquire";
+/// A wait for a pool connection that is long enough to log.
+pub const SLOW_ACQUIRE: Duration = Duration::from_secs(2);
+
+/// How long the acquire that sqlx reports in `event` waited.
+fn acquire_wait(event: &tracing::Event<'_>) -> Option<Duration> {
+    struct Waited(Option<f64>);
+    impl tracing::field::Visit for Waited {
+        fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+            // sqlx's spelling.
+            if field.name() == "aquired_after_secs" {
+                self.0 = Some(value);
+            }
+        }
+        fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    }
+
+    if event.metadata().target() != POOL_ACQUIRE {
+        return None;
+    }
+    let mut waited = Waited(None);
+    event.record(&mut waited);
+    waited.0.and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+}
+
+/// The filter for every layer but [`PoolAcquireSpans`]: sqlx's pool-acquire events stay out
+/// of stdout, span events and exported logs unless the wait was [`SLOW_ACQUIRE`] or more.
+pub struct QuietPoolAcquire;
+
+impl<S> tracing_subscriber::layer::Filter<S> for QuietPoolAcquire {
+    fn enabled(&self, _: &tracing::Metadata<'_>, _: &tracing_subscriber::layer::Context<'_, S>) -> bool {
+        true
+    }
+
+    fn event_enabled(&self, event: &tracing::Event<'_>, _: &tracing_subscriber::layer::Context<'_, S>) -> bool {
+        event.metadata().target() != POOL_ACQUIRE || acquire_wait(event).is_some_and(|waited| waited >= SLOW_ACQUIRE)
+    }
+}
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for PoolAcquireSpans {
     fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
-        struct Waited(Option<f64>);
-        impl tracing::field::Visit for Waited {
-            fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
-                // sqlx's spelling.
-                if field.name() == "aquired_after_secs" {
-                    self.0 = Some(value);
-                }
-            }
-            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
-        }
-
-        if event.metadata().target() != "sqlx::pool::acquire" {
-            return;
-        }
-        let mut waited = Waited(None);
-        event.record(&mut waited);
-        let Some(waited) = waited.0.and_then(|secs| Duration::try_from_secs_f64(secs).ok()) else {
-            return;
-        };
+        let Some(waited) = acquire_wait(event) else { return };
         // The event is written the moment the connection is handed over. The parent is the
         // current OTel context, which tracing-opentelemetry sets to the span being run.
+        if !opentelemetry::Context::current().span().span_context().is_valid() {
+            return;
+        }
         let end = SystemTime::now();
         self.0
             .span_builder("db.pool.acquire")
@@ -427,6 +457,7 @@ pub mod testing {
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
     use testcontainers_modules::postgres::Postgres;
     use testcontainers_modules::testcontainers::{ContainerAsync, runners::AsyncRunner as _};
+    use tracing_subscriber::Layer as _;
     use tracing_subscriber::layer::SubscriberExt as _;
 
     /// The stdout log, kept in memory.
@@ -469,9 +500,15 @@ pub mod testing {
         let logs = Logs::default();
         let subscriber = tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::new(crate::LOG_FILTER))
-            .with(tracing_subscriber::fmt::layer().json().with_writer(logs.clone()))
-            .with(tracing_opentelemetry::layer().with_tracer(tracer.clone()))
+            .with(tracing_subscriber::fmt::layer().json().with_writer(logs.clone()).with_filter(super::QuietPoolAcquire))
+            .with(tracing_opentelemetry::layer().with_tracer(tracer.clone()).with_filter(super::QuietPoolAcquire))
             .with(super::PoolAcquireSpans(tracer));
+        // tracing keeps "nobody wants this span" per callsite when one subscriber exists and
+        // the span is first reached on a thread without it (another test): a second one,
+        // kept alive, makes it ask each thread's own.
+        static SECOND: std::sync::LazyLock<tracing::Dispatch> =
+            std::sync::LazyLock::new(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+        std::sync::LazyLock::force(&SECOND);
         Pipeline { exporter, logs, _provider: provider, _guard: tracing::subscriber::set_default(subscriber) }
     }
 
@@ -558,10 +595,7 @@ mod tests {
     use std::time::Duration;
 
     use axum::routing::get;
-    use opentelemetry::trace::{SpanId, SpanKind, Status, TraceContextExt as _};
-    use tower_sessions::SessionStore as _;
-    use tracing::Instrument as _;
-    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+    use opentelemetry::trace::{SpanId, SpanKind, Status};
 
     use super::testing::{attr, echo_traceparent, pipeline, serve};
     use super::*;

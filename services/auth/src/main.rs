@@ -6,14 +6,15 @@ use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{Resource, logs::SdkLoggerProvider, trace::SdkTracerProvider};
 use tracing_subscriber::{
-    EnvFilter, Layer, filter::filter_fn, layer::SubscriberExt, registry::LookupSpan,
+    EnvFilter, Layer, filter::{FilterExt as _, filter_fn}, layer::SubscriberExt, registry::LookupSpan,
     util::SubscriberInitExt,
 };
 
 /// The log filter when `RUST_LOG` isn't set. It also decides which spans exist (TRACING.md,
 /// "Log level"). Targets match by prefix: `sqlx=warn` would hide sqlx_tracing's query spans
 /// too, hence the override. `sqlx::pool::acquire=info` lets through sqlx's report of a slow
-/// pool acquire, which becomes the `db.pool.acquire` span.
+/// pool acquire, which becomes the `db.pool.acquire` span and nothing else: every other
+/// layer filters it out unless the wait was long (`trace::QuietPoolAcquire`).
 const LOG_FILTER: &str =
     "info,sqlx=warn,sqlx::pool::acquire=info,sqlx_tracing=info,tower_sessions=warn,axum_login=warn,opentelemetry=warn";
 
@@ -63,7 +64,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let log_bridge = log_bridge(&log_provider);
 
                 (
-                    Some(tracing_opentelemetry::layer().with_tracer(tracer.clone())),
+                    Some(
+                        tracing_opentelemetry::layer()
+                            .with_tracer(tracer.clone())
+                            .with_filter(auth::trace::QuietPoolAcquire),
+                    ),
                     Some(auth::trace::PoolAcquireSpans(tracer)),
                     Some(log_bridge),
                     Some(provider),
@@ -78,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // trace_id/span_id, enabling Tempo → Loki correlation.
     tracing_subscriber::registry()
         .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| LOG_FILTER.into())))
-        .with(tracing_subscriber::fmt::layer().json())
+        .with(tracing_subscriber::fmt::layer().json().with_filter(auth::trace::QuietPoolAcquire))
         .with(otel_layer)
         .with(pool_acquire_layer)
         .with(otel_log_layer)
@@ -131,7 +136,7 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     OpenTelemetryTracingBridge::new(provider)
-        .with_filter(filter_fn(|meta| !meta.target().starts_with("opentelemetry")))
+        .with_filter(filter_fn(|meta| !meta.target().starts_with("opentelemetry")).and(auth::trace::QuietPoolAcquire))
 }
 
 #[cfg(test)]

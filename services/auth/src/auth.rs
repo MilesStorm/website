@@ -307,7 +307,6 @@ mod tests {
     use sqlx::Executor as _;
     use tower_sessions::SessionStore as _;
     use tower_sessions::session::{Id, Record};
-    use tracing::Instrument as _;
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
     use super::trace::testing::{attr, pipeline, postgres};
@@ -372,6 +371,20 @@ mod tests {
         assert_eq!(wait.span_kind, SpanKind::Internal);
         assert!(wait.end_time.duration_since(wait.start_time).unwrap() >= Duration::from_millis(80));
         assert!(wait.start_time >= query.start_time - Duration::from_millis(5) && wait.end_time <= query.end_time);
+        // sqlx's report of the wait is that span and nothing else: not a log line, not an
+        // event on the query's span. And an acquire outside any span makes no trace.
+        assert!(!traced.logs().contains("sqlx::pool::acquire"), "{}", traced.logs());
+        assert!(traced.spans().iter().all(|s| s.events.is_empty()));
+        let (first, second) = (pg.raw.acquire().await.unwrap(), pg.raw.acquire().await.unwrap());
+        let (_, third) = tokio::join!(
+            async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                drop((first, second));
+            },
+            pg.raw.acquire(),
+        );
+        drop(third);
+        assert!(traced.named("db.pool.acquire").iter().all(|s| s.parent_span_id != SpanId::INVALID));
 
         // The session store, through the same wrapper `server` uses.
         let sessions = TracedStore::new(store, "postgres");

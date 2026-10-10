@@ -384,11 +384,20 @@ async fn issue_and_send(
             Ok(())
         }
         Err(e) => {
-            tracing::error!(user_id = account.id, kind = purpose.as_str(), error = %e, "sending an account email failed");
+            log_send_failure(account.id, purpose, &e);
             withdraw(db, &code).await;
             Err(error(StatusCode::BAD_GATEWAY, "send_failed"))
         }
     }
+}
+
+/// Resend's reason can repeat the address, and an event written in a span is exported as
+/// part of that span. So the span gets the error's type, and the reason is logged outside
+/// the span (`parent: None`); the exported log record still carries the trace's IDs, which
+/// come from the active context.
+fn log_send_failure(user_id: i64, purpose: Purpose, e: &super::mail::SendError) {
+    tracing::error!(user_id, kind = purpose.as_str(), error.type = %e.error_type, "sending an account email failed");
+    tracing::error!(parent: None, user_id, kind = purpose.as_str(), error = %e, "sending an account email failed: reason");
 }
 
 /// After registering: email a confirmation link without holding up the reply.
@@ -692,8 +701,27 @@ fn deleted_reply(result: Result<Option<(i64, String)>, sqlx::Error>) -> Response
 mod tests {
     use opentelemetry::trace::Status;
 
-    use super::super::trace::testing::{attr, pipeline, postgres};
+    use super::super::trace::testing::{attr, pipeline, postgres, text};
     use super::*;
+
+    /// Resend's reason for refusing an email can repeat the address: it is logged, and no
+    /// span gets it.
+    #[test]
+    fn a_failed_send_logs_its_reason_and_keeps_it_off_the_span() {
+        let traced = pipeline();
+        let e = super::super::mail::SendError::new("422", "Resend returned 422: invalid: ada@example.com");
+        let span = tracing::info_span!("email.issue_and_send");
+        span.in_scope(|| log_send_failure(7, Purpose::VerifyEmail, &e));
+        drop(span);
+
+        let span = traced.span("email.issue_and_send");
+        assert!(!text(&span).contains("ada@example.com"), "{}", text(&span));
+        assert!(text(&span).contains("422"));
+        let logs = traced.logs();
+        assert!(logs.contains("invalid: ada@example.com"), "{logs}");
+        let reason = logs.lines().find(|l| l.contains("ada@example.com")).unwrap();
+        assert!(reason.contains("\"user_id\":7"), "{reason}");
+    }
 
     /// Against a real Postgres (Docker): issuing a code is one transaction, whose statements
     /// are spans under `email_code.issue`; "too soon" is an answer, a database error a failure.
