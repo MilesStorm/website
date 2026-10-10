@@ -46,13 +46,7 @@ consequences:
   and one `longtask` event per task over 50 ms (`longtask.duration_ms`). Long tasks are
   Chromium-only: in Safari and Firefox the own time stays unlabelled.
 
-A camera session adds `arcane.ws_session`, with ai_pipeline's `arcane.ws_connection` and one
-`arcane.capture` per roll under it. Browsers can't set headers on a WebSocket, so the session's
-trace starts at the Gateway, not at a click. The browser's own `camera session` span (the
-handshake, ending at the socket's `open`; a child of the click that opened it, else a root) sends
-its context as the URL parameter `/ws/arcane?traceparent=…`, and `arcane.ws_session` carries a
-**link** to it, not a parent: the Gateway's span for the handshake is its parent already. A roll stream (`/api/arcane/rolls`, server-sent
-events) adds `arcane.rolls_stream`, with its once-a-minute permission rechecks under it.
+A camera session and a roll stream are not one long span: see [Streams](#streams).
 
 The services send spans to Alloy over OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`). Istio sends its spans to
 Tempo directly. The browser sends its spans (and errors, web vitals) through Grafana Faro to
@@ -144,13 +138,87 @@ browser and the Gateway: the internet and Cloudflare.
 |---|---|
 | An axum service | Layer `OtelAxumLayer::default().filter(\|p\| p != "/metrics")` and register the W3C `TraceContextPropagator` at startup. Copy `auth/src/main.rs`. |
 | An HTTP client, connection pool, login token, or anything that loads TLS certificates | Create it at startup and reuse it; keep pool connections open (auth: `min_connections`, no idle timeout or max lifetime); renew tokens in the background before they expire (frontend: `Dataset::keep_signed_in`, since a SurrealDB sign-in checks a slow password hash, ~40 ms). Loading the system CA bundle costs 30–100+ ms of CPU, which otherwise shows up as unexplained own time in whichever request comes first. |
-| An outbound HTTP call (frontend) | Build the client with `api::trace::client(reqwest::Client)`. A plain `reqwest::Client` sends no `traceparent`, so the callee starts its own trace. |
-| A `use_server_future` or `use_loader` | Use `api::trace::use_server_future("name", f)`; add a matching `use_loader` wrapper when first needed. Clippy warns on the plain hooks (`services/frontend/clippy.toml`). |
-| Work that outlives the request: `tokio::spawn`, a queue, a WebSocket, a streamed response body | Run it in `api::detached_span!("name")` (auth: `telemetry::detached_span`). Neither `.in_current_span()` nor a plain child span works: they keep the request's span open until the work ends. |
-| A database or cache client | Its calls need CLIENT spans with `peer.service` (that names the node in the service graph). Postgres in auth: use the `Db` pool (sqlx-tracing). A session store: wrap it in `api::trace::TracedStore`. HTTP to a database (SurrealDB): add `.with_extension(api::trace::Peer { .. })`. |
-| A background loop (metrics poller, cleanup) | Keep it on untraced clients (auth's raw `PgPool`). Every tick would start a root trace. |
-| A non-HTTP hop (WebSocket, queue message) | Send the context with `api::trace::inject(&span, headers)` and extract it on the other side, as ai_pipeline's `accept_hdr_async` does. |
+| An outbound HTTP call | frontend: `api::trace::client(Peer, timeout, \|b\| b)`; auth: `trace::client(Peer, timeout, redirect)`. Both give a CLIENT span, `traceparent`, `peer.service` and a timeout. A raw `reqwest::Client` is a clippy error ([Chokepoints](#chokepoints)). |
+| A `use_server_future` or `use_loader` | Use `api::trace::use_server_future("name", f)`; add a matching `use_loader` wrapper when first needed. |
+| Work a request starts but doesn't wait for | `trace::spawn_in_trace("name", fut)` (frontend, auth): a child span marked `trace.relation=follows`, so the request's span still ends on time. |
+| Background work with no request (a unit of a stream, a job) | `trace::spawn("name", link, fut)`: its own trace, linked to what caused it. |
+| A background loop (metrics poller, cleanup, token renewal) | `trace::spawn_loop("reason", fut)`: no span of its own, and its ticks stay on untraced clients (auth's raw `PgPool`, `RedisTracing::Off`). Every tick would otherwise start a root trace. |
+| CPU work off the async threads | `trace::spawn_blocking("name", f)`: the closure runs in a span that is a child of the caller's. |
+| An in-process queue | `trace::channel` / `trace::broadcast` (frontend), `trace::channel` / `trace::watch_channel` (ai_pipeline). Messages are `Carried<T>`: the sender's context travels with them and the receiver continues or links to it. |
+| A database or cache client | Its calls need CLIENT spans with `peer.service` (that names the node in the service graph). Postgres in auth: the `Db` pool (sqlx-tracing), and `trace::begin` / `commit` / `rollback` for transactions. Redis in the frontend: `trace::redis_pool` / `redis_client` / `redis_subscriber`, each with an explicit `RedisTracing::{Commands, Off}`. A session store: `trace::TracedStore`. HTTP to a database (SurrealDB): `.with_extension(api::trace::DbCall { .. })`. |
+| A WebSocket to another service | `api::trace::connect_ws(url, peer, timeout)`: CLIENT span and `traceparent` on the handshake; the callee extracts it as ai_pipeline's `accept_hdr_async` does. |
+| A long-lived connection (WebSocket, server-sent events) | Not one span. Follow [Streams](#streams). |
 | A function that does real work on a request path (business logic, token or permission checks, hashing, encoding big payloads, store calls) | `#[tracing::instrument(name = "area.verb", skip_all)]`. Add `fields(..)` only for safe, low-cardinality values (counts, flags, which branch), never secrets, codes, emails or bodies; no `err` unless the error can't hold them (sqlx and Resend errors can). CPU work in `spawn_blocking` gets its span inside the closure: `let span = info_span!("password.hash"); spawn_blocking(move \|\| span.in_scope(\|\| ..))`. INFO level, in the service's own crate (the default filters keep it). Not on getters, trivial conversions, per-item or per-frame code (ai_pipeline's inference runs per frame: at most `debug_span!`), or background loops. |
+
+### Chokepoints
+
+Each service has one module of traced helpers: `services/frontend/packages/api/src/trace.rs`,
+`services/auth/src/auth/trace.rs`, `services/ai_pipeline/src/trace.rs`. The raw APIs behind them
+(`reqwest::Client`, `tokio::spawn`, `spawn_blocking`, `std::thread::spawn`, the tokio and std
+channels, the fred constructors, `connect_async`, `std::process::exit`) are banned in each
+service's `clippy.toml`, so code that skips the helper fails CI. A raw use that is right carries
+`#[allow(clippy::disallowed_.., reason = "..")]` and an entry in `services/<svc>/allowed_raw_io.toml`;
+the `allowed_raw_io` test fails on an allow that isn't listed, a listed one that is gone, or one
+without a reason.
+
+### Errors
+
+A span is ERROR when the work failed, and carries `error.type`, never the error's text (sqlx,
+Resend and SurrealDB errors can hold addresses and values).
+
+- frontend server functions that have no expected rejection: `#[instrument(err)]`.
+- frontend server functions that answer 4xx on purpose (login, register, emails, invites):
+  `trace::rejectable(..)`, which leaves a 4xx `auth_error` unmarked.
+- store, Redis and database failures: `trace::failed("kind")` (frontend), `trace::fail` /
+  `trace::db_failed` (auth).
+- a panic in spawned work: ERROR with `error.type=panic` (auth).
+- a CLIENT span is ERROR on any 4xx or 5xx, except 401 and 404 from auth's
+  `/internal/token/exchange` and `/internal/token/introspect` (`trace::WRONG_TOKEN_OK`): a wrong
+  or expired token is their normal answer.
+
+### Streams
+
+A camera session (`/ws/arcane`) and a roll stream (`/api/arcane/rolls`, server-sent events) can
+stay open for hours. One span over all of that would be exported only at the end, lost on a pod
+restart, and would say nothing about where time went. So:
+
+- **Open and close.** The connection makes a short `session open` span when it is set up and a
+  zero-length `session close` span when it ends (duration, counts and close reason as
+  attributes). Both carry the same `session.id`, and the close span links to the open span.
+  frontend says which stream in `session.kind` (`arcane.ws_session` or `arcane.rolls_stream`);
+  ai_pipeline has its own pair for its side of the camera socket. Find a session with
+  `{ span.session.id = "…" }`.
+- **Units.** Each piece of work on the stream is its own short trace, linked to the open span
+  and carrying `session.id`:
+  - ai_pipeline `roll.settle`: a roll that settled, with `frame.pending`, `infer.queue`,
+    `infer.decode`, `infer.yolo`, `infer.crop`, `infer.head` and `ws.send` under it. Their
+    times are measured in the inference thread and written as spans afterwards, so the
+    per-frame code creates no spans. `infer.crop` leaves out the crop's upload.
+  - ai_pipeline `frame.infer`: the same breakdown for one frame in `FRAME_TRACE_EVERY`
+    (default 10) that settled nothing, and for a failed frame (the first, then at most one
+    per 10 s).
+  - frontend `arcane.capture` (camera side), `roll publish` (PRODUCER, to Redis),
+    `roll deliver` (CONSUMER, to one browser's stream), `arcane.rolls_replay` (rolls sent on
+    connect) and `permission recheck` (once a minute per stream).
+- **A roll is one trace across services.** ai_pipeline adds a top-level
+  `"_trace": {"traceparent": "…"}` to the roll message. The frontend continues that trace,
+  passes it through Redis (adding `published_ms`) to the other replicas, and removes `_trace`
+  before the browser gets the message. A roll delivered more than 10 s after it was published
+  (a replay) starts a new trace that links back instead.
+- **Drops.** When a slow reader skips messages, the next unit (or the close span) gets a
+  `dropped` event with `dropped.count`.
+
+Browsers can't set headers on a WebSocket. The browser's own `camera session` span (the
+handshake, ending at the socket's `open`; a child of the click that opened it, else a root)
+sends its context as `/ws/arcane?traceparent=…`, and the frontend's `session open` span links
+to it: the Gateway's span for the handshake is its parent already.
+
+### Shutdown
+
+On SIGTERM each service stops accepting, waits for open requests and tracked tasks (frontend
+10 s, auth 5 s), then flushes the exporter, so the last spans of a rollout aren't lost. The
+frontend does this in release builds only: a debug build runs `dioxus::serve` for `dx serve`'s
+hot reload and doesn't drain.
 
 ### Why these rules exist
 
@@ -170,7 +238,7 @@ browser and the Gateway: the internet and Cloudflare.
   signals, tower-sessions, axum-login) become thousands of one-span traces. The defaults in the
   frontend's and auth's `main.rs` keep the services' own logs at `info` and those libraries at
   `warn` (ai_pipeline's libraries make no such spans); the deployments don't set `RUST_LOG`. Targets match by prefix: `sqlx=warn` also hides `sqlx_tracing`,
-  so auth adds `sqlx_tracing=info`. `opentelemetry=warn` keeps the OTel SDK's own logs to its
+  so auth adds `sqlx_tracing=info`, and `sqlx::pool::acquire=info` for the event behind `db.pool.acquire` (a wait for a pool connection). `opentelemetry=warn` keeps the OTel SDK's own logs to its
   warnings (spans dropped, an export failed); they go to stdout only, never through the OTLP log
   bridge, which would feed them back to itself.
 
@@ -188,7 +256,8 @@ the profiler hasn't read that binary yet. Narrow the time range past it or filte
 ## Checks
 
 `.github/workflows/checks.yml` runs clippy (`-D warnings`) and the tests of all three services
-on every push and pull request. The same locally:
+on every push and pull request. The frontend and auth tests start Redis and Postgres with
+testcontainers, so they need Docker (auth: or `TEST_DATABASE_URL`). The same locally:
 
 ```sh
 cd services/frontend
@@ -252,9 +321,6 @@ named like `POST /bff/login_password`.
   frontend → redis, frontend → surrealdb. An edge from `user` means a SERVER span had no parent:
   metrics scrapes are filtered out, so look for whatever else is calling.
 - **No orphans.** The trace view shows no "root span not yet received". Expected exceptions:
-  - camera sessions and roll streams while they run: `arcane.ws_session`, ai_pipeline's
-    `arcane.ws_connection` and `arcane.rolls_stream` are exported only when they end, and lost if
-    a pod restarts meanwhile;
   - Gateway and waypoint spans while Tempo restarts: Istio sends them to Tempo directly, without
     Alloy's retry, so a trace from that minute misses its Envoy spans;
   - browsers that never send their spans (an ad blocker blocks `/faro/collect`, or the tab closed
@@ -272,15 +338,12 @@ are unaffected. OAuth callbacks still use query strings.
 
 ## Not covered yet
 
-- **auth's session store.** tower-sessions-sqlx-store needs a raw `PgPool`, so its queries have no
-  spans. The BFF calls auth with tokens, not sessions, so this only affects auth's own pages.
-- **Redis outside the session layer.** The roll hub's calls (PUBLISH/GET, and its own session reads)
-  have no spans.
-- **auth's own outbound calls.** auth uses reqwest 0.12 and reqwest-tracing 0.7 needs reqwest 0.13,
-  so OAuth and Resend calls have no client spans (OAuth has the plain `oauth.code_exchange` and
-  `oauth.user_info` spans). The ark calls get a hand-made CLIENT span (`ark_get` in
-  `auth/src/auth/internal.rs`, `peer.service = "ark"`) and forward `traceparent`. Build reqwest
-  clients once and reuse them: `Client::new()` per request costs tens of ms of CPU.
+- **A dropped transaction.** auth's `trace::rollback` has a span; a transaction dropped on an
+  early return is rolled back by sqlx with none.
+- **surrealkit.** The schema migration at frontend startup uses surrealkit's own client; its two
+  calls have plain CLIENT spans without `db.operation.name`.
+- **Redis subscriber and schema lock.** Their connections are `RedisTracing::Off`: a subscriber
+  has no commands per request, and the lock is taken once at startup.
 - **Shared telemetry crate.** Each service has its own telemetry setup. A shared crate becomes
   worthwhile with a fourth service or at the next OTel upgrade. It needs the CI Docker build context
   changed from `services/<svc>` to `services/`.
