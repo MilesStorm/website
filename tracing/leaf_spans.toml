@@ -1,6 +1,7 @@
 # Spans the trace checker (tracing/checker) allows without children, detached work it allows
-# to outlast its parent, and parents whose own time is CPU work by design. Everything else must show what it did: a span with no children and no
-# entry here fails rule I4. Each entry needs a reason. service and name are globs.
+# to outlast its parent, and parents whose own time is CPU work by design. Everything else must
+# show what it did: a span with no children and no entry here fails rule I4. Each entry needs a
+# reason. service and name are globs.
 
 [[leaf]]
 service = "auth"
