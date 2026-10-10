@@ -311,7 +311,7 @@ impl SessionTrace {
             }
             span.end_with_timestamp(anchor.wall(to));
         }
-        Some(UnitTrace { tracer: Arc::clone(&self.tracer), cx, anchor })
+        Some(UnitTrace { tracer: Arc::clone(&self.tracer), cx, anchor, send: None })
     }
 
     /// Records the `session close` span, from `close_started` to now, with the session's
@@ -352,6 +352,8 @@ pub struct UnitTrace {
     /// Holds the root span (`roll.settle` or `frame.infer`).
     cx: Context,
     anchor: Anchor,
+    /// The `ws.send` span, when it was started before the send ([`Self::roll_send`]).
+    send: Option<opentelemetry::global::BoxedSpan>,
 }
 
 impl UnitTrace {
@@ -363,26 +365,45 @@ impl UnitTrace {
         self.cx.span().span_context().clone()
     }
 
-    /// The root span as a W3C `traceparent`. None when spans aren't exported (no OTLP
-    /// endpoint): there is nothing to continue then.
-    pub fn traceparent(&self) -> Option<String> {
+    /// Starts the unit's `ws.send` span as the PRODUCER of roll `roll_id`'s message and
+    /// returns it as a W3C `traceparent` for the message to carry: the frontend's span for
+    /// receiving the roll is its child (OTel messaging: send, then process). Started before
+    /// the send because the message has to name it. None when spans aren't exported (no
+    /// OTLP endpoint): there is nothing to continue then.
+    pub fn roll_send(&mut self, roll_id: &str) -> Option<String> {
         if !self.cx.span().span_context().is_valid() {
             return None;
         }
+        let tracer = &self.tracer.tracer;
+        let span = tracer
+            .span_builder("ws.send")
+            .with_kind(SpanKind::Producer)
+            .with_start_time(self.anchor.wall(Instant::now()))
+            .with_attributes([
+                KeyValue::new("messaging.system", "websocket"),
+                KeyValue::new("messaging.operation.name", "send"),
+                KeyValue::new("messaging.operation.type", "send"),
+                KeyValue::new("messaging.message.id", roll_id.to_string()),
+            ])
+            .start_with_context(tracer, &self.cx);
         let mut carrier = HashMap::new();
-        TraceContextPropagator::new().inject_context(&self.cx, &mut carrier);
+        let cx = Context::new().with_remote_span_context(span.span_context().clone());
+        TraceContextPropagator::new().inject_context(&cx, &mut carrier);
+        self.send = Some(span);
         carrier.remove("traceparent")
     }
 
     /// Records the `ws.send` span for the replies (`sent`: whether the client took them
     /// all) and ends the unit with it.
-    pub fn sent(self, send_started: Instant, send_ended: Instant, sent: bool) {
+    pub fn sent(mut self, send_started: Instant, send_ended: Instant, sent: bool) {
         let tracer = &self.tracer.tracer;
         let end = self.anchor.wall(send_ended);
-        let mut span = tracer
-            .span_builder("ws.send")
-            .with_start_time(self.anchor.wall(send_started))
-            .start_with_context(tracer, &self.cx);
+        let mut span = self.send.take().unwrap_or_else(|| {
+            tracer
+                .span_builder("ws.send")
+                .with_start_time(self.anchor.wall(send_started))
+                .start_with_context(tracer, &self.cx)
+        });
         if !sent {
             span.set_status(Status::error("client disconnected"));
         }
@@ -614,23 +635,30 @@ pub mod tests {
     }
 
     #[test]
-    fn roll_settle_carries_the_roll_and_its_traceparent() {
+    fn roll_settle_carries_the_roll_and_its_message_names_the_send_span() {
         let (tracer, exporter) = in_memory(0);
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
         let mut tracker = RollTracker::new(0.7, class_value);
         let roll = (1..=10).find_map(|now| tracker.update(&steady_die(), now)).unwrap();
         let times = times(Instant::now());
 
-        let unit = session.frame(6, &times, Outcome::Roll { detections: 1, roll: &roll }).unwrap();
-        let traceparent = unit.traceparent().unwrap();
-        unit.sent(times.done, times.done, true);
+        let mut unit = session.frame(6, &times, Outcome::Roll { detections: 1, roll: &roll }).unwrap();
+        let traceparent = unit.roll_send(&roll.roll_id).unwrap();
+        let send_started = Instant::now();
+        unit.sent(send_started, Instant::now(), true);
 
         let spans = exporter.get_finished_spans().unwrap();
         let settle = named(&spans, "roll.settle")[0];
-        assert_eq!(
-            traceparent,
-            format!("00-{}-{}-01", settle.span_context.trace_id(), settle.span_context.span_id())
-        );
+        // The message names its send span: a PRODUCER under roll.settle, begun before the
+        // send and ended with it.
+        let [send] = named(&spans, "ws.send")[..] else { panic!("one ws.send span") };
+        assert_eq!(traceparent, format!("00-{}-{}-01", settle.span_context.trace_id(), send.span_context.span_id()));
+        assert_eq!(send.span_kind, SpanKind::Producer);
+        assert_eq!(send.parent_span_id, settle.span_context.span_id());
+        assert_eq!(attribute(send, "messaging.operation.type"), Some("send".into()));
+        assert_eq!(attribute(send, "messaging.message.id"), Some(roll.roll_id.clone().into()));
+        assert!(settle.start_time <= send.start_time && send.start_time <= send.end_time);
+        assert_eq!(send.end_time, settle.end_time);
         assert_eq!(attribute(settle, "roll.id"), Some(roll.roll_id.clone().into()));
         assert_eq!(attribute(settle, "roll.dice"), Some(1.into()));
         assert_eq!(attribute(settle, "roll.complete"), Some(true.into()));
@@ -641,8 +669,8 @@ pub mod tests {
         let noop = BoxedTracer::new(Box::new(opentelemetry::trace::noop::NoopTracer::new()));
         let tracer = Arc::new(UnitTracer::new(noop, 1));
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
-        let unit = session.frame(1, &times(Instant::now()), Outcome::Frame { detections: 0 }).unwrap();
-        assert_eq!(unit.traceparent(), None);
+        let mut unit = session.frame(1, &times(Instant::now()), Outcome::Frame { detections: 0 }).unwrap();
+        assert_eq!(unit.roll_send("r1"), None);
     }
 
     #[test]

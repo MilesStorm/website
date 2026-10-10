@@ -120,7 +120,8 @@ mod tests {
         assert_eq!(mapped.cx.span().span_context(), cx.span().span_context());
     }
 
-    /// Every `#[allow]` of a disallowed-methods/types lint in the crate must be listed in
+    /// Every `#[allow]` of a disallowed-methods/types lint in the crate (or of a group wide
+    /// enough to include them) must be listed in
     /// `allowed_raw_io.toml` (file, lint, reason), and every entry must still exist, so a
     /// new raw spawn or channel shows up in review as a change to that file.
     #[test]
@@ -158,6 +159,24 @@ mod tests {
         for path in files {
             let source = std::fs::read_to_string(&path).unwrap();
             let file = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            // An allow wide enough to cover the bans without naming them (`disallowed_*` are
+            // in `clippy::style`) is an exception too: listed, with its reason.
+            for opener in [concat!("al", "low("), concat!("exp", "ect(")] {
+                for (at, _) in source.match_indices(opener) {
+                    let attr = &source[at + opener.len()..];
+                    let attr = &attr[..attr.find(")]").unwrap_or(attr.len())];
+                    let (lints, reason) = match attr.split_once("reason") {
+                        Some((lints, reason)) => (lints, reason.split('"').nth(1)),
+                        None => (attr, None),
+                    };
+                    for lint in lints.split(',').map(str::trim) {
+                        if [concat!("warn", "ings"), concat!("clippy::", "all"), concat!("clippy::", "style")].contains(&lint) {
+                            let reason = reason.unwrap_or_else(|| panic!("{file}: allowing `{lint}` turns the bans off: it needs a reason"));
+                            found.push(Entry { file: file.clone(), lint: lint.to_string(), reason: reason.to_string() });
+                        }
+                    }
+                }
+            }
             for (at, _) in source.match_indices(marker) {
                 let attr_start = source[..at].rfind("#[").unwrap_or_else(|| panic!("{file}: {marker} outside an attribute"));
                 let attr = &source[attr_start..];

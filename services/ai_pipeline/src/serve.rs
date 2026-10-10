@@ -188,7 +188,8 @@ fn now_ms() -> u64 {
 /// and, when the dice in view have settled into a new roll (see `roll.rs`),
 ///   `{"type":"roll","roll_id":..,"dice":[{"value":"17"|null,"conf":..,"box":[..]}],"total":..,"complete":..,"ts":..,"model":..,"frame_seq":N,"_trace":{"traceparent":".."}}`
 /// `frame_seq` is the 1-based count of binary messages received on this connection.
-/// `_trace` is the roll's trace context for the frontend to continue (`roll_message`);
+/// `_trace` is the trace context of the span that sends the roll, for the frontend to
+/// continue (`roll_message`);
 /// it is there only when spans are exported.
 /// Errors are `{"type":"error","error":"..."}`.
 ///
@@ -317,14 +318,15 @@ impl opentelemetry::propagation::Extractor for HeaderExtractor<'_> {
 }
 
 /// The roll message for the frontend: the roll event plus the model that read it, the
-/// frame it settled on, and the trace context of its `roll.settle` span as `_trace`, so
-/// the frontend's publish and delivery spans continue that trace. The frontend strips
-/// `_trace` before it stores or forwards the roll.
-fn roll_message(roll: &RollEvent, model: &str, seq: u64, unit: Option<&UnitTrace>) -> String {
+/// frame it settled on, and the trace context of the span that sends it (`ws.send`, a
+/// PRODUCER span under `roll.settle`) as `_trace`, so the frontend's spans for the roll
+/// continue that trace. The frontend strips `_trace` before it stores or forwards the roll.
+fn roll_message(roll: &RollEvent, model: &str, seq: u64, unit: Option<&mut UnitTrace>) -> String {
+    let traceparent = unit.and_then(|unit| unit.roll_send(&roll.roll_id));
     let mut roll = serde_json::to_value(roll).unwrap();
     roll["model"] = model.into();
     roll["frame_seq"] = seq.into();
-    if let Some(traceparent) = unit.and_then(UnitTrace::traceparent) {
+    if let Some(traceparent) = traceparent {
         roll["_trace"] = serde_json::json!({ "traceparent": traceparent });
     }
     roll.to_string()
@@ -422,9 +424,9 @@ async fn run_session<S>(
                     .collect();
                 match tracker.update(&obs, now_ms()) {
                     Some(roll) => {
-                        let unit = session.frame(seq, &times, Outcome::Roll { detections, roll: &roll });
+                        let mut unit = session.frame(seq, &times, Outcome::Roll { detections, roll: &roll });
                         log_roll_settled(&roll, unit.as_ref());
-                        replies.push(roll_message(&roll, &model, seq, unit.as_ref()));
+                        replies.push(roll_message(&roll, &model, seq, unit.as_mut()));
                         unit
                     }
                     None => session.frame(seq, &times, Outcome::Frame { detections }),
@@ -625,7 +627,7 @@ mod tests {
         assert_eq!(settle.len(), 1);
         let settle = settle[0];
 
-        // The roll message: `_trace` is the roll.settle span, nothing else is new.
+        // The roll message: `_trace` is the span that sent it, nothing else is new.
         assert_eq!(rolls.len(), 1);
         let roll = rolls[0].as_object().unwrap();
         let mut keys: Vec<_> = roll.keys().map(String::as_str).collect();
@@ -646,7 +648,9 @@ mod tests {
         let continued = continued.span().span_context().clone();
         assert!(continued.is_valid() && continued.is_sampled());
         assert_eq!(continued.trace_id(), settle.span_context.trace_id());
-        assert_eq!(continued.span_id(), settle.span_context.span_id());
+        let send = spans.iter().find(|s| s.span_context.span_id() == continued.span_id()).unwrap();
+        assert_eq!((send.name.as_ref(), &send.span_kind), ("ws.send", &opentelemetry::trace::SpanKind::Producer));
+        assert_eq!(send.parent_span_id, settle.span_context.span_id());
         assert_eq!(attribute(settle, "roll.id"), Some(roll["roll_id"].as_str().unwrap().to_string().into()));
 
         // One frame in 4, and the settling frame: each a root linked to the session.
