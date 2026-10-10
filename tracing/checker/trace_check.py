@@ -156,6 +156,12 @@ def follows(s, parent, leaves):
     return leaves.follows(s)
 
 
+def messaging_hop(s, parent):
+    """A message is handled after it was sent (OTel messaging conventions): a CONSUMER span, or a
+    PRODUCER that passes on another service's message, may start and end after its parent ended."""
+    return parent is not None and (s.kind == "CONSUMER" or (s.kind == "PRODUCER" and s.svc != parent.svc))
+
+
 def http_status(s):
     v = s.attrs.get("http.response.status_code", s.attrs.get("http.status_code"))
     try:
@@ -283,7 +289,8 @@ def check_i3(t, leaves):
         if p is None:
             continue
         # A following span may outlast its parent but still can't start before it.
-        early, late = p.st - c.st, (0 if follows(c, p, leaves) else c.en - p.en)
+        asynchronous = follows(c, p, leaves) or messaging_hop(c, p)
+        early, late = p.st - c.st, (0 if asynchronous else c.en - p.en)
         excess = max(early, late)
         if excess <= 0:
             continue
@@ -326,7 +333,7 @@ def check_i4(t, leaves):
     for s in t.spans:
         if s.kind not in ("INTERNAL", "SERVER") or is_browser_ui(s):
             continue
-        kids = [k for k in t.kids.get(s.id, ()) if not follows(k, s, leaves)]
+        kids = [k for k in t.kids.get(s.id, ()) if not follows(k, s, leaves) and not messaging_hop(k, s)]
         if not t.kids.get(s.id):
             if leaves.allows(s):
                 continue

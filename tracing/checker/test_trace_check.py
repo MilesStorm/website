@@ -155,6 +155,19 @@ class I3(unittest.TestCase):
         self.assertEqual(tc.check_i3(t, tc.LeafRegistry()), [])
 
 
+    def test_a_message_may_be_handled_after_its_sender_ended(self):
+        t = trace((1, 0, "ai-pipeline", "INTERNAL", "roll.settle", 0, 100),
+                  (2, 1, "frontend", "PRODUCER", "roll publish", 105, 110),
+                  (3, 2, "frontend", "CONSUMER", "roll deliver", 400, 420))
+        self.assertEqual(tc.check_i3(t, tc.LeafRegistry()), [])
+        # still not before the sender started, and an in-service PRODUCER stays inside its parent
+        early = trace((1, 0, "ai-pipeline", "INTERNAL", "roll.settle", 50, 100),
+                      (2, 1, "frontend", "CONSUMER", "roll deliver", 10, 20))
+        self.assertEqual(len(tc.check_i3(early, tc.LeafRegistry())), 1)
+        inside = trace((1, 0, "frontend", "INTERNAL", "work", 0, 100),
+                       (2, 1, "frontend", "PRODUCER", "roll publish", 90, 130))
+        self.assertEqual(len(tc.check_i3(inside, tc.LeafRegistry())), 1)
+
     def test_follows_only_where_the_contract_allows_it(self):
         t = trace((1, 0, "auth", "SERVER", "POST /x", 0, 10),
                   (2, 1, "auth", "INTERNAL", "slow", 1, 500, {"trace.relation": "follows"}))
