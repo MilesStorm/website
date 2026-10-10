@@ -1,3 +1,7 @@
+// burn's `Config` derive writes `optimizer: optimizer` in the code it generates for
+// `TrainingConfig`; an attribute on the struct doesn't reach that code.
+#![allow(clippy::redundant_field_names)]
+
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -29,8 +33,6 @@ use burn_train::{
 };
 use burn_train::{MetricEarlyStoppingStrategy, StoppingCondition};
 
-// burn's `Config` derive writes `optimizer: optimizer` in the code it generates.
-#[allow(clippy::redundant_field_names)]
 #[derive(Config, Debug)]
 pub struct TrainingConfig {
     pub optimizer: AdamConfig,
