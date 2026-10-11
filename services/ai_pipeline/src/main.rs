@@ -76,9 +76,15 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
         let head_path = std::path::PathBuf::from(
             std::env::var("DICE_HEAD_PATH").unwrap_or_else(|_| DEV_HEAD_PATH.to_string()),
         );
-        let head_path = if head_path.is_dir() { head_path.join(HEAD_FILE) } else { head_path };
+        let head_path = if head_path.is_dir() {
+            head_path.join(HEAD_FILE)
+        } else {
+            head_path
+        };
         let dice_threshold = match std::env::var("DICE_CONF_THRESHOLD") {
-            Ok(v) => v.parse().map_err(|e| anyhow::anyhow!("DICE_CONF_THRESHOLD={v}: {e}"))?,
+            Ok(v) => v
+                .parse()
+                .map_err(|e| anyhow::anyhow!("DICE_CONF_THRESHOLD={v}: {e}"))?,
             Err(_) => model::inferance::DEFAULT_DICE_THRESHOLD,
         };
         tracing::info!(path = %head_path.display(), dice_threshold, "loading model weights");
@@ -140,7 +146,10 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     let flag = |name: &str| -> Option<usize> {
         let i = args.iter().position(|a| a == name)?;
         let v = args.get(i + 1)?;
-        Some(v.parse().unwrap_or_else(|_| panic!("{name} expects a number, got {v}")))
+        Some(
+            v.parse()
+                .unwrap_or_else(|_| panic!("{name} expects a number, got {v}")),
+        )
     };
 
     let config = TrainingConfig::new(AdamConfig::new())
@@ -269,8 +278,9 @@ async fn setup_tracing(stdout_logging: bool) -> Option<OtelProviders> {
         // Log records take trace_id/span_id from the OTel context tracing-opentelemetry
         // activates with each span. The SDK's own logs stay out: exporting them would log more.
         .with(
-            OpenTelemetryTracingBridge::new(&logger_provider)
-                .with_filter(filter_fn(|meta| !meta.target().starts_with("opentelemetry"))),
+            OpenTelemetryTracingBridge::new(&logger_provider).with_filter(filter_fn(|meta| {
+                !meta.target().starts_with("opentelemetry")
+            })),
         )
         .init();
 

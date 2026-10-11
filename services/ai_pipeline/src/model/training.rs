@@ -16,16 +16,16 @@ use crate::model::head::{NUM_CLASSES, evaluate_with_tta};
 use burn::grad_clipping::GradientClippingConfig;
 use burn::lr_scheduler::cosine::CosineAnnealingLrSchedulerConfig;
 use burn::module::AutodiffModule;
+use burn::optim::decay::WeightDecayConfig;
 use burn::prelude::Backend;
 use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder};
 use burn::tensor::{Tensor, activation::softmax};
-use burn_train::checkpoint::MetricCheckpointingStrategy;
-use burn::optim::decay::WeightDecayConfig;
 use burn::{
     config::Config, data::dataloader::DataLoaderBuilder, data::dataset::InMemDataset,
     module::Module, optim::AdamConfig, record::CompactRecorder, tensor::backend::AutodiffBackend,
 };
 use burn_store::{BurnpackStore, ModuleSnapshot};
+use burn_train::checkpoint::MetricCheckpointingStrategy;
 use burn_train::metric::store::{Aggregate, Direction, Split};
 use burn_train::{
     Learner, SupervisedTraining,
@@ -98,7 +98,8 @@ pub fn train<B: AutodiffBackend>(
             (train_batches, val_batches)
         }
         DatasetType::Folder => {
-            let samples = load_dataset_folder(root, device.clone()).expect("Failed to load dataset");
+            let samples =
+                load_dataset_folder(root, device.clone()).expect("Failed to load dataset");
             assert!(
                 config.val_fold < config.num_folds,
                 "val_fold {} out of range for {} folds",
@@ -180,8 +181,12 @@ pub fn train<B: AutodiffBackend>(
     // Use metric_train_numeric and metric_valid_numeric for graph visualization
     let valid_loss = LossMetric::new();
     let valid_acc = AccuracyMetric::new();
-    let keep_best =
-        MetricCheckpointingStrategy::new(&valid_acc, Aggregate::Mean, Direction::Highest, Split::Valid);
+    let keep_best = MetricCheckpointingStrategy::new(
+        &valid_acc,
+        Aggregate::Mean,
+        Direction::Highest,
+        Split::Valid,
+    );
 
     let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_valid)
         .num_epochs(config.num_epochs)
@@ -213,11 +218,10 @@ pub fn train<B: AutodiffBackend>(
     // annealing). Fixing this did NOT close the ~28-point held-out gap to the same
     // net trained in PyTorch (experiment_42: 51.5% vs 79.9%); that cause is unknown.
     let total_iters = config.num_epochs * train_batches.len().div_ceil(config.batch_size);
-    let lr_scheduler =
-        CosineAnnealingLrSchedulerConfig::new(config.learning_rate, total_iters)
-            .with_min_lr(1e-6)
-            .init()
-            .unwrap();
+    let lr_scheduler = CosineAnnealingLrSchedulerConfig::new(config.learning_rate, total_iters)
+        .with_min_lr(1e-6)
+        .init()
+        .unwrap();
 
     let result = training.launch(Learner::new(
         model,
@@ -273,7 +277,11 @@ fn best_checkpoint(artifact_dir: &str) -> Option<(usize, PathBuf)> {
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_str()?.to_string();
-            let epoch = name.strip_prefix("model-")?.strip_suffix(".mpk")?.parse().ok()?;
+            let epoch = name
+                .strip_prefix("model-")?
+                .strip_suffix(".mpk")?
+                .parse()
+                .ok()?;
             Some((epoch, dir.join(format!("model-{epoch}"))))
         })
         .max_by_key(|(epoch, _)| *epoch)
@@ -282,14 +290,22 @@ fn best_checkpoint(artifact_dir: &str) -> Option<(usize, PathBuf)> {
 /// Deal capture-sequence groups into `k` folds, stratified by label: within
 /// each class the groups are shuffled (seeded) and each goes to whichever fold
 /// currently holds the fewest images of that class. Returns group -> fold.
-fn assign_folds<B: Backend>(samples: &[FolderSample<B>], k: usize, seed: u64) -> HashMap<String, usize> {
+fn assign_folds<B: Backend>(
+    samples: &[FolderSample<B>],
+    k: usize,
+    seed: u64,
+) -> HashMap<String, usize> {
     use rand::SeedableRng;
     use rand::seq::SliceRandom;
 
     // label -> group -> image count. BTreeMaps keep the pre-shuffle order stable.
     let mut per_label: BTreeMap<u32, BTreeMap<&str, usize>> = BTreeMap::new();
     for s in samples {
-        *per_label.entry(s.label).or_default().entry(&s.group).or_default() += 1;
+        *per_label
+            .entry(s.label)
+            .or_default()
+            .entry(&s.group)
+            .or_default() += 1;
     }
 
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -341,7 +357,9 @@ pub fn eval<B: AutodiffBackend>(
             .map(|s| s.batch)
             .collect(),
         None => {
-            println!("WARNING: no {VAL_FILES} in {artifact_dir}; scoring ALL images (includes training data)");
+            println!(
+                "WARNING: no {VAL_FILES} in {artifact_dir}; scoring ALL images (includes training data)"
+            );
             samples.into_iter().map(|s| s.batch).collect()
         }
     };

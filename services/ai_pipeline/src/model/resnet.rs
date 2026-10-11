@@ -94,7 +94,10 @@ impl<B: Backend> ResNet18Head<B> {
     /// Randomly initialised network with the trained architecture.
     pub fn new(device: &B::Device) -> Self {
         let layer = |in_c: usize, out_c: usize, stride: usize| {
-            vec![BasicBlock::new(in_c, out_c, stride, device), BasicBlock::new(out_c, out_c, 1, device)]
+            vec![
+                BasicBlock::new(in_c, out_c, stride, device),
+                BasicBlock::new(out_c, out_c, 1, device),
+            ]
         };
         Self {
             conv1: conv(3, 64, 7, 2, 3).init(device),
@@ -141,11 +144,19 @@ impl<B: Backend> ResNet18Head<B> {
     /// `x`: [N, 3, 64, 64] RGB in [0, 1]. Returns [N, NUM_CLASSES] logits.
     pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
         let device = x.device();
-        let stat = |v: [f32; 3]| Tensor::<B, 4>::from_data(TensorData::new(v.to_vec(), [1, 3, 1, 1]), &device);
+        let stat = |v: [f32; 3]| {
+            Tensor::<B, 4>::from_data(TensorData::new(v.to_vec(), [1, 3, 1, 1]), &device)
+        };
         let x = (x - stat(IMAGENET_MEAN)) / stat(IMAGENET_STD);
 
         let mut x = relu(self.bn1.forward(self.conv1.forward(x)));
-        for block in self.layer1.iter().chain(&self.layer2).chain(&self.layer3).chain(&self.layer4) {
+        for block in self
+            .layer1
+            .iter()
+            .chain(&self.layer2)
+            .chain(&self.layer3)
+            .chain(&self.layer4)
+        {
             x = block.forward(x);
         }
         let x = self.avgpool.forward(x).flatten(1, 3);
@@ -198,23 +209,38 @@ mod tests {
             .lines()
             .filter(|k| !k.is_empty())
             .flat_map(|k| {
-                let img = image::open(crops.join(format!("{k}.png"))).unwrap().to_rgb8();
+                let img = image::open(crops.join(format!("{k}.png")))
+                    .unwrap()
+                    .to_rgb8();
                 crate::model::inferance::pack_chw(&img)
             })
             .collect();
         assert_eq!(inputs.len(), torch_inputs.len());
-        let pack_diff =
-            inputs.iter().zip(&torch_inputs).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-        assert!(pack_diff <= 1e-6, "serving preprocessing differs from training: max {pack_diff}");
+        let pack_diff = inputs
+            .iter()
+            .zip(&torch_inputs)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        assert!(
+            pack_diff <= 1e-6,
+            "serving preprocessing differs from training: max {pack_diff}"
+        );
 
         let x = Tensor::<B, 4>::from_data(TensorData::new(inputs, [n, 3, 64, 64]), &device);
-        let got: Vec<f32> = model.forward(x).into_data().convert::<f32>().to_vec().unwrap();
+        let got: Vec<f32> = model
+            .forward(x)
+            .into_data()
+            .convert::<f32>()
+            .to_vec()
+            .unwrap();
 
         // Compare what the service acts on: class probabilities (the confidence
         // threshold) and the chosen class. Raw logits also get a relative bound;
         // GPU float rounding differs slightly between PyTorch and burn kernels.
         let softmax = |v: &[f32]| -> Vec<f32> {
-            v.as_chunks::<{ crate::model::head::NUM_CLASSES }>().0.iter()
+            v.as_chunks::<{ crate::model::head::NUM_CLASSES }>()
+                .0
+                .iter()
                 .flat_map(|r| {
                     let m = r.iter().cloned().fold(f32::MIN, f32::max);
                     let e: Vec<f32> = r.iter().map(|x| (x - m).exp()).collect();
@@ -223,22 +249,42 @@ mod tests {
                 })
                 .collect()
         };
-        let max_abs = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+        let max_abs = |a: &[f32], b: &[f32]| {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0f32, f32::max)
+        };
         let logit_diff = max_abs(&got, &expected);
         let logit_scale = expected.iter().fold(0f32, |m, x| m.max(x.abs()));
         let prob_diff = max_abs(&softmax(&got), &softmax(&expected));
         let argmax = |v: &[f32]| {
-            v.as_chunks::<{ crate::model::head::NUM_CLASSES }>().0.iter()
-                .map(|r| r.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0)
+            v.as_chunks::<{ crate::model::head::NUM_CLASSES }>()
+                .0
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .enumerate()
+                        .max_by(|a, b| a.1.total_cmp(b.1))
+                        .unwrap()
+                        .0
+                })
                 .collect::<Vec<_>>()
         };
-        let same = argmax(&got).iter().zip(argmax(&expected)).filter(|(a, b)| **a == *b).count();
+        let same = argmax(&got)
+            .iter()
+            .zip(argmax(&expected))
+            .filter(|(a, b)| **a == *b)
+            .count();
         println!(
             "parity: {n} crops, preprocessing max diff {pack_diff:.1e}, max |logit diff| {logit_diff:.2e} \
              (logits up to {logit_scale:.1}), max |prob diff| {prob_diff:.2e}, argmax agree {same}/{n}"
         );
         assert!(prob_diff <= 1e-3, "max probability diff {prob_diff}");
-        assert!(logit_diff <= 1e-3 * logit_scale.max(1.0), "max logit diff {logit_diff} vs scale {logit_scale}");
+        assert!(
+            logit_diff <= 1e-3 * logit_scale.max(1.0),
+            "max logit diff {logit_diff} vs scale {logit_scale}"
+        );
         assert_eq!(same, n, "argmax disagreement");
     }
 }

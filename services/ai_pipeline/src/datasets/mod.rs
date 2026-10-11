@@ -1,7 +1,7 @@
+use burn::tensor::Distribution;
 use burn::tensor::grid::affine_grid_2d;
 use burn::tensor::module::interpolate;
 use burn::tensor::ops::{GridSampleOptions, GridSamplePaddingMode, InterpolateMode};
-use burn::tensor::Distribution;
 use rand::RngExt;
 
 use burn::data::dataloader::batcher::Batcher;
@@ -35,13 +35,19 @@ pub struct DiceBatcher<B: Backend> {
 impl<B: Backend> DiceBatcher<B> {
     /// Non-augmenting batcher (validation / eval).
     pub fn new(device: B::Device) -> Self {
-        Self { device, augment: false }
+        Self {
+            device,
+            augment: false,
+        }
     }
 
     /// Augmenting batcher (training): applies `augment_crop` per image, fresh
     /// every epoch.
     pub fn augmenting(device: B::Device) -> Self {
-        Self { device, augment: true }
+        Self {
+            device,
+            augment: true,
+        }
     }
 }
 
@@ -86,7 +92,10 @@ pub fn prepare_crops<B: Backend>(
             let crop = crop_dice(
                 sample.image.clone(),
                 ann,
-                [crate::model::inferance::HEAD_INPUT, crate::model::inferance::HEAD_INPUT],
+                [
+                    crate::model::inferance::HEAD_INPUT,
+                    crate::model::inferance::HEAD_INPUT,
+                ],
                 device,
             );
 

@@ -2,8 +2,7 @@ use burn::{
     Tensor,
     module::Module,
     nn::{
-        BatchNorm, BatchNormConfig, Dropout, DropoutConfig, Linear, LinearConfig,
-        PaddingConfig2d,
+        BatchNorm, BatchNormConfig, Dropout, DropoutConfig, Linear, LinearConfig, PaddingConfig2d,
         conv::{Conv2d, Conv2dConfig},
         pool::{AdaptiveAvgPool2d, AdaptiveAvgPool2dConfig},
     },
