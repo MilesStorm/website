@@ -77,3 +77,11 @@ jobs:
           echo "db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c  /tmp/onnxruntime.tgz" | sha256sum -c
           mkdir /tmp/onnxruntime && tar -xzf /tmp/onnxruntime.tgz -C /tmp/onnxruntime --strip-components=1
           ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so cargo test -- --ignored yolo_runs
+      # The dice head for real: its ONNX model built from the released weights, as the image does.
+      - name: Dice head in ONNX Runtime
+        run: |
+          curl -sSfL -o /tmp/dice_head.safetensors https://github.com/MilesStorm/website/releases/download/dice-head-v1/dice_head_resnet18.safetensors
+          echo "6b6e71693e5b9b667c2d047a3f1dd464017538637eea8c7f6b136c1cf20c2bd9  /tmp/dice_head.safetensors" | sha256sum -c
+          python3 -m venv /tmp/onnx && /tmp/onnx/bin/pip install --quiet onnx==1.23.2
+          /tmp/onnx/bin/python tools/head_onnx.py /tmp/dice_head.safetensors /tmp/dice_head.onnx
+          ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=/tmp/dice_head.onnx cargo test -- --ignored head_runs

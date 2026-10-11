@@ -1,6 +1,5 @@
 pub mod head;
 pub mod inferance;
-pub mod resnet;
 pub mod training;
 use burn::optim::decay::WeightDecayConfig;
 pub use head::DiceHead;

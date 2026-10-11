@@ -18,7 +18,6 @@ burn = { version = "^0.21.0", features = [
 burn-train = "^0.21.0"
 burn-store = { version = "^0.21.0", features = [
   "burnpack",
-  "safetensors",
   "std",
 ], default-features = false }
 # YOLO runs in ONNX Runtime. The library is loaded at run time (ORT_DYLIB_PATH): the image

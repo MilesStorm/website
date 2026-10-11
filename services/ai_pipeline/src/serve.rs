@@ -1,11 +1,8 @@
 use std::future::Future;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use burn::backend::Cuda;
-use burn::backend::cuda::CudaDevice;
 use futures_util::{SinkExt, StreamExt};
 use opentelemetry::Context;
 use opentelemetry::trace::FutureExt as _;
@@ -25,10 +22,6 @@ use crate::model::inferance::{Detection, DicePipeline, StageEnds, class_value};
 use crate::roll::{Observation, RollEvent, RollTracker};
 use crate::trace::{self, Carried};
 use crate::unit_trace::{FrameTimes, Outcome, SessionTrace, UnitTrace, UnitTracer};
-
-// The head's backend (YOLO runs in ONNX Runtime, `model/inferance.rs`). f32: ResNet18 on
-// 64x64 crops is small enough that f32 stays comfortably real-time.
-type InferBackend = Cuda<f32>;
 
 /// On shutdown, how long sessions get to record their `session close` span.
 const SESSION_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -73,12 +66,11 @@ struct InferHandle {
 type Ready = mpsc::Receiver<Carried<Result<(), String>>>;
 
 impl InferHandle {
-    fn new(head_path: PathBuf, dice_threshold: f32) -> (Self, Ready) {
+    fn new(dice_threshold: f32) -> (Self, Ready) {
         Self::start(move || {
             let started = Instant::now();
             let pipeline = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let pipeline = DicePipeline::<InferBackend>::new(CudaDevice::new(0), &head_path, dice_threshold)
-                    .map_err(|e| format!("{e:#}"))?;
+                let pipeline = DicePipeline::new(dice_threshold).map_err(|e| format!("{e:#}"))?;
                 let loaded = Instant::now();
                 pipeline.warm_up();
                 tracing::info!(
@@ -95,7 +87,7 @@ impl InferHandle {
                     .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_else(|| "unknown panic".to_string()))
             })?;
-            tracing::info!(head = %head_path.display(), dice_threshold, "inference pipeline ready");
+            tracing::info!(dice_threshold, "inference pipeline ready");
             Ok(Box::new(move |bytes: &[u8]| decode_and_infer(&pipeline, bytes)) as InferFn)
         })
     }
@@ -159,7 +151,7 @@ impl InferHandle {
     }
 }
 
-fn decode_and_infer(pipeline: &DicePipeline<InferBackend>, bytes: &[u8]) -> Decoded {
+fn decode_and_infer(pipeline: &DicePipeline, bytes: &[u8]) -> Decoded {
     let img = image::load_from_memory(bytes).map(|img| img.to_rgb8());
     let decoded = Instant::now();
     match img {
@@ -210,13 +202,12 @@ fn now_ms() -> u64 {
 /// exporters before the process exits.
 pub async fn serve(
     addr: &str,
-    head_path: PathBuf,
     dice_threshold: f32,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
     let model = model_id();
     let tracer = Arc::new(UnitTracer::from_env()?);
-    let (handle, ready) = InferHandle::new(head_path, dice_threshold);
+    let (handle, ready) = InferHandle::new(dice_threshold);
     serve_when_ready(addr, handle, ready, tracer, dice_threshold, model, shutdown).await
 }
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Make the half-precision copy of the YOLO model: yolo_fp16.py <in.onnx> <out.onnx>.
+"""Make the half-precision copy of a model: onnx_fp16.py <in.onnx> <out.onnx>.
 
 Weights and activations become float16; the input and output stay float32, so the
 service feeds and reads it exactly like the f32 model. The image build runs this
-(Dockerfile, stage `fp16`); the result is not committed.
+(Dockerfile, stage `models`); the result is not committed.
 
 Needs: pip install onnx onnxruntime sympy
 """
