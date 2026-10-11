@@ -68,12 +68,24 @@ struct InferHandle {
     tx: mpsc::Sender<Carried<InferRequest>>,
 }
 
+/// Resolves once the inference thread can infer (`Ok`) or has given up (`Err`).
+type Ready = mpsc::Receiver<Carried<Result<(), String>>>;
+
 impl InferHandle {
-    fn new(head_path: PathBuf, dice_threshold: f32) -> Self {
+    fn new(head_path: PathBuf, dice_threshold: f32) -> (Self, Ready) {
         Self::start(move || {
+            let started = Instant::now();
             let pipeline = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                DicePipeline::<InferBackend>::new(CudaDevice::new(0), &head_path, dice_threshold)
-                    .map_err(|e| format!("{e:#}"))
+                let pipeline = DicePipeline::<InferBackend>::new(CudaDevice::new(0), &head_path, dice_threshold)
+                    .map_err(|e| format!("{e:#}"))?;
+                let loaded = Instant::now();
+                pipeline.warm_up();
+                tracing::info!(
+                    load_ms = loaded.duration_since(started).as_millis() as u64,
+                    warm_up_ms = loaded.elapsed().as_millis() as u64,
+                    "models loaded and warmed up"
+                );
+                Ok(pipeline)
             }))
             .unwrap_or_else(|e| {
                 Err(e
@@ -87,11 +99,13 @@ impl InferHandle {
         })
     }
 
-    /// Starts the inference thread. `init` runs on it and returns what infers a frame.
-    fn start(init: impl FnOnce() -> Result<InferFn, String> + Send + 'static) -> Self {
+    /// Starts the inference thread. `init` runs on it and returns what infers a frame;
+    /// `Ready` tells how that went.
+    fn start(init: impl FnOnce() -> Result<InferFn, String> + Send + 'static) -> (Self, Ready) {
         // Bound of 1: if inference is busy, new frames replace the queued one
         // rather than piling up, keeping latency low.
         let (tx, mut rx) = trace::channel::<InferRequest>(1);
+        let (ready_tx, ready) = trace::channel::<Result<(), String>>(1);
 
         #[allow(
             clippy::disallowed_methods,
@@ -102,24 +116,11 @@ impl InferHandle {
                 Ok(infer) => infer,
                 Err(msg) => {
                     tracing::error!(error = %msg, "inference pipeline failed to initialize");
-                    while let Some(request) = rx.blocking_recv() {
-                        let now = Instant::now();
-                        let (_cx, InferRequest { frame, submitted, reply }) = request.enter();
-                        let _ = reply.send(Inferred {
-                            result: Err(format!("pipeline init failed: {msg}")),
-                            times: FrameTimes {
-                                received: frame.received,
-                                submitted,
-                                dequeued: now,
-                                decoded: None,
-                                stages: None,
-                                done: now,
-                            },
-                        });
-                    }
+                    let _ = ready_tx.blocking_send(Carried::new(Err(msg)));
                     return;
                 }
             };
+            let _ = ready_tx.blocking_send(Carried::new(Ok(())));
 
             while let Some(request) = rx.blocking_recv() {
                 let dequeued = Instant::now();
@@ -139,7 +140,7 @@ impl InferHandle {
             }
         });
 
-        Self { tx }
+        (Self { tx }, ready)
     }
 
     /// Submit a frame for inference. Returns None if the inference thread has
@@ -197,6 +198,12 @@ fn now_ms() -> u64 {
 /// Each connection reads frames into a newest-wins watch channel and infers only the
 /// latest, so stale frames are dropped and latency stays bounded to one inference.
 ///
+/// The port opens only after the models are loaded and have run once (`warm_up`), so an
+/// open port means frames are answered at full speed: the deployment's readiness probe is
+/// a TCP check of it. If the models can't be loaded the port never opens: the pod stays
+/// not ready until it is stopped, and `serve` then returns the error. It does not exit to
+/// be restarted, since every restart would open and close the GPU again.
+///
 /// When `shutdown` resolves the server stops accepting, tells every session to close
 /// (each records its `session close` span) and returns, so the caller can flush the
 /// exporters before the process exits.
@@ -206,13 +213,39 @@ pub async fn serve(
     dice_threshold: f32,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(addr).await?;
     let model = model_id();
     let tracer = Arc::new(UnitTracer::from_env()?);
-    tracing::info!(addr, model = %model, "WebSocket server listening");
+    let (handle, ready) = InferHandle::new(head_path, dice_threshold);
+    serve_when_ready(addr, handle, ready, tracer, dice_threshold, model, shutdown).await
+}
 
-    let handle = Arc::new(InferHandle::new(head_path, dice_threshold));
-    serve_on(listener, handle, tracer, dice_threshold, model, shutdown).await
+/// Waits for the inference thread, then binds `addr` and serves.
+async fn serve_when_ready(
+    addr: &str,
+    handle: InferHandle,
+    mut ready: Ready,
+    tracer: Arc<UnitTracer>,
+    dice_threshold: f32,
+    model: String,
+    shutdown: impl Future<Output = ()>,
+) -> anyhow::Result<()> {
+    tokio::pin!(shutdown);
+    let failed = tokio::select! {
+        () = &mut shutdown => return Ok(()),
+        ready = ready.recv() => match ready.map(|ready| ready.msg) {
+            Some(Ok(())) => None,
+            Some(Err(e)) => Some(e),
+            None => Some("the inference thread ended before it was ready".to_string()),
+        },
+    };
+    if let Some(e) = failed {
+        tracing::error!(error = %e, "not serving: the inference pipeline failed to initialize");
+        shutdown.await;
+        anyhow::bail!("inference pipeline failed to initialize: {e}");
+    }
+    let listener = TcpListener::bind(addr).await?;
+    tracing::info!(addr, model = %model, "WebSocket server listening");
+    serve_on(listener, Arc::new(handle), tracer, dice_threshold, model, shutdown).await
 }
 
 /// The accept loop of `serve`, and its shutdown.
@@ -503,7 +536,13 @@ mod tests {
     /// An inference thread without the model: every frame shows one die lying still, so
     /// the tracker settles a roll on frame `SETTLE_FRAMES + 1`.
     fn fake_inference() -> Arc<InferHandle> {
-        Arc::new(InferHandle::start(|| {
+        Arc::new(fake_inference_after(Duration::ZERO).0)
+    }
+
+    /// `fake_inference` whose model takes `init` to load.
+    fn fake_inference_after(init: Duration) -> (InferHandle, Ready) {
+        InferHandle::start(move || {
+            std::thread::sleep(init);
             Ok(Box::new(|_bytes: &[u8]| {
                 let decoded = Instant::now();
                 let mut probs = vec![0.005; 21];
@@ -525,7 +564,7 @@ mod tests {
                 let stages = StageEnds { yolo, crop: Some(Instant::now()), head: Some(Instant::now()) };
                 (Ok(vec![die]), decoded, Some(stages))
             }) as InferFn)
-        }))
+        })
     }
 
     /// A WebSocket client that sends `traceparent` on the handshake when given a context.
@@ -720,6 +759,66 @@ mod tests {
             assert_eq!(attribute(close, "session.close_reason"), Some("shutdown".into()));
             assert_eq!(attribute(close, "frames_inferred"), Some(1.into()));
         }
+    }
+
+    /// A free local port, for a server that binds it later.
+    fn free_addr() -> String {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string()
+    }
+
+    /// What the readiness probe relies on: nothing listens while the models load, and the
+    /// first frame after the port opens is answered.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_port_opens_only_when_inference_is_ready() {
+        let (tracer, _exporter) = in_memory(1);
+        let addr = free_addr();
+        let url = format!("ws://{addr}/");
+        let shutdown = CancellationToken::new();
+        let (handle, ready) = fake_inference_after(Duration::from_millis(300));
+        let server = {
+            let (addr, shutdown) = (addr.clone(), shutdown.clone());
+            trace::spawn_loop("test: the server", async move {
+                serve_when_ready(&addr, handle, ready, tracer, 0.7, "m".into(), shutdown.cancelled_owned()).await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(tokio::net::TcpStream::connect(&addr).await.is_err(), "listening before the models are ready");
+
+        let mut client = loop {
+            match client(&url, None).await {
+                Ok(client) => break client,
+                Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        };
+        assert_eq!(send_frame(&mut client, 1).await[0]["type"], "frame");
+
+        shutdown.cancel();
+        server.await.unwrap().unwrap();
+    }
+
+    /// Models that can't be loaded: the port is never opened and the process stays up
+    /// (not ready) until it is stopped, when `serve` returns the error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_model_load_never_opens_the_port() {
+        let (tracer, _exporter) = in_memory(1);
+        let addr = free_addr();
+        let shutdown = CancellationToken::new();
+        let (handle, ready) = InferHandle::start(|| Err("no such file".into()));
+        let server = {
+            let (addr, shutdown) = (addr.clone(), shutdown.clone());
+            trace::spawn_loop("test: the server", async move {
+                serve_when_ready(&addr, handle, ready, tracer, 0.7, "m".into(), shutdown.cancelled_owned()).await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!server.is_finished(), "exited instead of staying not ready");
+        assert!(tokio::net::TcpStream::connect(&addr).await.is_err());
+
+        shutdown.cancel();
+        let served = server.await.unwrap();
+        assert_eq!(served.unwrap_err().to_string(), "inference pipeline failed to initialize: no such file");
     }
 
     #[test]

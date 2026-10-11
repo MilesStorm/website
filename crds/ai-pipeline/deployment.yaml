@@ -31,6 +31,12 @@ spec:
         ports:
         - containerPort: 9000
           name: ws
+        # The port opens only after both models have run once (serve.rs), which takes about a
+        # minute. Until then the pod gets no traffic, and in a rollout the old pod keeps serving.
+        readinessProbe:
+          tcpSocket:
+            port: ws
+          periodSeconds: 2
         resources:
           limits:
             nvidia.com/gpu: "1"
