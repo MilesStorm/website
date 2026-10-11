@@ -28,6 +28,8 @@ pub const HEAD_INPUT: usize = 64;
 /// and absorbs YOLO localization error. Applied identically at serve time and in
 /// the offline crop exporter, so the head trains on exactly what it is served.
 pub const HEAD_CROP_MARGIN: f32 = 0.12;
+/// Head batch sizes `warm_up` runs: one die, and a handful rolled together.
+const WARM_UP_DICE: [usize; 2] = [1, 6];
 /// Default YOLO confidence threshold.
 const DEFAULT_CONF: f32 = 0.25;
 /// Default minimum head probability for a value to count as read. Below it the
@@ -119,6 +121,22 @@ impl<B: Backend> DicePipeline<B> {
     pub fn yolo_only(device: B::Device, conf_threshold: f32) -> Self {
         let yolo = my_model::Model::<B>::from_file(yolo_bpk_path(), &device);
         Self { yolo, head: None, device, conf_threshold, dice_threshold: DEFAULT_DICE_THRESHOLD }
+    }
+
+    /// Runs both models once on a blank frame, as `infer_frame` would for `WARM_UP_DICE`
+    /// dice. burn's CUDA backend compiles each kernel the first time it is used: without
+    /// this the first camera frame after a start waited for that (56 s in YOLO and 3 s in
+    /// the head, production 2026-10-11) and its client had gone before the answer.
+    pub fn warm_up(&self) {
+        let side = YOLO_INPUT as u32;
+        let blank = image::RgbImage::from_pixel(side, side, image::Rgb([114, 114, 114]));
+        self.detect_boxes(&blank);
+        let Some(head) = &self.head else { return };
+        for dice in WARM_UP_DICE {
+            let crops: Vec<Tensor<B, 4>> =
+                (0..dice).map(|_| crop_for_head::<B>(&blank, 0.4, 0.4, 0.6, 0.6, &self.device)).collect();
+            softmax(head.forward(Tensor::cat(crops, 0)), 1).into_data();
+        }
     }
 
     /// Run YOLO bbox detection then classify every detected die (one batched head pass).
