@@ -7,18 +7,16 @@
 //! null`): the service never guesses.
 //!
 //! One tracker per camera connection. Dice are followed across frames by box
-//! overlap (IoU). A roll event is emitted once every visible die has been still for
-//! `SETTLE_MS` (and seen still in `SETTLE_FRAMES` frames), and again only when the
-//! settled dice change: a new
+//! overlap (IoU). A roll event is emitted once every visible die has been seen still in
+//! `SETTLE_FRAMES` frames running, and again only when the settled dice change: a new
 //! roll (dice moved, added or removed) gets a new `roll_id`, while a same-position
 //! re-read with changed values (e.g. a die became readable) keeps the `roll_id`.
 //! Known limit: a re-roll that lands every die within `SAME_PLACE` of its old spot
 //! with identical values is indistinguishable from "nothing happened".
 //!
-//! Every rule here is in milliseconds, not frames: the camera's frame rate decides how
-//! many looks the tracker gets, never how long dice must rest. (The rules were counted
-//! in frames while the page sent ~12 a second; the times below are what those counts
-//! came to.)
+//! Settling is a matter of evidence, so it is counted in looks at the die, not in time:
+//! a camera that sends more frames is sure sooner. What is counted in time is what
+//! happens in time whatever the camera: a hand passing over the tray.
 
 use serde::Serialize;
 
@@ -28,13 +26,12 @@ const MATCH_IOU: f32 = 0.3;
 /// it came to rest. Measured from that spot, not from the frame before: between two frames
 /// a slowly rolling die moves less the faster the camera is.
 const STILL_MOVE: f32 = 0.02;
-/// How long a die must have been still before it counts as settled.
-pub const SETTLE_MS: u64 = 400;
-/// Still frames a settled die needs as well, so a slow camera can't settle on a glimpse.
+/// Frames running in which a die must be seen still before it counts as settled: one
+/// or two looks are not evidence that it has stopped.
 pub const SETTLE_FRAMES: usize = 5;
-/// Still observations older than this are left out of the vote.
-const VOTE_WINDOW_MS: u64 = 1250;
-/// How long a die may go undetected before its track is dropped.
+/// Most recent still observations kept for the vote.
+const VOTE_WINDOW: usize = 15;
+/// How long a die may go undetected (a hand over it, glare) before its track is dropped.
 const MAX_UNSEEN_MS: u64 = 300;
 /// Dice closer than this (fraction of the frame) to their previous spot are "the same place".
 const SAME_PLACE: f32 = 0.05;
@@ -78,30 +75,12 @@ struct Track {
     bbox: [f32; 4],
     /// Where the die was when its current still period began.
     rest: [f32; 4],
-    /// When that was (ms, as given to `update`).
-    still_since: u64,
     /// Frames since then in which it was seen still.
     still_frames: usize,
+    /// When it was last detected (ms, as given to `update`).
     last_seen: u64,
-    /// When each still observation was made and its probabilities, newest last.
-    votes: Vec<(u64, Vec<f32>)>,
-}
-
-impl Track {
-    fn new(o: &Observation, now_ms: u64) -> Self {
-        Self {
-            bbox: o.bbox,
-            rest: o.bbox,
-            still_since: now_ms,
-            still_frames: 0,
-            last_seen: now_ms,
-            votes: vec![(now_ms, o.probs.clone())],
-        }
-    }
-
-    fn settled(&self, now_ms: u64) -> bool {
-        self.still_frames >= SETTLE_FRAMES && now_ms.saturating_sub(self.still_since) >= SETTLE_MS
-    }
+    /// Probabilities from the current still period, newest last.
+    votes: Vec<Vec<f32>>,
 }
 
 pub struct RollTracker {
@@ -145,7 +124,7 @@ impl RollTracker {
     }
 
     /// Feed one frame's detections. `now_ms` is Unix time in milliseconds: it times the
-    /// rules above and stamps the event. Returns a roll event when the settled dice changed.
+    /// dropouts above and stamps the event. Returns a roll event when the settled dice changed.
     pub fn update(&mut self, obs: &[Observation], now_ms: u64) -> Option<RollEvent> {
         self.track(obs, now_ms);
         if obs.is_empty() {
@@ -157,7 +136,7 @@ impl RollTracker {
             self.empty_since = None;
         }
 
-        let settled = !self.tracks.is_empty() && self.tracks.iter().all(|t| t.settled(now_ms));
+        let settled = !self.tracks.is_empty() && self.tracks.iter().all(|t| t.still_frames >= SETTLE_FRAMES);
         if !settled {
             return None;
         }
@@ -222,21 +201,28 @@ impl RollTracker {
             } else {
                 // Still moving: earlier readings belong to a different resting face.
                 t.rest = o.bbox;
-                t.still_since = now_ms;
                 t.still_frames = 0;
                 t.votes.clear();
             }
             t.bbox = o.bbox;
             t.last_seen = now_ms;
-            t.votes.push((now_ms, o.probs.clone()));
-            t.votes.retain(|(at, _)| now_ms.saturating_sub(*at) <= VOTE_WINDOW_MS);
+            t.votes.push(o.probs.clone());
+            if t.votes.len() > VOTE_WINDOW {
+                t.votes.remove(0);
+            }
         }
 
         self.tracks.retain(|t| now_ms.saturating_sub(t.last_seen) <= MAX_UNSEEN_MS);
 
         for (o, used) in obs.iter().zip(obs_used) {
             if !used {
-                self.tracks.push(Track::new(o, now_ms));
+                self.tracks.push(Track {
+                    bbox: o.bbox,
+                    rest: o.bbox,
+                    still_frames: 0,
+                    last_seen: now_ms,
+                    votes: vec![o.probs.clone()],
+                });
             }
         }
     }
@@ -244,8 +230,8 @@ impl RollTracker {
     /// Average the still-period probabilities; report the argmax only if confident.
     fn decide(&self, t: &Track) -> RolledDie {
         let n = t.votes.len().max(1) as f32;
-        let classes = t.votes.first().map_or(0, |(_, probs)| probs.len());
-        let mean: Vec<f32> = (0..classes).map(|c| t.votes.iter().map(|(_, v)| v[c]).sum::<f32>() / n).collect();
+        let classes = t.votes.first().map_or(0, Vec::len);
+        let mean: Vec<f32> = (0..classes).map(|c| t.votes.iter().map(|v| v[c]).sum::<f32>() / n).collect();
         let (class, conf) = mean
             .iter()
             .enumerate()
@@ -333,28 +319,22 @@ mod tests {
         assert_eq!(cam.feed(&f, 1).len(), 1);
     }
 
-    /// The rule is time: a camera sending 30 frames a second waits as long as a slow one,
-    /// and only gets more looks at the die meanwhile.
+    /// Settling is counted in looks, not time: every camera needs the same number of
+    /// still frames, so a fast one is sure sooner.
     #[test]
-    fn a_fast_camera_waits_just_as_long() {
-        let mut cam = Camera::new(FAST);
-        let f = frame(&[(0.4, 0.4, 3, 0.9)]);
-        let started = cam.now;
-        // Far more than SETTLE_FRAMES frames, but not yet SETTLE_MS.
-        assert!(cam.watch(&f, SETTLE_MS).is_empty());
-        let events = cam.feed(&f, 2);
-        assert_eq!(events.len(), 1);
-        assert!(events[0].ts - started >= SETTLE_MS);
-        assert!(events[0].ts - started < SETTLE_MS + 2 * FAST);
-    }
-
-    /// A slow camera has waited long enough before it has looked often enough.
-    #[test]
-    fn a_slow_camera_still_needs_its_frames() {
-        let mut cam = Camera::new(250);
-        let f = frame(&[(0.4, 0.4, 3, 0.9)]);
-        assert!(cam.feed(&f, SETTLE_FRAMES).is_empty());
-        assert_eq!(cam.feed(&f, 1).len(), 1);
+    fn every_camera_needs_the_same_frames_and_a_fast_one_has_them_sooner() {
+        let waited = |every: u64| {
+            let mut cam = Camera::new(every);
+            let f = frame(&[(0.4, 0.4, 3, 0.9)]);
+            let started = cam.now;
+            assert!(cam.feed(&f, SETTLE_FRAMES).is_empty());
+            let events = cam.feed(&f, 1);
+            assert_eq!(events.len(), 1);
+            events[0].ts - started
+        };
+        assert_eq!(waited(SLOW), SETTLE_FRAMES as u64 * SLOW);
+        assert_eq!(waited(FAST), SETTLE_FRAMES as u64 * FAST);
+        assert_eq!(waited(250), SETTLE_FRAMES as u64 * 250);
     }
 
     #[test]
