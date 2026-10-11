@@ -619,10 +619,8 @@ mod tests {
         (client(&url, caller).await.unwrap(), server)
     }
 
-    /// Sends one frame, `FRAME_GAP` after the one before, and returns the replies up to and
-    /// including its `frame` reply.
+    /// Sends one frame and returns the replies up to and including its `frame` reply.
     async fn send_frame(client: &mut Client, seq: u64) -> Vec<serde_json::Value> {
-        tokio::time::sleep(FRAME_GAP).await;
         client.send(Message::binary(vec![0u8; 4])).await.unwrap();
         let mut replies = Vec::new();
         loop {
@@ -637,10 +635,7 @@ mod tests {
         }
     }
 
-    /// The time between the test camera's frames: slow enough that the die has rested for
-    /// `SETTLE_MS` once it has been seen still in `SETTLE_FRAMES` frames.
-    const FRAME_GAP: Duration = Duration::from_millis(crate::roll::SETTLE_MS / crate::roll::SETTLE_FRAMES as u64 + 20);
-    /// The frame on which `fake_inference`'s die then settles.
+    /// The frame on which `fake_inference`'s die settles.
     const SETTLES_ON: u64 = crate::roll::SETTLE_FRAMES as u64 + 1;
 
     /// A `traceparent` sent on the WebSocket handshake (as the frontend's camera session
