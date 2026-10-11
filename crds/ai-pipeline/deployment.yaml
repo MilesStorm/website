@@ -7,7 +7,9 @@ metadata:
     istio-injection: enabled
     app: ai-pipeline
 spec:
-  replicas: 1
+  # A pod analyses one frame at a time, so camera sessions on the same pod wait on each
+  # other. The cards are shared (GPU operator time-slicing), so pods are not one per card.
+  replicas: 3
   strategy:
     type: RollingUpdate
     rollingUpdate:
