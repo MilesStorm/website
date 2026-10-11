@@ -77,12 +77,8 @@ impl InferHandle {
         Self::start(move || {
             let started = Instant::now();
             let pipeline = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let pipeline = DicePipeline::<InferBackend>::new(
-                    CudaDevice::new(0),
-                    &head_path,
-                    dice_threshold,
-                )
-                .map_err(|e| format!("{e:#}"))?;
+                let pipeline = DicePipeline::<InferBackend>::new(CudaDevice::new(0), &head_path, dice_threshold)
+                    .map_err(|e| format!("{e:#}"))?;
                 let loaded = Instant::now();
                 pipeline.warm_up();
                 tracing::info!(
@@ -131,14 +127,7 @@ impl InferHandle {
                 let dequeued = Instant::now();
                 // The session's context is current while its frame runs, so anything
                 // logged on this thread for the frame belongs to that session.
-                let (
-                    _cx,
-                    InferRequest {
-                        frame,
-                        submitted,
-                        reply,
-                    },
-                ) = request.enter();
+                let (_cx, InferRequest { frame, submitted, reply }) = request.enter();
                 let (result, decoded, stages) = infer(&frame.bytes);
                 let times = FrameTimes {
                     received: frame.received,
@@ -163,11 +152,7 @@ impl InferHandle {
             reason = "one-shot reply to the task that sent the frame; the request it answers is Carried"
         )]
         let (reply, result) = oneshot::channel();
-        let request = frame.map(|frame| InferRequest {
-            frame,
-            submitted: Instant::now(),
-            reply,
-        });
+        let request = frame.map(|frame| InferRequest { frame, submitted: Instant::now(), reply });
         // try_send drops the frame rather than blocking if the slot is full.
         self.tx.try_send(request).ok()?;
         result.await.ok()
@@ -194,9 +179,7 @@ fn model_id() -> String {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Start the WebSocket server.
@@ -263,15 +246,7 @@ async fn serve_when_ready(
     }
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(addr, model = %model, "WebSocket server listening");
-    serve_on(
-        listener,
-        Arc::new(handle),
-        tracer,
-        dice_threshold,
-        model,
-        shutdown,
-    )
-    .await
+    serve_on(listener, Arc::new(handle), tracer, dice_threshold, model, shutdown).await
 }
 
 /// The accept loop of `serve`, and its shutdown.
@@ -307,17 +282,7 @@ async fn serve_on(
         trace::spawn_loop(
             "camera session: each frame or roll is a trace of its own",
             sessions.track_future(async move {
-                match handle_connection(
-                    stream,
-                    peer,
-                    handle,
-                    tracer,
-                    dice_threshold,
-                    model,
-                    closing,
-                )
-                .await
-                {
+                match handle_connection(stream, peer, handle, tracer, dice_threshold, model, closing).await {
                     Ok(Ended::Session) => tracing::info!(%peer, "client disconnected"),
                     // The readiness probe opens the port every 2 s on every pod: no log line.
                     Ok(Ended::Probe) => {}
@@ -331,14 +296,8 @@ async fn serve_on(
     tracing::info!(sessions = sessions.len(), "shutting down: closing sessions");
     closing.cancel();
     sessions.close();
-    if tokio::time::timeout(SESSION_CLOSE_TIMEOUT, sessions.wait())
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            sessions = sessions.len(),
-            "sessions still open at shutdown; their close spans are lost"
-        );
+    if tokio::time::timeout(SESSION_CLOSE_TIMEOUT, sessions.wait()).await.is_err() {
+        tracing::warn!(sessions = sessions.len(), "sessions still open at shutdown; their close spans are lost");
     }
     result
 }
@@ -352,10 +311,7 @@ enum Ended {
     Probe,
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "the handshake callback's error type is tungstenite's"
-)]
+#[expect(clippy::result_large_err, reason = "the handshake callback's error type is tungstenite's")]
 async fn handle_connection<S>(
     stream: S,
     peer: SocketAddr,
@@ -392,9 +348,7 @@ where
     tracing::info!(%peer, "client connected");
     let session = tracer.open_session(accept_started, &parent, &model, None);
     let cx = session.cx();
-    run_session(ws, handle, dice_threshold, model, session, closing)
-        .with_context(cx)
-        .await;
+    run_session(ws, handle, dice_threshold, model, session, closing).with_context(cx).await;
     Ok(Ended::Session)
 }
 
@@ -467,11 +421,7 @@ async fn run_session<S>(
                     // Overwrites any unprocessed frame: only the latest survives.
                     Ok(Message::Binary(frame_bytes)) => {
                         seq += 1;
-                        let frame = Frame {
-                            seq,
-                            received: Instant::now(),
-                            bytes: frame_bytes.to_vec(),
-                        };
+                        let frame = Frame { seq, received: Instant::now(), bytes: frame_bytes.to_vec() };
                         if frame_tx.send(Some(Carried::new(frame))).is_err() {
                             break; // inference loop gone
                         }
@@ -522,21 +472,11 @@ async fn run_session<S>(
                 let detections = dets.len();
                 let obs: Vec<Observation> = dets
                     .into_iter()
-                    .map(|d| Observation {
-                        bbox: [d.x1, d.y1, d.x2, d.y2],
-                        probs: d.probs,
-                    })
+                    .map(|d| Observation { bbox: [d.x1, d.y1, d.x2, d.y2], probs: d.probs })
                     .collect();
                 match tracker.update(&obs, now_ms()) {
                     Some(roll) => {
-                        let mut unit = session.frame(
-                            seq,
-                            &times,
-                            Outcome::Roll {
-                                detections,
-                                roll: &roll,
-                            },
-                        );
+                        let mut unit = session.frame(seq, &times, Outcome::Roll { detections, roll: &roll });
                         log_roll_settled(&roll, unit.as_ref());
                         replies.push(roll_message(&roll, &model, seq, unit.as_mut()));
                         unit
@@ -574,10 +514,7 @@ async fn run_session<S>(
     if close_reason == "shutdown" {
         // Tell the client the server is going away. Bounded: a stalled client must not
         // hold up the exit, and the session's spans are already recorded.
-        let going_away = Message::Close(Some(CloseFrame {
-            code: CloseCode::Away,
-            reason: "shutting down".into(),
-        }));
+        let going_away = Message::Close(Some(CloseFrame { code: CloseCode::Away, reason: "shutting down".into() }));
         let _ = tokio::time::timeout(Duration::from_secs(1), sink.send(going_away)).await;
     }
 }
@@ -613,9 +550,7 @@ mod tests {
     use super::*;
     use crate::unit_trace::tests::{attribute, in_memory, named};
 
-    type Client = tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >;
+    type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
     /// An inference thread without the model: every frame shows one die lying still, so
     /// the tracker settles a roll on frame `SETTLE_FRAMES + 1`.
@@ -646,34 +581,21 @@ mod tests {
                 };
                 let prepare = Instant::now();
                 let yolo = Instant::now();
-                let stages = StageEnds {
-                    prepare,
-                    yolo,
-                    crop: Some(Instant::now()),
-                    head: Some(Instant::now()),
-                };
+                let stages = StageEnds { prepare, yolo, crop: Some(Instant::now()), head: Some(Instant::now()) };
                 (Ok(vec![die]), decoded, Some(stages))
             }) as InferFn)
         })
     }
 
     /// A WebSocket client that sends `traceparent` on the handshake when given a context.
-    async fn client(
-        url: &str,
-        caller: Option<&Context>,
-    ) -> tokio_tungstenite::tungstenite::Result<Client> {
+    async fn client(url: &str, caller: Option<&Context>) -> tokio_tungstenite::tungstenite::Result<Client> {
         let mut request = url.into_client_request().unwrap();
         if let Some(caller) = caller {
             let mut headers = std::collections::HashMap::new();
             TraceContextPropagator::new().inject_context(caller, &mut headers);
-            request
-                .headers_mut()
-                .insert("traceparent", headers["traceparent"].parse().unwrap());
+            request.headers_mut().insert("traceparent", headers["traceparent"].parse().unwrap());
         }
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "test: the client stands in for the frontend's traced connect"
-        )]
+        #[allow(clippy::disallowed_methods, reason = "test: the client stands in for the frontend's traced connect")]
         let connected = tokio_tungstenite::connect_async(request).await;
         connected.map(|(client, _)| client)
     }
@@ -689,15 +611,7 @@ mod tests {
         let url = format!("ws://{}/", listener.local_addr().unwrap());
         let server = trace::spawn_loop("test: one camera session", async move {
             let (stream, peer) = listener.accept().await.unwrap();
-            let ended = handle_connection(
-                stream,
-                peer,
-                fake_inference(),
-                tracer,
-                0.7,
-                "test-model".into(),
-                closing,
-            );
+            let ended = handle_connection(stream, peer, fake_inference(), tracer, 0.7, "test-model".into(), closing);
             assert_eq!(ended.await.unwrap(), Ended::Session);
         });
         (client(&url, caller).await.unwrap(), server)
@@ -709,8 +623,7 @@ mod tests {
         let mut replies = Vec::new();
         loop {
             let reply: serde_json::Value =
-                serde_json::from_str(client.next().await.unwrap().unwrap().to_text().unwrap())
-                    .unwrap();
+                serde_json::from_str(client.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
             let done = reply["type"] == "roll" || (reply["type"] == "frame" && seq != SETTLES_ON);
             assert_eq!(reply["frame_seq"], seq);
             replies.push(reply);
@@ -730,17 +643,14 @@ mod tests {
     /// tracing-opentelemetry.
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_traceparent_continues_the_trace() {
-        let bridge = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-            .build()
-            .tracer("test");
+        let bridge = opentelemetry_sdk::trace::SdkTracerProvider::builder().build().tracer("test");
         let _guard = tracing::subscriber::set_default(
             tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(bridge)),
         );
         let caller = tracing::info_span!("caller").context();
         let (tracer, exporter) = in_memory(1);
 
-        let (client, server) =
-            connect(Arc::clone(&tracer), CancellationToken::new(), Some(&caller)).await;
+        let (client, server) = connect(Arc::clone(&tracer), CancellationToken::new(), Some(&caller)).await;
         drop(client);
         server.await.unwrap();
 
@@ -763,15 +673,7 @@ mod tests {
         drop(tokio::net::TcpStream::connect(addr).await.unwrap());
 
         let (stream, peer) = listener.accept().await.unwrap();
-        let ended = handle_connection(
-            stream,
-            peer,
-            fake_inference(),
-            tracer,
-            0.7,
-            "m".into(),
-            CancellationToken::new(),
-        );
+        let ended = handle_connection(stream, peer, fake_inference(), tracer, 0.7, "m".into(), CancellationToken::new());
 
         assert_eq!(ended.await.unwrap(), Ended::Probe);
         assert!(exporter.get_finished_spans().unwrap().is_empty());
@@ -808,17 +710,7 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            [
-                "_trace",
-                "complete",
-                "dice",
-                "frame_seq",
-                "model",
-                "roll_id",
-                "total",
-                "ts",
-                "type"
-            ]
+            ["_trace", "complete", "dice", "frame_seq", "model", "roll_id", "total", "ts", "type"]
         );
         assert_eq!(roll["model"], "test-model");
         assert_eq!(roll["frame_seq"], SETTLES_ON);
@@ -832,26 +724,14 @@ mod tests {
         let continued = continued.span().span_context().clone();
         assert!(continued.is_valid() && continued.is_sampled());
         assert_eq!(continued.trace_id(), settle.span_context.trace_id());
-        let send = spans
-            .iter()
-            .find(|s| s.span_context.span_id() == continued.span_id())
-            .unwrap();
-        assert_eq!(
-            (send.name.as_ref(), &send.span_kind),
-            ("ws.send", &opentelemetry::trace::SpanKind::Producer)
-        );
+        let send = spans.iter().find(|s| s.span_context.span_id() == continued.span_id()).unwrap();
+        assert_eq!((send.name.as_ref(), &send.span_kind), ("ws.send", &opentelemetry::trace::SpanKind::Producer));
         assert_eq!(send.parent_span_id, settle.span_context.span_id());
-        assert_eq!(
-            attribute(settle, "roll.id"),
-            Some(roll["roll_id"].as_str().unwrap().to_string().into())
-        );
+        assert_eq!(attribute(settle, "roll.id"), Some(roll["roll_id"].as_str().unwrap().to_string().into()));
 
         // One frame in 4, and the settling frame: each a root linked to the session.
         let frames = named(&spans, "frame.infer");
-        let seqs: Vec<_> = frames
-            .iter()
-            .map(|s| attribute(s, "frame_seq").unwrap())
-            .collect();
+        let seqs: Vec<_> = frames.iter().map(|s| attribute(s, "frame_seq").unwrap()).collect();
         assert_eq!(seqs, vec![1.into(), 5.into(), 9.into()]);
         for unit in frames.iter().chain([&settle]) {
             assert_eq!(unit.parent_span_id, SpanId::INVALID);
@@ -875,15 +755,8 @@ mod tests {
                 ]
             );
             // The stages lie inside the unit, which lasts until its replies are sent.
-            for child in spans
-                .iter()
-                .filter(|s| s.parent_span_id == unit.span_context.span_id())
-            {
-                assert!(
-                    unit.start_time <= child.start_time && child.end_time <= unit.end_time,
-                    "{}",
-                    child.name
-                );
+            for child in spans.iter().filter(|s| s.parent_span_id == unit.span_context.span_id()) {
+                assert!(unit.start_time <= child.start_time && child.end_time <= unit.end_time, "{}", child.name);
             }
         }
 
@@ -894,16 +767,8 @@ mod tests {
         }
         let close = named(&spans, "session close")[0];
         assert_eq!(close.links.links[0].span_context, open.span_context);
-        assert_eq!(
-            attribute(close, "session.close_reason"),
-            Some("shutdown".into())
-        );
-        for (key, value) in [
-            ("frames_received", 10),
-            ("frames_inferred", 10),
-            ("frames_traced", 4),
-            ("rolls", 1),
-        ] {
+        assert_eq!(attribute(close, "session.close_reason"), Some("shutdown".into()));
+        for (key, value) in [("frames_received", 10), ("frames_inferred", 10), ("frames_traced", 4), ("rolls", 1)] {
             assert_eq!(attribute(close, key), Some(value.into()), "{key}");
         }
     }
@@ -919,55 +784,32 @@ mod tests {
         let shutdown = CancellationToken::new();
         let server = trace::spawn_loop(
             "test: the server",
-            serve_on(
-                listener,
-                fake_inference(),
-                Arc::clone(&tracer),
-                0.7,
-                "m".into(),
-                shutdown.clone().cancelled_owned(),
-            ),
+            serve_on(listener, fake_inference(), Arc::clone(&tracer), 0.7, "m".into(), shutdown.clone().cancelled_owned()),
         );
-        let mut clients = [
-            client(&url, None).await.unwrap(),
-            client(&url, None).await.unwrap(),
-        ];
+        let mut clients = [client(&url, None).await.unwrap(), client(&url, None).await.unwrap()];
         for client in &mut clients {
             send_frame(client, 1).await;
         }
 
         shutdown.cancel();
         for client in &mut clients {
-            assert!(matches!(
-                client.next().await,
-                Some(Ok(Message::Close(Some(_))))
-            ));
+            assert!(matches!(client.next().await, Some(Ok(Message::Close(Some(_))))));
         }
         server.await.unwrap().unwrap();
 
-        assert!(
-            client(&url, None).await.is_err(),
-            "still accepting after shutdown"
-        );
+        assert!(client(&url, None).await.is_err(), "still accepting after shutdown");
         let spans = exporter.get_finished_spans().unwrap();
         let closes = named(&spans, "session close");
         assert_eq!(closes.len(), 2);
         for close in closes {
-            assert_eq!(
-                attribute(close, "session.close_reason"),
-                Some("shutdown".into())
-            );
+            assert_eq!(attribute(close, "session.close_reason"), Some("shutdown".into()));
             assert_eq!(attribute(close, "frames_inferred"), Some(1.into()));
         }
     }
 
     /// A free local port, for a server that binds it later.
     fn free_addr() -> String {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .to_string()
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string()
     }
 
     /// What the readiness probe relies on: nothing listens while the models load, and the
@@ -982,24 +824,12 @@ mod tests {
         let server = {
             let (addr, shutdown) = (addr.clone(), shutdown.clone());
             trace::spawn_loop("test: the server", async move {
-                serve_when_ready(
-                    &addr,
-                    handle,
-                    ready,
-                    tracer,
-                    0.7,
-                    "m".into(),
-                    shutdown.cancelled_owned(),
-                )
-                .await
+                serve_when_ready(&addr, handle, ready, tracer, 0.7, "m".into(), shutdown.cancelled_owned()).await
             })
         };
 
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(
-            tokio::net::TcpStream::connect(&addr).await.is_err(),
-            "listening before the models are ready"
-        );
+        assert!(tokio::net::TcpStream::connect(&addr).await.is_err(), "listening before the models are ready");
 
         let mut client = loop {
             match client(&url, None).await {
@@ -1024,16 +854,7 @@ mod tests {
         let server = {
             let (addr, shutdown) = (addr.clone(), shutdown.clone());
             trace::spawn_loop("test: the server", async move {
-                serve_when_ready(
-                    &addr,
-                    handle,
-                    ready,
-                    tracer,
-                    0.7,
-                    "m".into(),
-                    shutdown.cancelled_owned(),
-                )
-                .await
+                serve_when_ready(&addr, handle, ready, tracer, 0.7, "m".into(), shutdown.cancelled_owned()).await
             })
         };
 
@@ -1043,24 +864,13 @@ mod tests {
 
         shutdown.cancel();
         let served = server.await.unwrap();
-        assert_eq!(
-            served.unwrap_err().to_string(),
-            "inference pipeline failed to initialize: no such file"
-        );
+        assert_eq!(served.unwrap_err().to_string(), "inference pipeline failed to initialize: no such file");
     }
 
     #[test]
     fn roll_message_without_a_trace_is_the_plain_roll() {
-        let roll = RollEvent {
-            kind: "roll",
-            roll_id: "r1".into(),
-            dice: vec![],
-            total: None,
-            complete: false,
-            ts: 7,
-        };
-        let message: serde_json::Value =
-            serde_json::from_str(&roll_message(&roll, "m", 3, None)).unwrap();
+        let roll = RollEvent { kind: "roll", roll_id: "r1".into(), dice: vec![], total: None, complete: false, ts: 7 };
+        let message: serde_json::Value = serde_json::from_str(&roll_message(&roll, "m", 3, None)).unwrap();
         assert_eq!(
             message,
             serde_json::json!({"type": "roll", "roll_id": "r1", "dice": [], "total": null, "complete": false, "ts": 7, "model": "m", "frame_seq": 3})

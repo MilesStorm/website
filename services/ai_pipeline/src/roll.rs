@@ -108,13 +108,7 @@ fn numeric(value: &str) -> Option<u32> {
 impl RollTracker {
     /// `value_of` maps a class index to its printed value (see `inferance::class_value`).
     pub fn new(threshold: f32, value_of: fn(usize) -> &'static str) -> Self {
-        Self {
-            tracks: Vec::new(),
-            threshold,
-            value_of,
-            last: None,
-            empty_frames: 0,
-        }
+        Self { tracks: Vec::new(), threshold, value_of, last: None, empty_frames: 0 }
     }
 
     /// Feed one frame's detections. Returns a roll event when the settled dice changed.
@@ -129,8 +123,8 @@ impl RollTracker {
             self.empty_frames = 0;
         }
 
-        let settled =
-            !self.tracks.is_empty() && self.tracks.iter().all(|t| t.still_frames >= SETTLE_FRAMES);
+        let settled = !self.tracks.is_empty()
+            && self.tracks.iter().all(|t| t.still_frames >= SETTLE_FRAMES);
         if !settled {
             return None;
         }
@@ -140,11 +134,7 @@ impl RollTracker {
 
         let same_place = self.last.as_ref().is_some_and(|last| {
             last.dice.len() == dice.len()
-                && dice.iter().all(|d| {
-                    last.dice
-                        .iter()
-                        .any(|l| dist(&l.bbox, &d.bbox) < SAME_PLACE)
-                })
+                && dice.iter().all(|d| last.dice.iter().any(|l| dist(&l.bbox, &d.bbox) < SAME_PLACE))
         });
         // Same dice in the same place: only re-send if more of them became readable.
         // A value flickering between two readings must not produce a stream of events.
@@ -162,20 +152,11 @@ impl RollTracker {
         };
         let complete = dice.iter().all(|d| d.value.is_some());
         let total = if complete {
-            dice.iter()
-                .map(|d| d.value.and_then(numeric))
-                .sum::<Option<u32>>()
+            dice.iter().map(|d| d.value.and_then(numeric)).sum::<Option<u32>>()
         } else {
             None
         };
-        let event = RollEvent {
-            kind: "roll",
-            roll_id,
-            dice,
-            total,
-            complete,
-            ts: now_ms,
-        };
+        let event = RollEvent { kind: "roll", roll_id, dice, total, complete, ts: now_ms };
         self.last = Some(event.clone());
         Some(event)
     }
@@ -227,12 +208,7 @@ impl RollTracker {
 
         for (o, used) in obs.iter().zip(obs_used) {
             if !used {
-                self.tracks.push(Track {
-                    bbox: o.bbox,
-                    still_frames: 0,
-                    missed: 0,
-                    votes: vec![o.probs.clone()],
-                });
+                self.tracks.push(Track { bbox: o.bbox, still_frames: 0, missed: 0, votes: vec![o.probs.clone()] });
             }
         }
     }
@@ -241,9 +217,7 @@ impl RollTracker {
     fn decide(&self, t: &Track) -> RolledDie {
         let n = t.votes.len().max(1) as f32;
         let classes = t.votes.first().map_or(0, Vec::len);
-        let mean: Vec<f32> = (0..classes)
-            .map(|c| t.votes.iter().map(|v| v[c]).sum::<f32>() / n)
-            .collect();
+        let mean: Vec<f32> = (0..classes).map(|c| t.votes.iter().map(|v| v[c]).sum::<f32>() / n).collect();
         let (class, conf) = mean
             .iter()
             .enumerate()
@@ -272,10 +246,7 @@ mod tests {
     }
 
     fn die(x: f32, y: f32, class: usize, p: f32) -> Observation {
-        Observation {
-            bbox: [x, y, x + 0.1, y + 0.1],
-            probs: probs(class, p),
-        }
+        Observation { bbox: [x, y, x + 0.1, y + 0.1], probs: probs(class, p) }
     }
 
     /// Feed the same frame `n` times, collecting emitted events.
@@ -309,11 +280,7 @@ mod tests {
     fn two_dice_left_to_right_with_total() {
         let mut t = RollTracker::new(T, class_value);
         // "5" on the right, "0" (d10 zero = 10) on the left.
-        let events = feed(
-            &mut t,
-            &frame(&[(0.7, 0.4, 4, 0.9), (0.1, 0.4, 9, 0.9)]),
-            10,
-        );
+        let events = feed(&mut t, &frame(&[(0.7, 0.4, 4, 0.9), (0.1, 0.4, 9, 0.9)]), 10);
         assert_eq!(events.len(), 1);
         let values: Vec<_> = events[0].dice.iter().map(|d| d.value).collect();
         assert_eq!(values, vec![Some("0"), Some("5")]);
@@ -323,11 +290,7 @@ mod tests {
     #[test]
     fn unsure_die_is_null_not_guessed() {
         let mut t = RollTracker::new(T, class_value);
-        let events = feed(
-            &mut t,
-            &frame(&[(0.1, 0.4, 4, 0.9), (0.6, 0.4, 7, 0.5)]),
-            10,
-        );
+        let events = feed(&mut t, &frame(&[(0.1, 0.4, 4, 0.9), (0.6, 0.4, 7, 0.5)]), 10);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].dice[1].value, None);
         assert!(!events[0].complete);

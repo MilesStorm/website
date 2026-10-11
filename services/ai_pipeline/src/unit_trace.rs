@@ -18,9 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use opentelemetry::global::BoxedTracer;
 use opentelemetry::propagation::TextMapPropagator as _;
-use opentelemetry::trace::{
-    Link, Span as _, SpanContext, SpanKind, Status, TraceContextExt as _, Tracer as _,
-};
+use opentelemetry::trace::{Link, Span as _, SpanContext, SpanKind, Status, TraceContextExt as _, Tracer as _};
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 
@@ -45,10 +43,7 @@ struct Anchor {
 
 impl Anchor {
     fn now() -> Self {
-        Self {
-            at: Instant::now(),
-            wall: SystemTime::now(),
-        }
+        Self { at: Instant::now(), wall: SystemTime::now() }
     }
 
     fn wall(&self, t: Instant) -> SystemTime {
@@ -87,16 +82,11 @@ impl FrameTimes {
             Some(("frame.pending", self.received, self.submitted)),
             // In the inference thread's queue while it worked on another session's frame.
             Some(("infer.queue", self.submitted, self.dequeued)),
-            self.decoded
-                .map(|decoded| ("infer.decode", self.dequeued, decoded)),
-            self.decoded
-                .zip(stages)
-                .map(|(decoded, s)| ("infer.prepare", decoded, s.prepare)),
+            self.decoded.map(|decoded| ("infer.decode", self.dequeued, decoded)),
+            self.decoded.zip(stages).map(|(decoded, s)| ("infer.prepare", decoded, s.prepare)),
             stages.map(|s| ("infer.yolo", s.prepare, s.yolo)),
             stages.and_then(|s| s.crop.map(|crop| ("infer.crop", s.yolo, crop))),
-            stages
-                .and_then(|s| s.crop.zip(s.head))
-                .map(|(crop, head)| ("infer.head", crop, head)),
+            stages.and_then(|s| s.crop.zip(s.head)).map(|(crop, head)| ("infer.head", crop, head)),
         ]
         .into_iter()
         .flatten()
@@ -108,10 +98,7 @@ pub enum Outcome<'a> {
     /// Inferred, and no roll settled on it.
     Frame { detections: usize },
     /// The frame that settled a roll: always traced.
-    Roll {
-        detections: usize,
-        roll: &'a RollEvent,
-    },
+    Roll { detections: usize, roll: &'a RollEvent },
     /// Decoding or the pipeline failed.
     Failed(&'a str),
 }
@@ -127,22 +114,14 @@ impl UnitTracer {
     /// The global tracer (a no-op without an OTLP endpoint) and `FRAME_TRACE_EVERY`.
     pub fn from_env() -> anyhow::Result<Self> {
         let frame_every = match std::env::var("FRAME_TRACE_EVERY") {
-            Ok(v) => v
-                .parse()
-                .map_err(|e| anyhow::anyhow!("FRAME_TRACE_EVERY={v}: {e}"))?,
+            Ok(v) => v.parse().map_err(|e| anyhow::anyhow!("FRAME_TRACE_EVERY={v}: {e}"))?,
             Err(_) => DEFAULT_FRAME_EVERY,
         };
-        Ok(Self::new(
-            opentelemetry::global::tracer("ai-pipeline"),
-            frame_every,
-        ))
+        Ok(Self::new(opentelemetry::global::tracer("ai-pipeline"), frame_every))
     }
 
     pub fn new(tracer: BoxedTracer, frame_every: u64) -> Self {
-        Self {
-            tracer,
-            frame_every,
-        }
+        Self { tracer, frame_every }
     }
 
     /// Records the `session open` span: the WebSocket handshake, from `accept_started` to
@@ -244,22 +223,11 @@ impl SessionTrace {
     /// Counts an inferred frame and, if it is to be traced, records its spans up to the
     /// inference thread's reply. The returned unit is still open: call `sent` once the
     /// replies are written.
-    pub fn frame(
-        &mut self,
-        seq: u64,
-        times: &FrameTimes,
-        outcome: Outcome<'_>,
-    ) -> Option<UnitTrace> {
+    pub fn frame(&mut self, seq: u64, times: &FrameTimes, outcome: Outcome<'_>) -> Option<UnitTrace> {
         self.frame_at(Anchor::now(), seq, times, outcome)
     }
 
-    fn frame_at(
-        &mut self,
-        anchor: Anchor,
-        seq: u64,
-        times: &FrameTimes,
-        outcome: Outcome<'_>,
-    ) -> Option<UnitTrace> {
+    fn frame_at(&mut self, anchor: Anchor, seq: u64, times: &FrameTimes, outcome: Outcome<'_>) -> Option<UnitTrace> {
         self.inferred += 1;
         // Always traced: a frame that settles a roll, and a failure when none was traced lately.
         let always = match outcome {
@@ -290,10 +258,7 @@ impl SessionTrace {
             KeyValue::new("session.id", self.id.clone()),
             KeyValue::new("model", self.model.clone()),
             KeyValue::new("frame_seq", seq as i64),
-            KeyValue::new(
-                "frame_ms",
-                times.done.duration_since(times.dequeued).as_millis() as i64,
-            ),
+            KeyValue::new("frame_ms", times.done.duration_since(times.dequeued).as_millis() as i64),
             KeyValue::new("frames_dropped", dropped as i64),
         ];
         let name = match outcome {
@@ -340,22 +305,14 @@ impl SessionTrace {
 
         let cx = Context::new().with_span(root);
         for (stage, from, to) in times.spans() {
-            let mut span = tracer
-                .span_builder(stage)
-                .with_start_time(anchor.wall(from))
-                .start_with_context(tracer, &cx);
+            let mut span = tracer.span_builder(stage).with_start_time(anchor.wall(from)).start_with_context(tracer, &cx);
             // Decoding is the one stage that returns an error.
             if let (Outcome::Failed(error), "infer.decode") = (&outcome, stage) {
                 span.set_status(Status::error(error.to_string()));
             }
             span.end_with_timestamp(anchor.wall(to));
         }
-        Some(UnitTrace {
-            tracer: Arc::clone(&self.tracer),
-            cx,
-            anchor,
-            send: None,
-        })
+        Some(UnitTrace { tracer: Arc::clone(&self.tracer), cx, anchor, send: None })
     }
 
     /// Records the `session close` span, from `close_started` to now, with the session's
@@ -374,10 +331,7 @@ impl SessionTrace {
                 KeyValue::new("session.id", self.id),
                 KeyValue::new("model", self.model),
                 KeyValue::new("session.close_reason", reason),
-                KeyValue::new(
-                    "session.duration_ms",
-                    close_started.duration_since(self.opened).as_millis() as i64,
-                ),
+                KeyValue::new("session.duration_ms", close_started.duration_since(self.opened).as_millis() as i64),
                 KeyValue::new("frames_received", received as i64),
                 KeyValue::new("frames_inferred", self.inferred as i64),
                 KeyValue::new("frames_failed", self.failed as i64),
@@ -484,9 +438,7 @@ pub mod tests {
     /// empties the exporter.
     pub fn in_memory(frame_every: u64) -> (Arc<UnitTracer>, InMemorySpanExporter) {
         let exporter = InMemorySpanExporter::default();
-        let provider = SdkTracerProvider::builder()
-            .with_simple_exporter(exporter.clone())
-            .build();
+        let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
         let tracer = BoxedTracer::new(Box::new(provider.tracer("test")));
         (Arc::new(UnitTracer::new(tracer, frame_every)), exporter)
     }
@@ -496,10 +448,7 @@ pub mod tests {
     }
 
     pub fn attribute(span: &SpanData, key: &str) -> Option<opentelemetry::Value> {
-        span.attributes
-            .iter()
-            .find(|kv| kv.key.as_str() == key)
-            .map(|kv| kv.value.clone())
+        span.attributes.iter().find(|kv| kv.key.as_str() == key).map(|kv| kv.value.clone())
     }
 
     /// The context a caller's `traceparent` would give.
@@ -522,12 +471,7 @@ pub mod tests {
             submitted: at(3),
             dequeued: at(5),
             decoded: Some(at(9)),
-            stages: Some(StageEnds {
-                prepare: at(12),
-                yolo: at(100),
-                crop: Some(at(104)),
-                head: Some(at(140)),
-            }),
+            stages: Some(StageEnds { prepare: at(12), yolo: at(100), crop: Some(at(104)), head: Some(at(140)) }),
             done: at(141),
         }
     }
@@ -535,13 +479,8 @@ pub mod tests {
     /// An anchor at a fixed wall-clock time, so spans' timestamps can be compared exactly.
     fn anchor(t0: Instant) -> (Anchor, impl Fn(u64) -> SystemTime) {
         let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let anchor = Anchor {
-            at: t0 + Duration::from_millis(141),
-            wall,
-        };
-        (anchor, move |ms| {
-            wall - Duration::from_millis(141) + Duration::from_millis(ms)
-        })
+        let anchor = Anchor { at: t0 + Duration::from_millis(141), wall };
+        (anchor, move |ms| wall - Duration::from_millis(141) + Duration::from_millis(ms))
     }
 
     #[test]
@@ -552,15 +491,9 @@ pub mod tests {
         let (anchor, wall) = anchor(t0);
 
         session.took(1);
-        let unit = session
-            .frame_at(anchor, 1, &times(t0), Outcome::Frame { detections: 2 })
-            .unwrap();
+        let unit = session.frame_at(anchor, 1, &times(t0), Outcome::Frame { detections: 2 }).unwrap();
         // Later than the anchor: the replies are sent after the spans were started.
-        unit.sent(
-            t0 + Duration::from_millis(142),
-            t0 + Duration::from_millis(150),
-            true,
-        );
+        unit.sent(t0 + Duration::from_millis(142), t0 + Duration::from_millis(150), true);
 
         let spans = exporter.get_finished_spans().unwrap();
         let open = named(&spans, "session open")[0];
@@ -586,17 +519,9 @@ pub mod tests {
         ];
         for (name, from, to) in expected {
             let span = named(&spans, name)[0];
-            assert_eq!(
-                (span.start_time, span.end_time),
-                (wall(from), wall(to)),
-                "{name}"
-            );
+            assert_eq!((span.start_time, span.end_time), (wall(from), wall(to)), "{name}");
             assert_eq!(span.parent_span_id, root.span_context.span_id(), "{name}");
-            assert_eq!(
-                span.span_context.trace_id(),
-                root.span_context.trace_id(),
-                "{name}"
-            );
+            assert_eq!(span.span_context.trace_id(), root.span_context.trace_id(), "{name}");
         }
         assert_eq!(spans.len(), 1 + 1 + expected.len());
     }
@@ -608,17 +533,9 @@ pub mod tests {
         let t0 = Instant::now();
         let mut times = times(t0);
         let at = |ms| t0 + Duration::from_millis(ms);
-        times.stages = Some(StageEnds {
-            prepare: at(12),
-            yolo: at(100),
-            crop: None,
-            head: None,
-        });
+        times.stages = Some(StageEnds { prepare: at(12), yolo: at(100), crop: None, head: None });
 
-        session
-            .frame(1, &times, Outcome::Frame { detections: 0 })
-            .unwrap()
-            .sent(times.done, times.done, true);
+        session.frame(1, &times, Outcome::Frame { detections: 0 }).unwrap().sent(times.done, times.done, true);
 
         let spans = exporter.get_finished_spans().unwrap();
         assert_eq!(named(&spans, "infer.yolo").len(), 1);
@@ -632,10 +549,7 @@ pub mod tests {
         let mut times = times(Instant::now());
         times.stages = None;
 
-        session
-            .frame(1, &times, Outcome::Failed("decode: bad image"))
-            .unwrap()
-            .sent(times.done, times.done, true);
+        session.frame(1, &times, Outcome::Failed("decode: bad image")).unwrap().sent(times.done, times.done, true);
         let close_started = Instant::now();
         session.close(close_started, 1, "client");
 
@@ -644,20 +558,14 @@ pub mod tests {
         assert_eq!(named(&spans, "frame.infer")[0].status, error);
         assert_eq!(named(&spans, "infer.decode")[0].status, error);
         assert!(named(&spans, "infer.yolo").is_empty());
-        assert_eq!(
-            attribute(named(&spans, "session close")[0], "frames_failed"),
-            Some(1.into())
-        );
+        assert_eq!(attribute(named(&spans, "session close")[0], "frames_failed"), Some(1.into()));
     }
 
     /// One die lying still: the tracker settles a roll on frame `SETTLE_FRAMES + 1`.
     fn steady_die() -> Vec<Observation> {
         let mut probs = vec![0.005; 21];
         probs[16] = 0.9;
-        vec![Observation {
-            bbox: [0.4, 0.4, 0.5, 0.5],
-            probs,
-        }]
+        vec![Observation { bbox: [0.4, 0.4, 0.5, 0.5], probs }]
     }
 
     /// Feeds `frames` frames of a steady die through the tracker and the session, and
@@ -671,10 +579,7 @@ pub mod tests {
             session.took(seq);
             let roll = tracker.update(&steady_die(), seq);
             let outcome = match &roll {
-                Some(roll) => Outcome::Roll {
-                    detections: 1,
-                    roll,
-                },
+                Some(roll) => Outcome::Roll { detections: 1, roll },
                 None => Outcome::Frame { detections: 1 },
             };
             if let Some(unit) = session.frame(seq, &times, outcome) {
@@ -737,20 +642,10 @@ pub mod tests {
         session.close(Instant::now(), 8, "client");
 
         let spans = exporter.get_finished_spans().unwrap();
-        let traced: Vec<_> = named(&spans, "frame.infer")
-            .iter()
-            .map(|s| attribute(s, "frame_seq").unwrap())
-            .collect();
+        let traced: Vec<_> = named(&spans, "frame.infer").iter().map(|s| attribute(s, "frame_seq").unwrap()).collect();
         assert_eq!(traced, vec![2.into(), 4.into(), 7.into()]);
-        assert!(
-            named(&spans, "frame.infer")
-                .iter()
-                .all(|s| s.status == Status::error("decode: bad image"))
-        );
-        assert_eq!(
-            attribute(named(&spans, "session close")[0], "frames_failed"),
-            Some(6.into())
-        );
+        assert!(named(&spans, "frame.infer").iter().all(|s| s.status == Status::error("decode: bad image")));
+        assert_eq!(attribute(named(&spans, "session close")[0], "frames_failed"), Some(6.into()));
     }
 
     #[test]
@@ -758,21 +653,10 @@ pub mod tests {
         let (tracer, exporter) = in_memory(0);
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
         let mut tracker = RollTracker::new(0.7, class_value);
-        let roll = (1..=10)
-            .find_map(|now| tracker.update(&steady_die(), now))
-            .unwrap();
+        let roll = (1..=10).find_map(|now| tracker.update(&steady_die(), now)).unwrap();
         let times = times(Instant::now());
 
-        let mut unit = session
-            .frame(
-                6,
-                &times,
-                Outcome::Roll {
-                    detections: 1,
-                    roll: &roll,
-                },
-            )
-            .unwrap();
+        let mut unit = session.frame(6, &times, Outcome::Roll { detections: 1, roll: &roll }).unwrap();
         let traceparent = unit.roll_send(&roll.roll_id).unwrap();
         let send_started = Instant::now();
         unit.sent(send_started, Instant::now(), true);
@@ -781,33 +665,15 @@ pub mod tests {
         let settle = named(&spans, "roll.settle")[0];
         // The message names its send span: a PRODUCER under roll.settle, begun before the
         // send and ended with it.
-        let [send] = named(&spans, "ws.send")[..] else {
-            panic!("one ws.send span")
-        };
-        assert_eq!(
-            traceparent,
-            format!(
-                "00-{}-{}-01",
-                settle.span_context.trace_id(),
-                send.span_context.span_id()
-            )
-        );
+        let [send] = named(&spans, "ws.send")[..] else { panic!("one ws.send span") };
+        assert_eq!(traceparent, format!("00-{}-{}-01", settle.span_context.trace_id(), send.span_context.span_id()));
         assert_eq!(send.span_kind, SpanKind::Producer);
         assert_eq!(send.parent_span_id, settle.span_context.span_id());
-        assert_eq!(
-            attribute(send, "messaging.operation.type"),
-            Some("send".into())
-        );
-        assert_eq!(
-            attribute(send, "messaging.message.id"),
-            Some(roll.roll_id.clone().into())
-        );
+        assert_eq!(attribute(send, "messaging.operation.type"), Some("send".into()));
+        assert_eq!(attribute(send, "messaging.message.id"), Some(roll.roll_id.clone().into()));
         assert!(settle.start_time <= send.start_time && send.start_time <= send.end_time);
         assert_eq!(send.end_time, settle.end_time);
-        assert_eq!(
-            attribute(settle, "roll.id"),
-            Some(roll.roll_id.clone().into())
-        );
+        assert_eq!(attribute(settle, "roll.id"), Some(roll.roll_id.clone().into()));
         assert_eq!(attribute(settle, "roll.dice"), Some(1.into()));
         assert_eq!(attribute(settle, "roll.complete"), Some(true.into()));
     }
@@ -817,27 +683,13 @@ pub mod tests {
         let (tracer, exporter) = in_memory(0);
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
         let mut tracker = RollTracker::new(0.7, class_value);
-        let roll = (1..=10)
-            .find_map(|now| tracker.update(&steady_die(), now))
-            .unwrap();
-        let mut unit = session
-            .frame(
-                6,
-                &times(Instant::now()),
-                Outcome::Roll {
-                    detections: 1,
-                    roll: &roll,
-                },
-            )
-            .unwrap();
+        let roll = (1..=10).find_map(|now| tracker.update(&steady_die(), now)).unwrap();
+        let mut unit = session.frame(6, &times(Instant::now()), Outcome::Roll { detections: 1, roll: &roll }).unwrap();
         unit.roll_send(&roll.roll_id).unwrap();
         drop(unit);
 
         let spans = exporter.get_finished_spans().unwrap();
-        assert_eq!(
-            named(&spans, "ws.send")[0].status,
-            Status::error("send interrupted")
-        );
+        assert_eq!(named(&spans, "ws.send")[0].status, Status::error("send interrupted"));
     }
 
     #[test]
@@ -845,9 +697,7 @@ pub mod tests {
         let noop = BoxedTracer::new(Box::new(opentelemetry::trace::noop::NoopTracer::new()));
         let tracer = Arc::new(UnitTracer::new(noop, 1));
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
-        let mut unit = session
-            .frame(1, &times(Instant::now()), Outcome::Frame { detections: 0 })
-            .unwrap();
+        let mut unit = session.frame(1, &times(Instant::now()), Outcome::Frame { detections: 0 }).unwrap();
         assert_eq!(unit.roll_send("r1"), None);
     }
 
@@ -861,10 +711,7 @@ pub mod tests {
         for seq in 1..=3 {
             let times = times(Instant::now());
             session.took(seq);
-            session
-                .frame(seq, &times, Outcome::Frame { detections: 0 })
-                .unwrap()
-                .sent(times.done, times.done, true);
+            session.frame(seq, &times, Outcome::Frame { detections: 0 }).unwrap().sent(times.done, times.done, true);
         }
         let close_started = Instant::now();
         session.close(close_started, 3, "client");
@@ -889,33 +736,18 @@ pub mod tests {
             assert_eq!(attribute(span, "session.id"), attribute(open, "session.id"));
             assert_eq!(attribute(span, "model"), Some("dice-head-v1".into()));
         }
-        assert_eq!(
-            attribute(open, "session.kind"),
-            Some("arcane.ws_connection".into())
-        );
-        assert_eq!(
-            attribute(close, "session.kind"),
-            Some("arcane.ws_connection".into())
-        );
-        assert_eq!(
-            attribute(close, "session.close_reason"),
-            Some("client".into())
-        );
+        assert_eq!(attribute(open, "session.kind"), Some("arcane.ws_connection".into()));
+        assert_eq!(attribute(close, "session.kind"), Some("arcane.ws_connection".into()));
+        assert_eq!(attribute(close, "session.close_reason"), Some("client".into()));
         let duration = close_started.duration_since(accept_started).as_millis() as i64;
         match attribute(close, "session.duration_ms") {
             // Counted from the end of the handshake, so at most the whole time.
-            Some(opentelemetry::Value::I64(ms)) => {
-                assert!((0..=duration).contains(&ms), "{ms} of {duration}")
-            }
+            Some(opentelemetry::Value::I64(ms)) => assert!((0..=duration).contains(&ms), "{ms} of {duration}"),
             other => panic!("session.duration_ms: {other:?}"),
         }
-        for (key, value) in [
-            ("frames_received", 3),
-            ("frames_inferred", 3),
-            ("frames_traced", 3),
-            ("frames_dropped", 0),
-            ("rolls", 0),
-        ] {
+        for (key, value) in
+            [("frames_received", 3), ("frames_inferred", 3), ("frames_traced", 3), ("frames_dropped", 0), ("rolls", 0)]
+        {
             assert_eq!(attribute(close, key), Some(value.into()), "{key}");
         }
     }
@@ -927,10 +759,7 @@ pub mod tests {
         let infer = |session: &mut SessionTrace, seq| {
             let times = times(Instant::now());
             session.took(seq);
-            session
-                .frame(seq, &times, Outcome::Frame { detections: 0 })
-                .unwrap()
-                .sent(times.done, times.done, true);
+            session.frame(seq, &times, Outcome::Frame { detections: 0 }).unwrap().sent(times.done, times.done, true);
         };
 
         infer(&mut session, 1);
@@ -944,19 +773,13 @@ pub mod tests {
 
         let spans = exporter.get_finished_spans().unwrap();
         let frames = named(&spans, "frame.infer");
-        let dropped: Vec<_> = frames
-            .iter()
-            .map(|s| attribute(s, "frames_dropped").unwrap())
-            .collect();
+        let dropped: Vec<_> = frames.iter().map(|s| attribute(s, "frames_dropped").unwrap()).collect();
         assert_eq!(dropped, vec![0.into(), 3.into(), 0.into()]);
         let events: Vec<_> = frames.iter().map(|s| s.events.events.len()).collect();
         assert_eq!(events, vec![0, 1, 0]);
         let event = &frames[1].events.events[0];
         assert_eq!(event.name, "frames_dropped");
-        assert_eq!(
-            event.attributes,
-            vec![KeyValue::new("superseded", 2), KeyValue::new("refused", 1)]
-        );
+        assert_eq!(event.attributes, vec![KeyValue::new("superseded", 2), KeyValue::new("refused", 1)]);
 
         let close = named(&spans, "session close")[0];
         for (key, value) in [

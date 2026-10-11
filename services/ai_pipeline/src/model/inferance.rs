@@ -4,9 +4,9 @@ use std::time::Instant;
 
 use burn::module::{ModuleMapper, Param};
 use burn::prelude::Backend;
+use serde::Serialize;
 use burn::tensor::activation::softmax;
 use burn::tensor::{DType, Tensor, TensorData};
-use serde::Serialize;
 
 use crate::model::resnet::ResNet18Head;
 
@@ -40,14 +40,9 @@ fn gpu_model() -> Option<String> {
 /// The `Model:` of a card's /proc `information`, if the card's `GPU UUID:` is `uuid`.
 fn model_of(information: &str, uuid: &str) -> Option<String> {
     let field = |name: &str| {
-        information
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .map(|value| value.trim().to_string())
+        information.lines().find_map(|line| line.strip_prefix(name)).map(|value| value.trim().to_string())
     };
-    (field("GPU UUID:")? == uuid)
-        .then(|| field("Model:"))
-        .flatten()
+    (field("GPU UUID:")? == uuid).then(|| field("Model:")).flatten()
 }
 
 /// Whether half precision pays on this card. RTX cards have tensor cores, which are
@@ -81,10 +76,8 @@ impl Yolo {
         let precision = if fp16.is_some() { "fp16" } else { "fp32" };
         let path = fp16.unwrap_or_else(yolo_onnx_path);
         tracing::info!(gpu = card.as_deref().unwrap_or("unknown"), precision, model = %path, "loading YOLO");
-        let context =
-            |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("YOLO ({path}): {what}: {e}");
-        let mut builder =
-            ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
+        let context = |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("YOLO ({path}): {what}: {e}");
+        let mut builder = ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
         // Outside the test build the GPU provider is always required.
         if gpu || !cfg!(test) {
             let cuda = ort::ep::CUDA::default()
@@ -92,16 +85,10 @@ impl Yolo {
                 .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
                 .build()
                 .error_on_failure();
-            builder = builder
-                .with_execution_providers([cuda])
-                .map_err(|e| context("CUDA provider", &e))?;
+            builder = builder.with_execution_providers([cuda]).map_err(|e| context("CUDA provider", &e))?;
         }
-        let session = builder
-            .commit_from_file(&path)
-            .map_err(|e| context("loading the model", &e))?;
-        Ok(Self {
-            session: Mutex::new(session),
-        })
+        let session = builder.commit_from_file(&path).map_err(|e| context("loading the model", &e))?;
+        Ok(Self { session: Mutex::new(session) })
     }
 
     /// `input` is the letterboxed frame, [1, 3, 640, 640]. Returns the [1, 300, 6] output:
@@ -111,9 +98,7 @@ impl Yolo {
             .expect("the letterboxed frame has the model's input shape");
         let mut session = self.session.lock().unwrap();
         let outputs = session.run(ort::inputs![input]).expect("YOLO forward pass");
-        let (_, raw) = outputs[0]
-            .try_extract_tensor::<f32>()
-            .expect("YOLO's output is f32");
+        let (_, raw) = outputs[0].try_extract_tensor::<f32>().expect("YOLO's output is f32");
         raw.to_vec()
     }
 }
@@ -142,8 +127,8 @@ pub const DEFAULT_DICE_THRESHOLD: f32 = 0.70;
 /// Order matches obj.names: 1..9, 0, 10..20.
 pub fn class_value(class: usize) -> &'static str {
     const VALUES: [&str; 21] = [
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "10", "11", "12", "13", "14", "15", "16",
-        "17", "18", "19", "20",
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "10", "11", "12", "13", "14", "15",
+        "16", "17", "18", "19", "20",
     ];
     VALUES.get(class).copied().unwrap_or("?")
 }
@@ -218,25 +203,13 @@ impl<B: Backend> DicePipeline<B> {
     pub fn new(device: B::Device, head_path: &Path, dice_threshold: f32) -> anyhow::Result<Self> {
         let yolo = Yolo::load()?;
         let head = ResNet18Head::<B>::load(head_path, &device)?;
-        Ok(Self {
-            yolo,
-            head: Some(head),
-            device,
-            conf_threshold: DEFAULT_CONF,
-            dice_threshold,
-        })
+        Ok(Self { yolo, head: Some(head), device, conf_threshold: DEFAULT_CONF, dice_threshold })
     }
 
     /// Load only the YOLO detector for offline crop export, where no classification is performed.
     pub fn yolo_only(device: B::Device, conf_threshold: f32) -> Self {
         let yolo = Yolo::load().unwrap_or_else(|e| panic!("{e:#}"));
-        Self {
-            yolo,
-            head: None,
-            device,
-            conf_threshold,
-            dice_threshold: DEFAULT_DICE_THRESHOLD,
-        }
+        Self { yolo, head: None, device, conf_threshold, dice_threshold: DEFAULT_DICE_THRESHOLD }
     }
 
     /// Runs both models once on a blank frame, as `infer_frame` would for `WARM_UP_DICE`
@@ -249,9 +222,8 @@ impl<B: Backend> DicePipeline<B> {
         self.detect_boxes(&blank);
         let Some(head) = &self.head else { return };
         for dice in WARM_UP_DICE {
-            let crops: Vec<Tensor<B, 4>> = (0..dice)
-                .map(|_| crop_for_head::<B>(&blank, 0.4, 0.4, 0.6, 0.6, &self.device))
-                .collect();
+            let crops: Vec<Tensor<B, 4>> =
+                (0..dice).map(|_| crop_for_head::<B>(&blank, 0.4, 0.4, 0.6, 0.6, &self.device)).collect();
             softmax(head.forward(Tensor::cat(crops, 0)), 1).into_data();
         }
     }
@@ -261,17 +233,9 @@ impl<B: Backend> DicePipeline<B> {
     /// `rgb` is packed R,G,B bytes in row-major (HWC) order — the format produced
     /// by most webcam APIs and image libraries. Length must equal `width * height * 3`.
     /// Also returns when each stage finished.
-    pub fn infer_frame(
-        &self,
-        rgb: &[u8],
-        width: usize,
-        height: usize,
-    ) -> (Vec<Detection>, StageEnds) {
+    pub fn infer_frame(&self, rgb: &[u8], width: usize, height: usize) -> (Vec<Detection>, StageEnds) {
         assert_eq!(rgb.len(), width * height * 3, "rgb buffer length mismatch");
-        let head = self
-            .head
-            .as_ref()
-            .expect("infer_frame needs a head (not yolo_only)");
+        let head = self.head.as_ref().expect("infer_frame needs a head (not yolo_only)");
 
         // Wrap bytes once for per-detection cropping later.
         let img = image::RgbImage::from_raw(width as u32, height as u32, rgb.to_vec())
@@ -280,15 +244,7 @@ impl<B: Backend> DicePipeline<B> {
         let (boxes, prepare_end) = self.detect_boxes_timed(&img);
         let yolo_end = Instant::now();
         if boxes.is_empty() {
-            return (
-                Vec::new(),
-                StageEnds {
-                    prepare: prepare_end,
-                    yolo: yolo_end,
-                    crop: None,
-                    head: None,
-                },
-            );
+            return (Vec::new(), StageEnds { prepare: prepare_end, yolo: yolo_end, crop: None, head: None });
         }
         // Crop via the shared margin-aware path (train == serve), then classify all at once.
         let crops: Vec<Tensor<B, 4>> = boxes
@@ -328,12 +284,8 @@ impl<B: Backend> DicePipeline<B> {
                 }
             })
             .collect();
-        let stages = StageEnds {
-            prepare: prepare_end,
-            yolo: yolo_end,
-            crop: Some(crop_end),
-            head: Some(head_end),
-        };
+        let stages =
+            StageEnds { prepare: prepare_end, yolo: yolo_end, crop: Some(crop_end), head: Some(head_end) };
         (detections, stages)
     }
 
@@ -370,14 +322,7 @@ impl<B: Backend> DicePipeline<B> {
             if x2 <= x1 || y2 <= y1 {
                 continue;
             }
-            boxes.push(BoxDet {
-                x1,
-                y1,
-                x2,
-                y2,
-                conf,
-                class: row[5] as u32,
-            });
+            boxes.push(BoxDet { x1, y1, x2, y2, conf, class: row[5] as u32 });
         }
         (suppress_duplicates(boxes), prepare_end)
     }
@@ -453,7 +398,8 @@ fn letterbox_to_chw(img: &image::RgbImage) -> (Vec<f32>, Letterbox) {
     let pad_x = (side - nw) / 2;
     let pad_y = (side - nh) / 2;
 
-    let resized = image::imageops::resize(img, nw, nh, image::imageops::FilterType::Triangle);
+    let resized =
+        image::imageops::resize(img, nw, nh, image::imageops::FilterType::Triangle);
 
     // The grey canvas, then the resized frame's rows written straight into each plane.
     let plane = YOLO_INPUT * YOLO_INPUT;
@@ -644,9 +590,7 @@ pub fn export_yolo_crops<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BoxDet, YOLO_INPUT, Yolo, has_tensor_cores, letterbox_to_chw, model_of, suppress_duplicates,
-    };
+    use super::{BoxDet, YOLO_INPUT, Yolo, has_tensor_cores, letterbox_to_chw, model_of, suppress_duplicates};
 
     /// eta's two cards, as the driver lists them in /proc/driver/nvidia/gpus/*/information.
     const RTX_2060: &str = "Model: \t\t NVIDIA GeForce RTX 2060 SUPER\nIRQ:   \t\t 136\nGPU UUID: \t GPU-4061671a-fa52-81d1-d007-ce786b0e13de\nVideo BIOS: \t 90.06.44.80.56\n";
@@ -654,11 +598,7 @@ mod tests {
 
     #[test]
     fn the_card_the_container_was_given_decides_the_precision() {
-        let model = |uuid| {
-            [RTX_2060, GTX_1660]
-                .iter()
-                .find_map(|information| model_of(information, uuid))
-        };
+        let model = |uuid| [RTX_2060, GTX_1660].iter().find_map(|information| model_of(information, uuid));
 
         let rtx = model("GPU-4061671a-fa52-81d1-d007-ce786b0e13de").unwrap();
         assert_eq!(rtx, "NVIDIA GeForce RTX 2060 SUPER");
@@ -679,24 +619,12 @@ mod tests {
         assert_eq!(data.len(), 3 * YOLO_INPUT * YOLO_INPUT);
         assert_eq!((lb.scale, lb.pad_x, lb.pad_y), (0.5, 0.0, 140.0));
 
-        let at = |plane: usize, y: usize, x: usize| {
-            data[plane * YOLO_INPUT * YOLO_INPUT + y * YOLO_INPUT + x]
-        };
+        let at = |plane: usize, y: usize, x: usize| data[plane * YOLO_INPUT * YOLO_INPUT + y * YOLO_INPUT + x];
         let grey = 114.0 / 255.0;
         // 360 rows of frame, with 140 grey rows above and below.
-        for (y, pixel) in [
-            (0, [grey; 3]),
-            (139, [grey; 3]),
-            (140, [1.0, 0.0, 0.2]),
-            (499, [1.0, 0.0, 0.2]),
-            (500, [grey; 3]),
-        ] {
+        for (y, pixel) in [(0, [grey; 3]), (139, [grey; 3]), (140, [1.0, 0.0, 0.2]), (499, [1.0, 0.0, 0.2]), (500, [grey; 3])] {
             for x in [0, 320, 639] {
-                assert_eq!(
-                    [at(0, y, x), at(1, y, x), at(2, y, x)],
-                    pixel,
-                    "row {y}, column {x}"
-                );
+                assert_eq!([at(0, y, x), at(1, y, x), at(2, y, x)], pixel, "row {y}, column {x}");
             }
         }
     }
@@ -710,27 +638,12 @@ mod tests {
         let blank = image::RgbImage::from_pixel(640, 480, image::Rgb([114, 114, 114]));
         let raw = yolo.forward(letterbox_to_chw(&blank).0);
         assert_eq!(raw.len(), 300 * 6);
-        let most_confident = raw
-            .as_chunks::<6>()
-            .0
-            .iter()
-            .map(|row| row[4])
-            .fold(0.0, f32::max);
-        assert!(
-            most_confident < super::DEFAULT_CONF,
-            "a die at {most_confident} in a blank frame"
-        );
+        let most_confident = raw.as_chunks::<6>().0.iter().map(|row| row[4]).fold(0.0, f32::max);
+        assert!(most_confident < super::DEFAULT_CONF, "a die at {most_confident} in a blank frame");
     }
 
     fn b(x1: f32, conf: f32) -> BoxDet {
-        BoxDet {
-            x1,
-            y1: 0.4,
-            x2: x1 + 0.06,
-            y2: 0.55,
-            conf,
-            class: 0,
-        }
+        BoxDet { x1, y1: 0.4, x2: x1 + 0.06, y2: 0.55, conf, class: 0 }
     }
 
     #[test]
@@ -742,9 +655,6 @@ mod tests {
 
     #[test]
     fn neighbouring_dice_are_kept() {
-        assert_eq!(
-            suppress_duplicates(vec![b(0.20, 0.9), b(0.27, 0.9)]).len(),
-            2
-        );
+        assert_eq!(suppress_duplicates(vec![b(0.20, 0.9), b(0.27, 0.9)]).len(), 2);
     }
 }

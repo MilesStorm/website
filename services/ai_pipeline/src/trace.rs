@@ -22,18 +22,12 @@ pub struct Carried<T> {
 impl<T> Carried<T> {
     /// Wraps `msg` with the sender's current context.
     pub fn new(msg: T) -> Self {
-        Self {
-            cx: Context::current(),
-            msg,
-        }
+        Self { cx: Context::current(), msg }
     }
 
     /// The same context around another message, for passing work on to the next queue.
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Carried<U> {
-        Carried {
-            cx: self.cx,
-            msg: f(self.msg),
-        }
+        Carried { cx: self.cx, msg: f(self.msg) }
     }
 
     /// Makes the sender's context current on this thread until the guard is dropped.
@@ -44,10 +38,7 @@ impl<T> Carried<T> {
 }
 
 /// A bounded queue whose messages carry their sender's context.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "trace::channel is the Carried queue constructor"
-)]
+#[allow(clippy::disallowed_methods, reason = "trace::channel is the Carried queue constructor")]
 pub fn channel<T>(bound: usize) -> (mpsc::Sender<Carried<T>>, mpsc::Receiver<Carried<T>>) {
     mpsc::channel(bound)
 }
@@ -56,10 +47,7 @@ pub fn channel<T>(bound: usize) -> (mpsc::Sender<Carried<T>>, mpsc::Receiver<Car
 pub type Slot<T> = Option<Carried<T>>;
 
 /// A newest-wins slot whose value carries its sender's context.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "trace::watch_channel is the Carried slot constructor"
-)]
+#[allow(clippy::disallowed_methods, reason = "trace::watch_channel is the Carried slot constructor")]
 pub fn watch_channel<T>() -> (watch::Sender<Slot<T>>, watch::Receiver<Slot<T>>) {
     watch::channel(None)
 }
@@ -67,10 +55,7 @@ pub fn watch_channel<T>() -> (watch::Sender<Slot<T>>, watch::Receiver<Slot<T>>) 
 /// Spawns a task that lives as long as a connection or the process: `reason` says why.
 /// It gets no span of its own, which would stay open and unexported for the task's whole
 /// life; each unit of work inside it makes its own trace (`unit_trace.rs`).
-#[allow(
-    clippy::disallowed_methods,
-    reason = "trace::spawn_loop is the long-lived task spawner"
-)]
+#[allow(clippy::disallowed_methods, reason = "trace::spawn_loop is the long-lived task spawner")]
 pub fn spawn_loop<F>(reason: &'static str, fut: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
@@ -82,9 +67,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use opentelemetry::trace::{
-        SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState,
-    };
+    use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState};
 
     use super::*;
 
@@ -110,10 +93,7 @@ mod tests {
             tx.try_send(Carried::new(7)).ok().unwrap();
         }
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "test: a plain thread stands in for the inference thread"
-        )]
+        #[allow(clippy::disallowed_methods, reason = "test: a plain thread stands in for the inference thread")]
         let receiver = std::thread::spawn(move || {
             assert!(!Context::current().has_active_span());
             let (guard, msg) = rx.blocking_recv().unwrap().enter();
@@ -160,8 +140,7 @@ mod tests {
         /// `source` without whitespace and with each string literal replaced by its number
         /// (`"0"`, `"1"`, ...), and the literals: attribute syntax, however it is laid out.
         fn syntax_only(source: &str) -> (String, Vec<String>) {
-            let (mut out, mut strings, mut current, mut escaped) =
-                (String::new(), Vec::new(), None::<String>, false);
+            let (mut out, mut strings, mut current, mut escaped) = (String::new(), Vec::new(), None::<String>, false);
             // A quote as a character literal opens no string.
             for c in source.replace(concat!("'", "\"", "'"), "").chars() {
                 match &mut current {
@@ -201,56 +180,29 @@ mod tests {
         let mut found = Vec::new();
         for path in files {
             let source = std::fs::read_to_string(&path).unwrap();
-            let file = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
+            let file = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
             // An allow wide enough to cover the bans without naming them (`disallowed_*` are
             // in `clippy::style`) is an exception too: listed, with its reason.
             let (syntax, strings) = syntax_only(&source);
             for opener in [concat!("al", "low("), concat!("exp", "ect(")] {
                 for (at, _) in syntax.match_indices(opener) {
-                    let group = syntax[at + opener.len()..]
-                        .split(')')
-                        .next()
-                        .unwrap_or_default();
+                    let group = syntax[at + opener.len()..].split(')').next().unwrap_or_default();
                     let reason = group
                         .split(',')
-                        .find_map(|part| {
-                            part.strip_prefix("reason=\"")?
-                                .strip_suffix('"')?
-                                .parse::<usize>()
-                                .ok()
-                        })
+                        .find_map(|part| part.strip_prefix("reason=\"")?.strip_suffix('"')?.parse::<usize>().ok())
                         .map(|n| strings[n].clone());
                     for lint in group.split(',') {
-                        if [
-                            concat!("warn", "ings"),
-                            concat!("clippy::", "all"),
-                            concat!("clippy::", "style"),
-                        ]
-                        .contains(&lint)
-                        {
+                        if [concat!("warn", "ings"), concat!("clippy::", "all"), concat!("clippy::", "style")].contains(&lint) {
                             let reason = reason.clone().unwrap_or_else(|| panic!("{file}: allowing `{lint}` turns the bans off: it needs a reason"));
-                            found.push(Entry {
-                                file: file.clone(),
-                                lint: lint.to_string(),
-                                reason,
-                            });
+                            found.push(Entry { file: file.clone(), lint: lint.to_string(), reason });
                         }
                     }
                 }
             }
             for (at, _) in source.match_indices(marker) {
-                let attr_start = source[..at]
-                    .rfind("#[")
-                    .unwrap_or_else(|| panic!("{file}: {marker} outside an attribute"));
+                let attr_start = source[..at].rfind("#[").unwrap_or_else(|| panic!("{file}: {marker} outside an attribute"));
                 let attr = &source[attr_start..];
-                let attr = &attr[..attr
-                    .find(")]")
-                    .unwrap_or_else(|| panic!("{file}: unterminated attribute"))
-                    + 2];
+                let attr = &attr[..attr.find(")]").unwrap_or_else(|| panic!("{file}: unterminated attribute")) + 2];
                 assert!(
                     attr.starts_with("#[allow(") || attr.starts_with("#[expect("),
                     "{file}: {marker} must sit in an #[allow] or #[expect] on the item or statement: {attr}"
@@ -265,35 +217,20 @@ mod tests {
                     .unwrap_or_else(|| panic!("{file}: {attr} needs a reason"))
                     .0
                     .to_string();
-                found.push(Entry {
-                    file: file.clone(),
-                    lint,
-                    reason,
-                });
+                found.push(Entry { file: file.clone(), lint, reason });
             }
         }
         found.sort();
 
         let registry: Registry =
-            toml::from_str(&std::fs::read_to_string(root.join("allowed_raw_io.toml")).unwrap())
-                .unwrap();
+            toml::from_str(&std::fs::read_to_string(root.join("allowed_raw_io.toml")).unwrap()).unwrap();
         let mut registered = registry.allow;
         registered.sort();
 
-        assert_eq!(
-            found, registered,
-            "left: #[allow] sites in the source, right: allowed_raw_io.toml"
-        );
+        assert_eq!(found, registered, "left: #[allow] sites in the source, right: allowed_raw_io.toml");
 
         // However the attribute is written.
-        let (syntax, strings) =
-            syntax_only("#[cfg_attr(test, allow(clippy :: all, reason = \"a (b)\") ) ]");
-        assert_eq!(
-            (syntax.as_str(), &strings[..]),
-            (
-                "#[cfg_attr(test,allow(clippy::all,reason=\"0\"))]",
-                &["a (b)".to_string()][..]
-            )
-        );
+        let (syntax, strings) = syntax_only("#[cfg_attr(test, allow(clippy :: all, reason = \"a (b)\") ) ]");
+        assert_eq!((syntax.as_str(), &strings[..]), ("#[cfg_attr(test,allow(clippy::all,reason=\"0\"))]", &["a (b)".to_string()][..]));
     }
 }

@@ -98,11 +98,7 @@ pub fn load_overrides(path: &Path) -> Result<HashMap<String, Override>> {
             continue;
         }
         let Some((key, action)) = line.split_once('\t') else {
-            anyhow::bail!(
-                "{}:{}: expected `<folder>/<stem>\\t<drop|value>`",
-                path.display(),
-                n + 1
-            );
+            anyhow::bail!("{}:{}: expected `<folder>/<stem>\\t<drop|value>`", path.display(), n + 1);
         };
         let (key, action) = (key.trim(), action.split('#').next().unwrap_or("").trim());
         let action = match action {
@@ -163,13 +159,8 @@ fn sequence_key(stem: &str) -> SeqKey {
     }
 
     let scene = s.trim_end_matches(|c: char| c.is_ascii_digit());
-    if scene.starts_with('d')
-        && let Ok(frame) = s[scene.len()..].parse::<u32>()
-    {
-        return SeqKey::Frame {
-            scene: scene.to_string(),
-            frame,
-        };
+    if scene.starts_with('d') && let Ok(frame) = s[scene.len()..].parse::<u32>() {
+        return SeqKey::Frame { scene: scene.to_string(), frame };
     }
     SeqKey::Fixed(s.to_string())
 }
@@ -241,10 +232,8 @@ pub fn load_dataset_folder<B: Backend>(
     pb.set_style(sty.clone());
 
     for (name, folder_label, class_path) in class_dirs {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(&class_path)?
-            .flatten()
-            .map(|e| e.path())
-            .collect();
+        let mut entries: Vec<PathBuf> =
+            std::fs::read_dir(&class_path)?.flatten().map(|e| e.path()).collect();
         entries.sort();
         let pb2 = m.add(ProgressBar::new(entries.len() as u64));
 
@@ -294,8 +283,10 @@ pub fn load_dataset_folder<B: Backend>(
                 TensorData::new(data, [1, 3, TARGET_SIZE, TARGET_SIZE]),
                 &device,
             );
-            let targets =
-                Tensor::<B, 1, Int>::from_data(TensorData::new(vec![label as i64], [1]), &device);
+            let targets = Tensor::<B, 1, Int>::from_data(
+                TensorData::new(vec![label as i64], [1]),
+                &device,
+            );
 
             samples.push(FolderSample {
                 key,
@@ -462,10 +453,7 @@ mod tests {
     use super::{SeqKey, group_frames, sequence_key};
 
     fn frame(scene: &str, frame: u32) -> SeqKey {
-        SeqKey::Frame {
-            scene: scene.into(),
-            frame,
-        }
+        SeqKey::Frame { scene: scene.into(), frame }
     }
 
     #[test]
@@ -478,9 +466,7 @@ mod tests {
     fn rolls_split_on_frame_gaps_not_fixed_buckets() {
         let f = |fr: u32, i: usize| ("19".to_string(), "d20_wood".to_string(), fr, i);
         let g: std::collections::HashMap<usize, String> =
-            group_frames(vec![f(724, 0), f(725, 1), f(728, 2), f(740, 3)])
-                .into_iter()
-                .collect();
+            group_frames(vec![f(724, 0), f(725, 1), f(728, 2), f(740, 3)]).into_iter().collect();
         assert_eq!(g[&0], g[&1]); // 724/725 straddled the old /25 bucket edge
         assert_eq!(g[&1], g[&2]); // gap 3 is still the same roll
         assert_ne!(g[&2], g[&3]); // gap 12 starts a new roll
@@ -492,10 +478,7 @@ mod tests {
             sequence_key("7IMG_20240306_151612_10"),
             sequence_key("7IMG_20240306_151612")
         );
-        assert_eq!(
-            sequence_key("IMG_20240306_151612"),
-            SeqKey::Fixed("IMG_20240306_1516".into())
-        );
+        assert_eq!(sequence_key("IMG_20240306_151612"), SeqKey::Fixed("IMG_20240306_1516".into()));
     }
 
     #[test]
@@ -510,9 +493,6 @@ mod tests {
 
     #[test]
     fn unknown_names_are_their_own_group() {
-        assert_eq!(
-            sequence_key("Pasted image (3)"),
-            SeqKey::Fixed("Pasted image (3)".into())
-        );
+        assert_eq!(sequence_key("Pasted image (3)"), SeqKey::Fixed("Pasted image (3)".into()));
     }
 }
