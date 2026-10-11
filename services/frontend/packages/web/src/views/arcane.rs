@@ -111,10 +111,18 @@ fn ArcaneIsland() -> Element {
     let server_error = use_signal(|| Option::<String>::None);
     let debug_text = use_signal(String::new);
     let last_roll = use_signal(|| Option::<String>::None);
+    let page_timings = use_signal(String::new);
 
     use_coroutine(move |_: UnboundedReceiver<()>| async move {
         #[cfg(target_arch = "wasm32")]
-        run_arcane(ws_state, frame_ms, debug_mode, detect_count, server_error, debug_text, last_roll).await;
+        run_arcane(
+            ws_state,
+            debug_mode,
+            server_error,
+            last_roll,
+            DebugReadout { frame_ms, detect_count, debug_text, page_timings },
+        )
+        .await;
     });
 
     rsx! {
@@ -191,6 +199,8 @@ fn ArcaneIsland() -> Element {
                         span { class: "font-bold tabular-nums", "{frame_ms()}ms" }
                         span { class: "text-base-content/50", "detections" }
                         span { class: "font-bold tabular-nums", "{detect_count()}" }
+                        // Where a frame's time goes on this side: see `PageTimings`.
+                        span { class: "font-bold tabular-nums", "{page_timings()}" }
                         span { class: "text-base-content/50", "ws" }
                         span { class: "font-bold",
                             match ws_state() {
@@ -223,16 +233,24 @@ fn ArcaneIsland() -> Element {
 
 // ── WASM implementation ───────────────────────────────────────────────────────
 
+/// What the debug panel shows about the frames.
+#[cfg(target_arch = "wasm32")]
+struct DebugReadout {
+    frame_ms: Signal<u64>,
+    detect_count: Signal<usize>,
+    debug_text: Signal<String>,
+    page_timings: Signal<String>,
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn run_arcane(
     mut ws_state: Signal<WsState>,
-    frame_ms: Signal<u64>,
     debug_mode: Signal<bool>,
-    mut detect_count: Signal<usize>,
     mut server_error: Signal<Option<String>>,
-    mut debug_text: Signal<String>,
     mut last_roll: Signal<Option<String>>,
+    readout: DebugReadout,
 ) {
+    let DebugReadout { frame_ms, mut detect_count, mut debug_text, mut page_timings } = readout;
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
@@ -399,15 +417,21 @@ async fn run_arcane(
     let latest: Rc<RefCell<Option<InferResult>>> = Rc::new(RefCell::new(None));
     // True from sending a frame until the dice server has answered it.
     let awaiting_reply = Rc::new(Cell::new(false));
+    // When the frame now awaited was sent, and how long the last answer took to come.
+    let sent_at = Rc::new(Cell::new(0.0));
+    let reply_ms = Rc::new(Cell::new(0.0));
     {
         let latest = latest.clone();
         let awaiting_reply = awaiting_reply.clone();
+        let (sent_at, reply_ms) = (sent_at.clone(), reply_ms.clone());
         let mut frame_ms = frame_ms;
         let cb = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MessageEvent| {
             if let Some(text) = e.data().as_string() {
                 match serde_json::from_str::<ServerMsg>(&text) {
                     Ok(ServerMsg::Frame(result)) => {
-                        awaiting_reply.set(false);
+                        if awaiting_reply.replace(false) {
+                            reply_ms.set(js_sys::Date::now() - sent_at.get());
+                        }
                         frame_ms.set(result.frame_ms);
                         detect_count.set(result.detections.len());
                         server_error.set(None);
@@ -447,6 +471,7 @@ async fn run_arcane(
     // answered, so frames arrive as fast as it reads them and never queue up. (It keeps
     // only the newest frame, so sending faster would only waste the upload.)
     let mut last_sent = 0.0;
+    let mut timings = PageTimings::default();
     loop {
         // A frame the server dropped gets no answer: after REPLY_WAIT_MS, send anyway.
         let mut waited = 0;
@@ -470,6 +495,7 @@ async fn run_arcane(
             .draw_image_with_html_video_element(&video, 0.0, 0.0)
             .ok();
 
+        let encode_started = js_sys::Date::now();
         // Encode as JPEG and ship as binary. `toBlob` hands the bytes over as they are;
         // a data URL would have to be decoded from base64 again, on this thread.
         let encoded = JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
@@ -487,6 +513,11 @@ async fn run_arcane(
             if ws.ready_state() == WebSocket::OPEN && ws.send_with_blob(&blob).is_ok() {
                 awaiting_reply.set(true);
                 last_sent = js_sys::Date::now();
+                sent_at.set(last_sent);
+                timings.frame(last_sent, last_sent - encode_started, reply_ms.get(), blob.size());
+                if let Some(text) = timings.report(last_sent, vid_w, vid_h) {
+                    page_timings.set(text);
+                }
             }
         }
 
@@ -540,6 +571,51 @@ fn stop_tracks(stream: &web_sys::MediaStream) {
         if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
             track.stop();
         }
+    }
+}
+
+/// Where a frame's time goes on the page's side, averaged over a second and shown in the
+/// debug panel: frames sent a second, the time to encode one, the time from sending one
+/// to its answer (network both ways plus the dice server), and its size.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct PageTimings {
+    since: f64,
+    frames: f64,
+    encode_ms: f64,
+    reply_ms: f64,
+    bytes: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PageTimings {
+    /// Counts a frame sent at `now`. `reply_ms` is the answer time of the frame before it.
+    fn frame(&mut self, now: f64, encode_ms: f64, reply_ms: f64, bytes: f64) {
+        if self.frames == 0.0 {
+            self.since = now;
+        }
+        self.frames += 1.0;
+        self.encode_ms += encode_ms;
+        self.reply_ms += reply_ms;
+        self.bytes += bytes;
+    }
+
+    /// The averages as text once a second has passed, starting the next second.
+    fn report(&mut self, now: f64, width: u32, height: u32) -> Option<String> {
+        let elapsed = now - self.since;
+        if elapsed < 1000.0 {
+            return None;
+        }
+        let n = self.frames;
+        let text = format!(
+            "{:.1} fps · encode {:.0} ms · reply {:.0} ms · {width}x{height} {:.0} kB",
+            (n - 1.0) * 1000.0 / elapsed,
+            self.encode_ms / n,
+            self.reply_ms / n,
+            self.bytes / n / 1024.0,
+        );
+        *self = Self::default();
+        Some(text)
     }
 }
 
