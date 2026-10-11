@@ -228,10 +228,10 @@ async fn redeem<'e>(
 }
 
 /// Deletes codes that expired over a day ago (kept that long for the daily limit). One
-/// round; `Auth::server` runs it hourly.
-pub async fn clean_expired(db: Db) {
+/// round; `Auth::server` runs it hourly, on the raw pool (a background loop makes no spans).
+pub async fn clean_expired(db: impl sqlx::PgExecutor<'_>) {
     match sqlx::query("DELETE FROM email_tokens WHERE expires_at < NOW() - INTERVAL '1 day'")
-        .execute(&db)
+        .execute(db)
         .await
     {
         Ok(r) if r.rows_affected() > 0 => tracing::debug!(rows = r.rows_affected(), "expired email codes removed"),

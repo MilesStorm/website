@@ -143,50 +143,40 @@ impl Auth {
     pub async fn server(self) -> Result<(), Box<dyn std::error::Error>> {
         // peer.service="postgres" names the node in Tempo's service graph.
         let db: Db = sqlx_tracing::PoolBuilder::from(self.db.clone()).with_name("postgres").build();
-        let session_store = TracedStore::new(self.session_store, "postgres");
+        let session_store = TracedStore::new(self.session_store.clone(), "postgres");
 
-        // Background loops. Each round is a trace of its own (`trace::spawn`).
+        // Background loops run on the raw pool and store, so their rounds make no spans: a
+        // round with no request around it would be a root trace of its own every minute
+        // (TRACING.md). A failed round is a log line.
         trace::spawn_loop("session expiry", {
-            let session_store = session_store.clone();
+            let session_store = self.session_store.clone();
             async move {
                 loop {
-                    let session_store = session_store.clone();
-                    let round = trace::spawn("session.expire", None, async move {
-                        if let Err(e) = session_store.delete_expired().await {
-                            tracing::warn!(error = %e, "removing expired sessions failed");
-                        }
-                    });
-                    if let Err(e) = round.await {
-                        tracing::error!(error = %e, "removing expired sessions panicked");
+                    if let Err(e) = session_store.delete_expired().await {
+                        tracing::warn!(error = %e, "removing expired sessions failed");
                     }
                     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
                 }
             }
         });
         trace::spawn_loop("sessions gauge", {
-            let db = db.clone();
+            let db = self.db.clone();
             async move {
                 loop {
-                    if let Err(e) = trace::spawn("sessions.count", None, sync_sessions_gauge(db.clone())).await {
-                        tracing::error!(error = %e, "counting sessions panicked");
-                    }
+                    sync_sessions_gauge(&db).await;
                     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
                 }
             }
         });
         trace::spawn_loop("email code cleanup", {
-            let db = db.clone();
+            let db = self.db.clone();
             async move {
                 loop {
-                    let round = trace::spawn("email_code.clean_expired", None, account_email::clean_expired(db.clone()));
-                    if let Err(e) = round.await {
-                        tracing::error!(error = %e, "removing expired email codes panicked");
-                    }
+                    account_email::clean_expired(&db).await;
                     tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
                 }
             }
         });
-        // No rounds: it reads two counters in memory, no I/O and nothing to trace.
         trace::spawn_loop("pool gauges", poll_pool_metrics(self.db));
 
         let session_layer = SessionManagerLayer::new(session_store)
@@ -286,11 +276,11 @@ async fn poll_pool_metrics(db: sqlx::PgPool) {
 }
 
 /// One round of the sessions gauge.
-async fn sync_sessions_gauge(db: Db) {
+async fn sync_sessions_gauge(db: impl sqlx::PgExecutor<'_>) {
     let result = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM bff_tokens WHERE expires_at > NOW()",
     )
-    .fetch_one(&db)
+    .fetch_one(db)
     .await;
 
     match result {
