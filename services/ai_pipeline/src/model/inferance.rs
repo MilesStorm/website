@@ -23,9 +23,8 @@ fn yolo_onnx_path() -> String {
 /// (production 2026-10-11): it has a fixed cost per layer, and YOLO has hundreds.
 ///
 /// ONNX Runtime is loaded at run time from the library ORT_DYLIB_PATH names (the image
-/// ships Microsoft's CUDA 12 build). `YOLO_EP=cpu` runs it on the CPU, for a machine
-/// with no GPU; anything else fails at start if the GPU provider can't load, rather than
-/// serving slowly on the CPU without saying so.
+/// ships Microsoft's CUDA 12 build). It runs on the GPU or not at all: `load` fails if
+/// the CUDA provider can't load. Only the test build can run it on the CPU.
 struct Yolo {
     /// `run` needs `&mut`; one thread infers, so the lock is never contended.
     session: Mutex<ort::session::Session>,
@@ -33,10 +32,15 @@ struct Yolo {
 
 impl Yolo {
     fn load() -> anyhow::Result<Self> {
+        Self::load_on(true)
+    }
+
+    fn load_on(gpu: bool) -> anyhow::Result<Self> {
         let path = yolo_onnx_path();
         let context = |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("YOLO ({path}): {what}: {e}");
         let mut builder = ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
-        if std::env::var("YOLO_EP").as_deref() != Ok("cpu") {
+        // Outside the test build the GPU provider is always required.
+        if gpu || !cfg!(test) {
             let cuda = ort::ep::CUDA::default()
                 // Take what a run needs instead of doubling: the card is shared.
                 .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
@@ -567,11 +571,11 @@ mod tests {
     }
 
     /// The real model in ONNX Runtime, on the CPU. CI runs it (checks.yml downloads the
-    /// library): `ORT_DYLIB_PATH=<libonnxruntime.so> YOLO_EP=cpu cargo test -- --ignored yolo`.
+    /// library): `ORT_DYLIB_PATH=<libonnxruntime.so> cargo test -- --ignored yolo`.
     #[test]
-    #[ignore = "needs ONNX Runtime: set ORT_DYLIB_PATH and YOLO_EP=cpu"]
+    #[ignore = "needs ONNX Runtime: set ORT_DYLIB_PATH"]
     fn yolo_runs_in_onnx_runtime_and_finds_nothing_in_a_blank_frame() {
-        let yolo = Yolo::load().unwrap();
+        let yolo = Yolo::load_on(false).unwrap();
         let blank = image::RgbImage::from_pixel(640, 480, image::Rgb([114, 114, 114]));
         let raw = yolo.forward(letterbox_to_chw(&blank).0);
         assert_eq!(raw.len(), 300 * 6);

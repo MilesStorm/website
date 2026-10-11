@@ -76,4 +76,4 @@ jobs:
           curl -sSfL -o /tmp/onnxruntime.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.28.3/onnxruntime-linux-x64-1.28.3.tgz
           echo "db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c  /tmp/onnxruntime.tgz" | sha256sum -c
           mkdir /tmp/onnxruntime && tar -xzf /tmp/onnxruntime.tgz -C /tmp/onnxruntime --strip-components=1
-          ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so YOLO_EP=cpu cargo test -- --ignored yolo_runs
+          ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so cargo test -- --ignored yolo_runs
