@@ -365,7 +365,7 @@ fn letterbox_to_chw(img: &image::RgbImage) -> (Vec<f32>, Letterbox) {
     let (green, blue) = rest.split_at_mut(plane);
     for (y, row) in resized.as_raw().chunks_exact(nw as usize * 3).enumerate() {
         let at = (pad_y as usize + y) * YOLO_INPUT + pad_x as usize;
-        for (x, px) in row.chunks_exact(3).enumerate() {
+        for (x, px) in row.as_chunks::<3>().0.iter().enumerate() {
             red[at + x] = px[0] as f32 / 255.0;
             green[at + x] = px[1] as f32 / 255.0;
             blue[at + x] = px[2] as f32 / 255.0;
