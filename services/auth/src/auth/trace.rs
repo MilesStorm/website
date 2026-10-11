@@ -371,6 +371,7 @@ async fn in_task_span<F: Future>(span: tracing::Span, fut: F) -> F::Output {
 /// `link` when something caused it (`span.context().span().span_context()`). For work no
 /// request is waiting on and that isn't part of one: an iteration of a [`spawn_loop`].
 #[allow(clippy::disallowed_methods, reason = "the traced wrapper around tokio::spawn")]
+#[allow(dead_code, reason = "no job uses it today; the banned tokio::spawn points here (clippy.toml)")]
 pub fn spawn<F>(name: &'static str, link: Option<SpanContext>, fut: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
