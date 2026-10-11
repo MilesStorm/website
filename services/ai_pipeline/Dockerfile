@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04 AS chef
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04 AS chef
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -36,7 +36,9 @@ RUN cargo build --release
 RUN strip --strip-debug /app/target/release/dice_detector
 
 
-# ONNX Runtime, which runs YOLO: Microsoft's build for CUDA 12, pinned by SHA-256. The
+# ONNX Runtime, which runs YOLO: Microsoft's build for CUDA 12, pinned by SHA-256. It
+# needs a newer CUDA than 12.6 (libcudart's cudaLibrary* functions; 12.9.1 has them): check a new
+# version with `ldd -r libonnxruntime_providers_cuda.so` in the runtime image. The
 # TensorRT provider is left out (unused, and TensorRT itself isn't in the image).
 FROM chef AS onnxruntime
 ADD --checksum=sha256:4e16d2ec66521a24fe917bd848eb8ae3a9107cb8b4aec978fb2b3ab1a640fcb7 \
@@ -49,7 +51,7 @@ RUN mkdir -p /onnxruntime \
 # NVIDIA's runtime image: ONNX Runtime's CUDA provider needs cuDNN, cuBLAS and the
 # other CUDA libraries it ships, and burn's CUDA backend (the dice head) needs its NVRTC.
 # The GPU driver itself comes from the host through the NVIDIA container runtime.
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS runtime
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04 AS runtime
 # The base image's entrypoint only prints a licence banner into the logs.
 ENTRYPOINT []
 # The commit this image is built from (CI passes github.sha): `service.version` on traces and
