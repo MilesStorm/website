@@ -174,7 +174,6 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
         rust_files(&root.join("src"), &mut files);
-        files.push(root.join("build.rs"));
 
         // Split so this test's own source doesn't match.
         let marker = concat!("clippy::", "disallowed_");

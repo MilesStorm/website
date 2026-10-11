@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use burn::module::{ModuleMapper, Param};
@@ -7,14 +8,60 @@ use serde::Serialize;
 use burn::tensor::activation::softmax;
 use burn::tensor::{DType, Tensor, TensorData};
 
-use crate::model::{my_model, resnet::ResNet18Head};
+use crate::model::resnet::ResNet18Head;
 
-/// Compile-time fallback path to the YOLO burnpack produced by build.rs.
-/// Override at runtime with the YOLO_MODEL_PATH env var (required in Docker).
-const YOLO_BPK_DEFAULT: &str = concat!(env!("OUT_DIR"), "/model/yolo26s.bpk");
+/// The YOLO model in the source tree, for runs outside Docker. The image sets
+/// YOLO_ONNX_PATH to its copy.
+const YOLO_ONNX_DEFAULT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/model/yolo26s.onnx");
 
-fn yolo_bpk_path() -> String {
-    std::env::var("YOLO_MODEL_PATH").unwrap_or_else(|_| YOLO_BPK_DEFAULT.to_string())
+fn yolo_onnx_path() -> String {
+    std::env::var("YOLO_ONNX_PATH").unwrap_or_else(|_| YOLO_ONNX_DEFAULT.to_string())
+}
+
+/// The YOLO detector, run by ONNX Runtime on the GPU (its CUDA provider uses cuDNN).
+/// burn's CUDA backend ran the same model in ~100 ms a frame on a GTX 1660 SUPER
+/// (production 2026-10-11): it has a fixed cost per layer, and YOLO has hundreds.
+///
+/// ONNX Runtime is loaded at run time from the library ORT_DYLIB_PATH names (the image
+/// ships Microsoft's CUDA 12 build). It runs on the GPU or not at all: `load` fails if
+/// the CUDA provider can't load. Only the test build can run it on the CPU.
+struct Yolo {
+    /// `run` needs `&mut`; one thread infers, so the lock is never contended.
+    session: Mutex<ort::session::Session>,
+}
+
+impl Yolo {
+    fn load() -> anyhow::Result<Self> {
+        Self::load_on(true)
+    }
+
+    fn load_on(gpu: bool) -> anyhow::Result<Self> {
+        let path = yolo_onnx_path();
+        let context = |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("YOLO ({path}): {what}: {e}");
+        let mut builder = ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
+        // Outside the test build the GPU provider is always required.
+        if gpu || !cfg!(test) {
+            let cuda = ort::ep::CUDA::default()
+                // Take what a run needs instead of doubling: the card is shared.
+                .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
+                .build()
+                .error_on_failure();
+            builder = builder.with_execution_providers([cuda]).map_err(|e| context("CUDA provider", &e))?;
+        }
+        let session = builder.commit_from_file(&path).map_err(|e| context("loading the model", &e))?;
+        Ok(Self { session: Mutex::new(session) })
+    }
+
+    /// `input` is the letterboxed frame, [1, 3, 640, 640]. Returns the [1, 300, 6] output:
+    /// each row = [x1, y1, x2, y2, conf, class], in letterboxed pixels.
+    fn forward(&self, input: Vec<f32>) -> Vec<f32> {
+        let input = ort::value::Tensor::from_array(([1usize, 3, YOLO_INPUT, YOLO_INPUT], input))
+            .expect("the letterboxed frame has the model's input shape");
+        let mut session = self.session.lock().unwrap();
+        let outputs = session.run(ort::inputs![input]).expect("YOLO forward pass");
+        let (_, raw) = outputs[0].try_extract_tensor::<f32>().expect("YOLO's output is f32");
+        raw.to_vec()
+    }
 }
 /// YOLO model expects 640×640 input (Ultralytics default).
 const YOLO_INPUT: usize = 640;
@@ -72,13 +119,16 @@ pub struct Detection {
 }
 
 /// When each stage of `infer_frame` finished, for the frame's trace (`unit_trace.rs`).
-/// Each is read after the stage's GPU work was synced (`into_data` reads the result back):
-/// burn's CUDA backend queues operations, and a clock read before the sync would charge
-/// them to the next stage. Cropping has no sync of its own: it is CPU work, and the crop
-/// tensors it queues are uploaded as part of the head's pass.
+/// Each is read after the stage's GPU work was done: ONNX Runtime returns YOLO's output
+/// when it has it, and the head's `into_data` reads its result back (burn's CUDA backend
+/// queues operations, and a clock read before the sync would charge them to the next
+/// stage). Cropping has no sync of its own: it is CPU work, and the crop tensors it
+/// queues are uploaded as part of the head's pass.
 #[derive(Debug, Clone, Copy)]
 pub struct StageEnds {
-    /// Letterbox, YOLO forward pass, read-back and duplicate suppression.
+    /// The frame resized and letterboxed into YOLO's input (CPU).
+    pub prepare: Instant,
+    /// YOLO forward pass (upload, GPU, read-back) and duplicate suppression.
     pub yolo: Instant,
     /// Crop and head are None when YOLO found no dice: nothing was cropped or classified.
     pub crop: Option<Instant>,
@@ -86,7 +136,7 @@ pub struct StageEnds {
 }
 
 pub struct DicePipeline<B: Backend> {
-    yolo: my_model::Model<B>,
+    yolo: Yolo,
     /// None for `yolo_only` (crop export), which never classifies.
     head: Option<ResNet18Head<B>>,
     device: B::Device,
@@ -112,21 +162,21 @@ impl<B: Backend> DicePipeline<B> {
     /// Load YOLO and the ResNet18 head (`head_path`: safetensors from
     /// `tools/train_head_torch.py --all`). Fails if the weights don't load completely.
     pub fn new(device: B::Device, head_path: &Path, dice_threshold: f32) -> anyhow::Result<Self> {
-        let yolo = my_model::Model::<B>::from_file(yolo_bpk_path(), &device);
+        let yolo = Yolo::load()?;
         let head = ResNet18Head::<B>::load(head_path, &device)?;
         Ok(Self { yolo, head: Some(head), device, conf_threshold: DEFAULT_CONF, dice_threshold })
     }
 
     /// Load only the YOLO detector for offline crop export, where no classification is performed.
     pub fn yolo_only(device: B::Device, conf_threshold: f32) -> Self {
-        let yolo = my_model::Model::<B>::from_file(yolo_bpk_path(), &device);
+        let yolo = Yolo::load().unwrap_or_else(|e| panic!("{e:#}"));
         Self { yolo, head: None, device, conf_threshold, dice_threshold: DEFAULT_DICE_THRESHOLD }
     }
 
     /// Runs both models once on a blank frame, as `infer_frame` would for `WARM_UP_DICE`
-    /// dice. burn's CUDA backend compiles each kernel the first time it is used: without
-    /// this the first camera frame after a start waited for that (56 s in YOLO and 3 s in
-    /// the head, production 2026-10-11) and its client had gone before the answer.
+    /// dice. The first pass is slow in both: cuDNN times its convolution algorithms for
+    /// YOLO, and burn's CUDA backend compiles each of the head's kernels on first use (3 s,
+    /// production 2026-10-11). Without this the first camera frame waited for that.
     pub fn warm_up(&self) {
         let side = YOLO_INPUT as u32;
         let blank = image::RgbImage::from_pixel(side, side, image::Rgb([114, 114, 114]));
@@ -152,10 +202,10 @@ impl<B: Backend> DicePipeline<B> {
         let img = image::RgbImage::from_raw(width as u32, height as u32, rgb.to_vec())
             .expect("rgb dimensions inconsistent with width/height");
 
-        let boxes = self.detect_boxes(&img);
+        let (boxes, prepare_end) = self.detect_boxes_timed(&img);
         let yolo_end = Instant::now();
         if boxes.is_empty() {
-            return (Vec::new(), StageEnds { yolo: yolo_end, crop: None, head: None });
+            return (Vec::new(), StageEnds { prepare: prepare_end, yolo: yolo_end, crop: None, head: None });
         }
         // Crop via the shared margin-aware path (train == serve), then classify all at once.
         let crops: Vec<Tensor<B, 4>> = boxes
@@ -195,27 +245,29 @@ impl<B: Backend> DicePipeline<B> {
                 }
             })
             .collect();
-        (detections, StageEnds { yolo: yolo_end, crop: Some(crop_end), head: Some(head_end) })
+        let stages =
+            StageEnds { prepare: prepare_end, yolo: yolo_end, crop: Some(crop_end), head: Some(head_end) };
+        (detections, stages)
     }
 
     /// Run only the YOLO detector on a frame and return accepted boxes in
     /// original-frame normalized coords. Shared by `infer_frame` and the offline
     /// crop exporter so both consume identical detector geometry.
     pub fn detect_boxes(&self, img: &image::RgbImage) -> Vec<BoxDet> {
+        self.detect_boxes_timed(img).0
+    }
+
+    /// `detect_boxes`, and when the frame's preparation ended (the forward pass began).
+    fn detect_boxes_timed(&self, img: &image::RgbImage) -> (Vec<BoxDet>, Instant) {
         // Letterbox to 640×640 (aspect-preserving + 114 pad), matching the
         // Ultralytics preprocessing the model was trained/exported with. `lb`
         // carries the scale + padding needed to map boxes back to the frame.
-        let (yolo_input, lb) = letterbox_to_chw::<B>(img, &self.device);
+        let (yolo_input, lb) = letterbox_to_chw(img);
+        let prepare_end = Instant::now();
 
         // Output shape: [1, 300, 6], each row = [x1, y1, x2, y2, conf, class_f32].
         // Coords are absolute pixels in the letterboxed YOLO_INPUT × YOLO_INPUT space.
-        let raw: Vec<f32> = self
-            .yolo
-            .forward(yolo_input)
-            .into_data()
-            .convert::<f32>()
-            .to_vec()
-            .unwrap();
+        let raw = self.yolo.forward(yolo_input);
 
         let mut boxes = Vec::new();
         for row in raw.as_chunks::<6>().0 {
@@ -233,7 +285,7 @@ impl<B: Backend> DicePipeline<B> {
             }
             boxes.push(BoxDet { x1, y1, x2, y2, conf, class: row[5] as u32 });
         }
-        suppress_duplicates(boxes)
+        (suppress_duplicates(boxes), prepare_end)
     }
 }
 
@@ -296,12 +348,9 @@ impl Letterbox {
 }
 
 /// Aspect-preserving resize of `img` to fit YOLO_INPUT×YOLO_INPUT, centered on a
-/// 114-grey canvas (Ultralytics letterbox), returned as a [1, 3, 640, 640] CHW
-/// tensor normalized to [0, 1] plus the `Letterbox` mapping back to the frame.
-fn letterbox_to_chw<B: Backend>(
-    img: &image::RgbImage,
-    device: &B::Device,
-) -> (Tensor<B, 4>, Letterbox) {
+/// 114-grey canvas (Ultralytics letterbox), returned as [1, 3, 640, 640] CHW values
+/// normalized to [0, 1] plus the `Letterbox` mapping back to the frame.
+fn letterbox_to_chw(img: &image::RgbImage) -> (Vec<f32>, Letterbox) {
     let (w, h) = img.dimensions();
     let side = YOLO_INPUT as u32;
     let scale = (YOLO_INPUT as f32 / w as f32).min(YOLO_INPUT as f32 / h as f32);
@@ -312,23 +361,23 @@ fn letterbox_to_chw<B: Backend>(
 
     let resized =
         image::imageops::resize(img, nw, nh, image::imageops::FilterType::Triangle);
-    let mut canvas = image::RgbImage::from_pixel(side, side, image::Rgb([114, 114, 114]));
-    image::imageops::overlay(&mut canvas, &resized, pad_x as i64, pad_y as i64);
 
-    // CHW, normalized to [0, 1].
-    let mut data = Vec::with_capacity(3 * YOLO_INPUT * YOLO_INPUT);
-    for c in 0..3usize {
-        for y in 0..side {
-            for x in 0..side {
-                data.push(canvas.get_pixel(x, y)[c] as f32 / 255.0);
-            }
+    // The grey canvas, then the resized frame's rows written straight into each plane.
+    let plane = YOLO_INPUT * YOLO_INPUT;
+    let mut data = vec![114.0 / 255.0; 3 * plane];
+    let (red, rest) = data.split_at_mut(plane);
+    let (green, blue) = rest.split_at_mut(plane);
+    for (y, row) in resized.as_raw().chunks_exact(nw as usize * 3).enumerate() {
+        let at = (pad_y as usize + y) * YOLO_INPUT + pad_x as usize;
+        for (x, px) in row.as_chunks::<3>().0.iter().enumerate() {
+            red[at + x] = px[0] as f32 / 255.0;
+            green[at + x] = px[1] as f32 / 255.0;
+            blue[at + x] = px[2] as f32 / 255.0;
         }
     }
-    let tensor =
-        Tensor::<B, 4>::from_data(TensorData::new(data, [1, 3, YOLO_INPUT, YOLO_INPUT]), device);
 
     (
-        tensor,
+        data,
         Letterbox {
             scale,
             pad_x: pad_x as f32,
@@ -502,7 +551,37 @@ pub fn export_yolo_crops<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use super::{BoxDet, suppress_duplicates};
+    use super::{BoxDet, YOLO_INPUT, Yolo, letterbox_to_chw, suppress_duplicates};
+
+    #[test]
+    fn a_wide_frame_is_letterboxed_between_grey_bars() {
+        let frame = image::RgbImage::from_pixel(1280, 720, image::Rgb([255, 0, 51]));
+        let (data, lb) = letterbox_to_chw(&frame);
+        assert_eq!(data.len(), 3 * YOLO_INPUT * YOLO_INPUT);
+        assert_eq!((lb.scale, lb.pad_x, lb.pad_y), (0.5, 0.0, 140.0));
+
+        let at = |plane: usize, y: usize, x: usize| data[plane * YOLO_INPUT * YOLO_INPUT + y * YOLO_INPUT + x];
+        let grey = 114.0 / 255.0;
+        // 360 rows of frame, with 140 grey rows above and below.
+        for (y, pixel) in [(0, [grey; 3]), (139, [grey; 3]), (140, [1.0, 0.0, 0.2]), (499, [1.0, 0.0, 0.2]), (500, [grey; 3])] {
+            for x in [0, 320, 639] {
+                assert_eq!([at(0, y, x), at(1, y, x), at(2, y, x)], pixel, "row {y}, column {x}");
+            }
+        }
+    }
+
+    /// The real model in ONNX Runtime, on the CPU. CI runs it (checks.yml downloads the
+    /// library): `ORT_DYLIB_PATH=<libonnxruntime.so> cargo test -- --ignored yolo`.
+    #[test]
+    #[ignore = "needs ONNX Runtime: set ORT_DYLIB_PATH"]
+    fn yolo_runs_in_onnx_runtime_and_finds_nothing_in_a_blank_frame() {
+        let yolo = Yolo::load_on(false).unwrap();
+        let blank = image::RgbImage::from_pixel(640, 480, image::Rgb([114, 114, 114]));
+        let raw = yolo.forward(letterbox_to_chw(&blank).0);
+        assert_eq!(raw.len(), 300 * 6);
+        let most_confident = raw.as_chunks::<6>().0.iter().map(|row| row[4]).fold(0.0, f32::max);
+        assert!(most_confident < super::DEFAULT_CONF, "a die at {most_confident} in a blank frame");
+    }
 
     fn b(x1: f32, conf: f32) -> BoxDet {
         BoxDet { x1, y1: 0.4, x2: x1 + 0.06, y2: 0.55, conf, class: 0 }
