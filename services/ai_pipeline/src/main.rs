@@ -20,10 +20,6 @@ use crate::{
     model::training::{TrainingConfig, audit, eval, train},
 };
 const ART_ROOT: &str = "./art";
-/// File name of the head weights exported by `tools/train_head_torch.py --all`.
-const HEAD_FILE: &str = "dice_head_resnet18.safetensors";
-/// Local-dev default for DICE_HEAD_PATH (the Docker image sets it explicitly).
-const DEV_HEAD_PATH: &str = "./runs/head_torch/resnet18_final";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -72,18 +68,11 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
             .map(String::as_str)
             .unwrap_or("0.0.0.0:9000");
 
-        // DICE_HEAD_PATH: the safetensors file, or a directory containing it.
-        let head_path = std::path::PathBuf::from(
-            std::env::var("DICE_HEAD_PATH").unwrap_or_else(|_| DEV_HEAD_PATH.to_string()),
-        );
-        let head_path = if head_path.is_dir() { head_path.join(HEAD_FILE) } else { head_path };
         let dice_threshold = match std::env::var("DICE_CONF_THRESHOLD") {
             Ok(v) => v.parse().map_err(|e| anyhow::anyhow!("DICE_CONF_THRESHOLD={v}: {e}"))?,
             Err(_) => model::inferance::DEFAULT_DICE_THRESHOLD,
         };
-        tracing::info!(path = %head_path.display(), dice_threshold, "loading model weights");
-
-        serve::serve(addr, head_path, dice_threshold, shutdown_signal()).await?;
+        serve::serve(addr, dice_threshold, shutdown_signal()).await?;
         return Ok(());
     }
 
@@ -106,9 +95,8 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
             .and_then(|s| s.parse::<f32>().ok())
             .unwrap_or(0.25);
 
-        let device = CudaDevice::new(0);
         println!("exporting YOLO number crops: {src} -> {dst} (conf {conf})");
-        export_yolo_crops::<Cuda<f32>>(device, Path::new(src), Path::new(dst), conf);
+        export_yolo_crops(Path::new(src), Path::new(dst), conf);
         return Ok(());
     }
 

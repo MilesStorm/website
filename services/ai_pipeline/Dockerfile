@@ -48,15 +48,25 @@ RUN mkdir -p /onnxruntime \
  && rm /onnxruntime/lib/libonnxruntime_providers_tensorrt.so
 
 
-# The half-precision copy of YOLO, for cards with tensor cores (src/model/inferance.rs).
-FROM python:3.12-slim AS fp16
+# The models the image adds to the committed YOLO: the dice head as ONNX, built from its
+# trained weights, and a half-precision copy of each model for cards with tensor cores
+# (src/model/inferance.rs).
+FROM python:3.12-slim AS models
 RUN pip install --no-cache-dir onnx==1.23.2 onnxruntime==1.31.0 sympy==1.14.0
-COPY tools/yolo_fp16.py src/model/yolo26s.onnx /work/
-RUN python /work/yolo_fp16.py /work/yolo26s.onnx /work/yolo26s_fp16.onnx
+# Dice-value head (ResNet18 trained by tools/train_head_torch.py --all). Model
+# weights never go in git: the file is a GitHub Release asset, pinned by SHA-256
+# so the build fails if the download differs. To ship a new model: upload a new
+# release asset, then update the URL default and the checksum here, and DICE_MODEL_ID below.
+ARG DICE_HEAD_URL=https://github.com/MilesStorm/website/releases/download/dice-head-v1/dice_head_resnet18.safetensors
+ADD --checksum=sha256:6b6e71693e5b9b667c2d047a3f1dd464017538637eea8c7f6b136c1cf20c2bd9 ${DICE_HEAD_URL} /work/dice_head_resnet18.safetensors
+COPY tools/head_onnx.py tools/onnx_fp16.py src/model/yolo26s.onnx /work/
+RUN python /work/head_onnx.py /work/dice_head_resnet18.safetensors /work/dice_head_resnet18.onnx \
+ && python /work/onnx_fp16.py /work/dice_head_resnet18.onnx /work/dice_head_resnet18_fp16.onnx \
+ && python /work/onnx_fp16.py /work/yolo26s.onnx /work/yolo26s_fp16.onnx
 
 
 # NVIDIA's runtime image: ONNX Runtime's CUDA provider needs cuDNN, cuBLAS and the
-# other CUDA libraries it ships, and burn's CUDA backend (the dice head) needs its NVRTC.
+# other CUDA libraries it ships.
 # The GPU driver itself comes from the host through the NVIDIA container runtime.
 FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04 AS runtime
 # The base image's entrypoint only prints a licence banner into the logs.
@@ -70,10 +80,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# burn compiles the head's kernels while running, with NVRTC and the CUDA headers; the
-# runtime image has no headers.
-COPY --from=builder /usr/local/cuda/targets/x86_64-linux/include /usr/local/cuda/targets/x86_64-linux/include
-ENV CUDA_PATH=/usr/local/cuda
 COPY --from=onnxruntime /onnxruntime/lib /opt/onnxruntime/lib
 # `ort` loads the library from here; the CUDA provider is found next to it.
 ENV ORT_DYLIB_PATH=/opt/onnxruntime/lib/libonnxruntime.so
@@ -91,24 +97,18 @@ WORKDIR /app
 # --chown on each copy; a separate `chown -R` would store every file a second time.
 COPY --chown=appuser:appuser --from=builder /app/target/release/dice_detector ./dice_detector
 COPY --chown=appuser:appuser src/model/yolo26s.onnx                        ./models/yolo26s.onnx
-COPY --chown=appuser:appuser --from=fp16 /work/yolo26s_fp16.onnx           ./models/yolo26s_fp16.onnx
-
-# Dice-value head (ResNet18 trained by tools/train_head_torch.py --all). Model
-# weights never go in git: the file is a GitHub Release asset, pinned by SHA-256
-# so the build fails if the download differs. To ship a new model: upload a new
-# release asset, then update the URL default and the checksum here.
-ARG DICE_HEAD_URL=https://github.com/MilesStorm/website/releases/download/dice-head-v1/dice_head_resnet18.safetensors
-ADD --chown=appuser:appuser --chmod=0644 --checksum=sha256:6b6e71693e5b9b667c2d047a3f1dd464017538637eea8c7f6b136c1cf20c2bd9 ${DICE_HEAD_URL} ./models/dice_head_resnet18.safetensors
+COPY --chown=appuser:appuser --from=models /work/yolo26s_fp16.onnx /work/dice_head_resnet18.onnx /work/dice_head_resnet18_fp16.onnx ./models/
 
 USER appuser
 
 ENV YOLO_ONNX_PATH=/app/models/yolo26s.onnx
 ENV YOLO_FP16_ONNX_PATH=/app/models/yolo26s_fp16.onnx
-ENV DICE_HEAD_PATH=/app/models/dice_head_resnet18.safetensors
+ENV DICE_HEAD_ONNX_PATH=/app/models/dice_head_resnet18.onnx
+ENV DICE_HEAD_FP16_ONNX_PATH=/app/models/dice_head_resnet18_fp16.onnx
 # Minimum averaged confidence to report a die's value; below it the die is
 # reported as unreadable (null) instead of guessed.
 ENV DICE_CONF_THRESHOLD=0.7
-# Stamped on roll events; keep in step with the release tag in DICE_HEAD_URL.
+# Stamped on roll events; keep in step with the release tag in DICE_HEAD_URL (stage `models`).
 ENV DICE_MODEL_ID=dice-head-v1
 
 EXPOSE 9000

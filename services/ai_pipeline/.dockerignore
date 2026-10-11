@@ -11,7 +11,8 @@ weights/
 .cargo/
 .venv/
 tools/
-!tools/yolo_fp16.py
+!tools/head_onnx.py
+!tools/onnx_fp16.py
 *.pt
 *.safetensors
 *.f32

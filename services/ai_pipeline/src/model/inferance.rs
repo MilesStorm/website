@@ -4,11 +4,10 @@ use std::time::Instant;
 
 use burn::module::{ModuleMapper, Param};
 use burn::prelude::Backend;
+use burn::tensor::{DType, Tensor};
 use serde::Serialize;
-use burn::tensor::activation::softmax;
-use burn::tensor::{DType, Tensor, TensorData};
 
-use crate::model::resnet::ResNet18Head;
+use crate::model::head::NUM_CLASSES;
 
 /// The YOLO model in the source tree, for runs outside Docker. The image sets
 /// YOLO_ONNX_PATH to its copy.
@@ -18,10 +17,23 @@ fn yolo_onnx_path() -> String {
     std::env::var("YOLO_ONNX_PATH").unwrap_or_else(|_| YOLO_ONNX_DEFAULT.to_string())
 }
 
-/// The half-precision copy of the model (`tools/yolo_fp16.py`; the image builds it). Its
+/// The half-precision copy of the model (`tools/onnx_fp16.py`; the image builds it). Its
 /// input and output stay f32, so nothing else changes. None outside the image.
 fn yolo_fp16_onnx_path() -> Option<String> {
     std::env::var("YOLO_FP16_ONNX_PATH").ok()
+}
+
+/// The dice head as an ONNX model (`tools/head_onnx.py` builds it from the trained
+/// weights; the image does that). The weights are not in the source tree, so there is no
+/// default.
+fn head_onnx_path() -> anyhow::Result<String> {
+    std::env::var("DICE_HEAD_ONNX_PATH")
+        .map_err(|_| anyhow::anyhow!("DICE_HEAD_ONNX_PATH is not set: build the model with tools/head_onnx.py"))
+}
+
+/// The head's half-precision copy, as for YOLO. None outside the image.
+fn head_fp16_onnx_path() -> Option<String> {
+    std::env::var("DICE_HEAD_FP16_ONNX_PATH").ok()
 }
 
 /// The model name of the GPU this container was given, e.g. "NVIDIA GeForce RTX 2060
@@ -53,13 +65,36 @@ fn has_tensor_cores(model: &str) -> bool {
     model.contains("RTX")
 }
 
-/// The YOLO detector, run by ONNX Runtime on the GPU (its CUDA provider uses cuDNN).
-/// burn's CUDA backend ran the same model in ~100 ms a frame on a GTX 1660 SUPER
-/// (production 2026-10-11): it has a fixed cost per layer, and YOLO has hundreds.
+/// Loads a model into ONNX Runtime on the GPU (its CUDA provider uses cuDNN). Both models
+/// run there: burn's CUDA backend has a fixed cost per layer, which made YOLO take ~100 ms
+/// a frame and the head ~15 ms on a GTX 1660 SUPER (production 2026-10-11).
 ///
 /// ONNX Runtime is loaded at run time from the library ORT_DYLIB_PATH names (the image
-/// ships Microsoft's CUDA 12 build). It runs on the GPU or not at all: `load` fails if
-/// the CUDA provider can't load. Only the test build can run it on the CPU.
+/// ships Microsoft's CUDA 12 build). A model runs on the GPU or not at all: this fails if
+/// the CUDA provider can't load. Only the test build can run one on the CPU (`gpu` false).
+///
+/// `fp16` is the model's half-precision copy, used when the card has tensor cores.
+fn load_session(name: &str, fp32: String, fp16: Option<String>, gpu: bool) -> anyhow::Result<ort::session::Session> {
+    let card = if gpu { gpu_model() } else { None };
+    let fp16 = fp16.filter(|_| card.as_deref().is_some_and(has_tensor_cores));
+    let precision = if fp16.is_some() { "fp16" } else { "fp32" };
+    let path = fp16.unwrap_or(fp32);
+    tracing::info!(name, gpu = card.as_deref().unwrap_or("unknown"), precision, model = %path, "loading model");
+    let context = |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("{name} ({path}): {what}: {e}");
+    let mut builder = ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
+    // Outside the test build the GPU provider is always required.
+    if gpu || !cfg!(test) {
+        let cuda = ort::ep::CUDA::default()
+            // Take what a run needs instead of doubling: the card is shared.
+            .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
+            .build()
+            .error_on_failure();
+        builder = builder.with_execution_providers([cuda]).map_err(|e| context("CUDA provider", &e))?;
+    }
+    builder.commit_from_file(&path).map_err(|e| context("loading the model", &e))
+}
+
+/// The YOLO detector.
 struct Yolo {
     /// `run` needs `&mut`; one thread infers, so the lock is never contended.
     session: Mutex<ort::session::Session>,
@@ -71,23 +106,7 @@ impl Yolo {
     }
 
     fn load_on(gpu: bool) -> anyhow::Result<Self> {
-        let card = if gpu { gpu_model() } else { None };
-        let fp16 = yolo_fp16_onnx_path().filter(|_| card.as_deref().is_some_and(has_tensor_cores));
-        let precision = if fp16.is_some() { "fp16" } else { "fp32" };
-        let path = fp16.unwrap_or_else(yolo_onnx_path);
-        tracing::info!(gpu = card.as_deref().unwrap_or("unknown"), precision, model = %path, "loading YOLO");
-        let context = |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("YOLO ({path}): {what}: {e}");
-        let mut builder = ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
-        // Outside the test build the GPU provider is always required.
-        if gpu || !cfg!(test) {
-            let cuda = ort::ep::CUDA::default()
-                // Take what a run needs instead of doubling: the card is shared.
-                .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
-                .build()
-                .error_on_failure();
-            builder = builder.with_execution_providers([cuda]).map_err(|e| context("CUDA provider", &e))?;
-        }
-        let session = builder.commit_from_file(&path).map_err(|e| context("loading the model", &e))?;
+        let session = load_session("YOLO", yolo_onnx_path(), yolo_fp16_onnx_path(), gpu)?;
         Ok(Self { session: Mutex::new(session) })
     }
 
@@ -102,6 +121,50 @@ impl Yolo {
         raw.to_vec()
     }
 }
+
+/// The dice value classifier: an ImageNet-pretrained ResNet18 fine-tuned by
+/// `tools/train_head_torch.py`, 21 classes, on 64x64 crops of a die's top number.
+struct Head {
+    /// As for `Yolo`.
+    session: Mutex<ort::session::Session>,
+}
+
+impl Head {
+    fn load() -> anyhow::Result<Self> {
+        Self::load_on(true)
+    }
+
+    fn load_on(gpu: bool) -> anyhow::Result<Self> {
+        let session = load_session("dice head", head_onnx_path()?, head_fp16_onnx_path(), gpu)?;
+        Ok(Self { session: Mutex::new(session) })
+    }
+
+    /// `crops`: one `pack_chw` crop per die. Returns each die's probability per class.
+    fn classify(&self, crops: &[Vec<f32>]) -> Vec<[f32; NUM_CLASSES]> {
+        let mut session = self.session.lock().unwrap();
+        let mut probs = Vec::with_capacity(crops.len());
+        for dice in crops.chunks(HEAD_BATCH) {
+            let mut input = vec![0f32; HEAD_BATCH * CROP_LEN];
+            for (slot, crop) in input.as_chunks_mut::<CROP_LEN>().0.iter_mut().zip(dice) {
+                slot.copy_from_slice(crop);
+            }
+            let input = ort::value::Tensor::from_array(([HEAD_BATCH, 3, HEAD_INPUT, HEAD_INPUT], input))
+                .expect("the crops have the head's input shape");
+            let outputs = session.run(ort::inputs![input]).expect("dice head forward pass");
+            let (_, logits) = outputs[0].try_extract_tensor::<f32>().expect("the head's output is f32");
+            probs.extend(logits.as_chunks::<NUM_CLASSES>().0.iter().take(dice.len()).map(softmax));
+        }
+        probs
+    }
+}
+
+fn softmax(logits: &[f32; NUM_CLASSES]) -> [f32; NUM_CLASSES] {
+    let max = logits.iter().copied().fold(f32::MIN, f32::max);
+    let exp = logits.map(|logit| (logit - max).exp());
+    let sum: f32 = exp.iter().sum();
+    exp.map(|e| e / sum)
+}
+
 /// YOLO model expects 640×640 input (Ultralytics default).
 const YOLO_INPUT: usize = 640;
 /// DiceHead input crop size. The head is a compact glyph recognizer that only
@@ -114,8 +177,13 @@ pub const HEAD_INPUT: usize = 64;
 /// and absorbs YOLO localization error. Applied identically at serve time and in
 /// the offline crop exporter, so the head trains on exactly what it is served.
 pub const HEAD_CROP_MARGIN: f32 = 0.12;
-/// Head batch sizes `warm_up` runs: one die, and a handful rolled together.
-const WARM_UP_DICE: [usize; 2] = [1, 6];
+/// Values in one head crop: 3 planes of HEAD_INPUT x HEAD_INPUT.
+const CROP_LEN: usize = 3 * HEAD_INPUT * HEAD_INPUT;
+/// Crops in one head pass. Every pass has this shape: cuDNN chooses its convolution
+/// algorithms per input shape, so a number of dice it has not seen before would stall
+/// that frame while it searches. Fewer dice are padded with blank crops; more take
+/// another pass.
+const HEAD_BATCH: usize = 8;
 /// Default YOLO confidence threshold.
 const DEFAULT_CONF: f32 = 0.25;
 /// Default minimum head probability for a value to count as read. Below it the
@@ -158,11 +226,9 @@ pub struct Detection {
 }
 
 /// When each stage of `infer_frame` finished, for the frame's trace (`unit_trace.rs`).
-/// Each is read after the stage's GPU work was done: ONNX Runtime returns YOLO's output
-/// when it has it, and the head's `into_data` reads its result back (burn's CUDA backend
-/// queues operations, and a clock read before the sync would charge them to the next
-/// stage). Cropping has no sync of its own: it is CPU work, and the crop tensors it
-/// queues are uploaded as part of the head's pass.
+/// Each is read after the stage's GPU work was done: ONNX Runtime returns a model's
+/// output when it has it. Cropping is CPU work; the crops are uploaded as part of the
+/// head's pass.
 #[derive(Debug, Clone, Copy)]
 pub struct StageEnds {
     /// The frame resized and letterboxed into YOLO's input (CPU).
@@ -174,11 +240,10 @@ pub struct StageEnds {
     pub head: Option<Instant>,
 }
 
-pub struct DicePipeline<B: Backend> {
+pub struct DicePipeline {
     yolo: Yolo,
     /// None for `yolo_only` (crop export), which never classifies.
-    head: Option<ResNet18Head<B>>,
-    device: B::Device,
+    head: Option<Head>,
     conf_threshold: f32,
     dice_threshold: f32,
 }
@@ -197,34 +262,29 @@ impl<B: Backend> ModuleMapper<B> for CastToF32 {
     }
 }
 
-impl<B: Backend> DicePipeline<B> {
-    /// Load YOLO and the ResNet18 head (`head_path`: safetensors from
-    /// `tools/train_head_torch.py --all`). Fails if the weights don't load completely.
-    pub fn new(device: B::Device, head_path: &Path, dice_threshold: f32) -> anyhow::Result<Self> {
+impl DicePipeline {
+    /// Load YOLO and the dice head.
+    pub fn new(dice_threshold: f32) -> anyhow::Result<Self> {
         let yolo = Yolo::load()?;
-        let head = ResNet18Head::<B>::load(head_path, &device)?;
-        Ok(Self { yolo, head: Some(head), device, conf_threshold: DEFAULT_CONF, dice_threshold })
+        let head = Head::load()?;
+        Ok(Self { yolo, head: Some(head), conf_threshold: DEFAULT_CONF, dice_threshold })
     }
 
     /// Load only the YOLO detector for offline crop export, where no classification is performed.
-    pub fn yolo_only(device: B::Device, conf_threshold: f32) -> Self {
+    pub fn yolo_only(conf_threshold: f32) -> Self {
         let yolo = Yolo::load().unwrap_or_else(|e| panic!("{e:#}"));
-        Self { yolo, head: None, device, conf_threshold, dice_threshold: DEFAULT_DICE_THRESHOLD }
+        Self { yolo, head: None, conf_threshold, dice_threshold: DEFAULT_DICE_THRESHOLD }
     }
 
-    /// Runs both models once on a blank frame, as `infer_frame` would for `WARM_UP_DICE`
-    /// dice. The first pass is slow in both: cuDNN times its convolution algorithms for
-    /// YOLO, and burn's CUDA backend compiles each of the head's kernels on first use (3 s,
-    /// production 2026-10-11). Without this the first camera frame waited for that.
+    /// Runs both models once on a blank frame, as `infer_frame` would. The first pass of
+    /// each is slow: cuDNN times its convolution algorithms for the input's shape. Without
+    /// this the first camera frame waited for that.
     pub fn warm_up(&self) {
         let side = YOLO_INPUT as u32;
         let blank = image::RgbImage::from_pixel(side, side, image::Rgb([114, 114, 114]));
         self.detect_boxes(&blank);
-        let Some(head) = &self.head else { return };
-        for dice in WARM_UP_DICE {
-            let crops: Vec<Tensor<B, 4>> =
-                (0..dice).map(|_| crop_for_head::<B>(&blank, 0.4, 0.4, 0.6, 0.6, &self.device)).collect();
-            softmax(head.forward(Tensor::cat(crops, 0)), 1).into_data();
+        if let Some(head) = &self.head {
+            head.classify(&[crop_for_head(&blank, 0.4, 0.4, 0.6, 0.6)]);
         }
     }
 
@@ -247,21 +307,15 @@ impl<B: Backend> DicePipeline<B> {
             return (Vec::new(), StageEnds { prepare: prepare_end, yolo: yolo_end, crop: None, head: None });
         }
         // Crop via the shared margin-aware path (train == serve), then classify all at once.
-        let crops: Vec<Tensor<B, 4>> = boxes
-            .iter()
-            .map(|b| crop_for_head::<B>(&img, b.x1, b.y1, b.x2, b.y2, &self.device))
-            .collect();
+        let crops: Vec<Vec<f32>> =
+            boxes.iter().map(|b| crop_for_head(&img, b.x1, b.y1, b.x2, b.y2)).collect();
         let crop_end = Instant::now();
-        let probs: Vec<f32> = softmax(head.forward(Tensor::cat(crops, 0)), 1)
-            .into_data()
-            .convert::<f32>()
-            .to_vec()
-            .unwrap();
+        let probs = head.classify(&crops);
         let head_end = Instant::now();
 
         let detections = boxes
             .iter()
-            .zip(probs.as_chunks::<{ crate::model::head::NUM_CLASSES }>().0)
+            .zip(&probs)
             .map(|(b, p)| {
                 let (class, conf) = p
                     .iter()
@@ -468,7 +522,7 @@ pub fn crop_region_to_image(
 }
 
 /// Pack an RGB image into planar CHW order (all R, then all G, then all B),
-/// scaled to [0, 1]: the layout `Tensor<B, 4>` of shape [N, 3, H, W] expects and
+/// scaled to [0, 1]: the layout a model input of shape [N, 3, H, W] expects and
 /// the layout PyTorch trains on. (Interleaved R,G,B pixel order would scramble
 /// the image: the old burn head was trained and served that way.)
 pub fn pack_chw(img: &image::RgbImage) -> Vec<f32> {
@@ -483,21 +537,10 @@ pub fn pack_chw(img: &image::RgbImage) -> Vec<f32> {
     data
 }
 
-/// Crop a normalized bbox from an RgbImage and build the head's input tensor
+/// Crop a normalized bbox from an RgbImage and build the head's input for it
 /// through the shared `crop_region_to_image` path and planar `pack_chw` packing.
-fn crop_for_head<B: Backend>(
-    img: &image::RgbImage,
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    device: &B::Device,
-) -> Tensor<B, 4> {
-    let resized = crop_region_to_image(img, x1, y1, x2, y2);
-    Tensor::<B, 4>::from_data(
-        TensorData::new(pack_chw(&resized), [1, 3, HEAD_INPUT, HEAD_INPUT]),
-        device,
-    )
+fn crop_for_head(img: &image::RgbImage, x1: f32, y1: f32, x2: f32, y2: f32) -> Vec<f32> {
+    pack_chw(&crop_region_to_image(img, x1, y1, x2, y2))
 }
 
 /// Offline crop exporter: build the head's training set from the labeled
@@ -511,13 +554,12 @@ fn crop_for_head<B: Backend>(
 ///
 /// Images where YOLO finds no box above `conf` are dropped (and counted); they
 /// would have no usable crop at serve time either.
-pub fn export_yolo_crops<B: Backend>(
-    device: B::Device,
+pub fn export_yolo_crops(
     src_root: &Path,
     dst_root: &Path,
     conf: f32,
 ) {
-    let pipe = DicePipeline::<B>::yolo_only(device, conf);
+    let pipe = DicePipeline::yolo_only(conf);
 
     let exts = ["jpg", "jpeg", "png", "webp", "JPG"];
     let is_img = |p: &Path| {
@@ -590,7 +632,10 @@ pub fn export_yolo_crops<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use super::{BoxDet, YOLO_INPUT, Yolo, has_tensor_cores, letterbox_to_chw, model_of, suppress_duplicates};
+    use super::{
+        BoxDet, CROP_LEN, HEAD_BATCH, Head, YOLO_INPUT, Yolo, has_tensor_cores, letterbox_to_chw, model_of, softmax,
+        suppress_duplicates,
+    };
 
     /// eta's two cards, as the driver lists them in /proc/driver/nvidia/gpus/*/information.
     const RTX_2060: &str = "Model: \t\t NVIDIA GeForce RTX 2060 SUPER\nIRQ:   \t\t 136\nGPU UUID: \t GPU-4061671a-fa52-81d1-d007-ce786b0e13de\nVideo BIOS: \t 90.06.44.80.56\n";
@@ -640,6 +685,39 @@ mod tests {
         assert_eq!(raw.len(), 300 * 6);
         let most_confident = raw.as_chunks::<6>().0.iter().map(|row| row[4]).fold(0.0, f32::max);
         assert!(most_confident < super::DEFAULT_CONF, "a die at {most_confident} in a blank frame");
+    }
+
+    /// The real head in ONNX Runtime, on the CPU. CI builds the model from the released
+    /// weights and runs this (checks.yml):
+    /// `ORT_DYLIB_PATH=<libonnxruntime.so> DICE_HEAD_ONNX_PATH=<head.onnx> cargo test -- --ignored head_runs`.
+    #[test]
+    #[ignore = "needs ONNX Runtime and the head model: set ORT_DYLIB_PATH and DICE_HEAD_ONNX_PATH"]
+    fn head_runs_in_onnx_runtime_and_reads_each_die_whatever_its_place_in_a_pass() {
+        let head = Head::load_on(false).unwrap();
+        // Two different crops, repeated to fill one pass and start a second.
+        let crop = |shade: f32| (0..CROP_LEN).map(|i| if i % 7 < 3 { shade } else { 1.0 - shade }).collect::<Vec<_>>();
+        let crops: Vec<Vec<f32>> = (0..HEAD_BATCH + 3).map(|i| crop(if i % 2 == 0 { 0.1 } else { 0.8 })).collect();
+
+        let probs = head.classify(&crops);
+
+        assert_eq!(probs.len(), crops.len());
+        for (i, die) in probs.iter().enumerate() {
+            assert!((die.iter().sum::<f32>() - 1.0).abs() < 1e-4, "die {i}: probabilities sum to 1");
+            // The same crop reads the same in any slot, in a full pass or a padded one.
+            for (a, b) in die.iter().zip(&probs[i % 2]) {
+                assert!((a - b).abs() < 1e-4, "die {i} differs from die {}", i % 2);
+            }
+        }
+        assert!(probs[0].iter().zip(&probs[1]).any(|(a, b)| (a - b).abs() > 1e-3), "different crops read alike");
+    }
+
+    #[test]
+    fn softmax_turns_logits_into_probabilities() {
+        let mut logits = [0.0; super::NUM_CLASSES];
+        logits[4] = 1000.0; // would overflow exp() without the max subtracted
+        let probs = softmax(&logits);
+        assert_eq!(probs[4], 1.0);
+        assert_eq!(probs.iter().sum::<f32>(), 1.0);
     }
 
     fn b(x1: f32, conf: f32) -> BoxDet {
