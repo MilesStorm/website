@@ -233,7 +233,10 @@ async fn run_arcane(
     mut debug_text: Signal<String>,
     mut last_roll: Signal<Option<String>>,
 ) {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
     use wasm_bindgen::{closure::Closure, JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
     use web_sys::{
@@ -394,13 +397,17 @@ async fn run_arcane(
     // Shared slot for the latest inference result — written by the onmessage
     // callback, read by the draw loop.
     let latest: Rc<RefCell<Option<InferResult>>> = Rc::new(RefCell::new(None));
+    // True from sending a frame until the dice server has answered it.
+    let awaiting_reply = Rc::new(Cell::new(false));
     {
         let latest = latest.clone();
+        let awaiting_reply = awaiting_reply.clone();
         let mut frame_ms = frame_ms;
         let cb = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MessageEvent| {
             if let Some(text) = e.data().as_string() {
                 match serde_json::from_str::<ServerMsg>(&text) {
                     Ok(ServerMsg::Frame(result)) => {
+                        awaiting_reply.set(false);
                         frame_ms.set(result.frame_ms);
                         detect_count.set(result.detections.len());
                         server_error.set(None);
@@ -422,6 +429,7 @@ async fn run_arcane(
                     }
                     Ok(ServerMsg::Roll(roll)) => last_roll.set(Some(roll_text(&roll))),
                     Ok(ServerMsg::Error { error }) => {
+                        awaiting_reply.set(false);
                         server_error.set(Some(error));
                         detect_count.set(0);
                         debug_text.set(String::new());
@@ -435,9 +443,22 @@ async fn run_arcane(
     }
 
     // ── Frame capture loop ──────────────────────────────────────────────
+    // The dice server sets the pace: the next frame goes out when the last one has been
+    // answered, so frames arrive as fast as it reads them and never queue up. (It keeps
+    // only the newest frame, so sending faster would only waste the upload.)
+    let mut last_sent = 0.0;
     loop {
-        // ~15 fps keeps the GPU queue comfortable without saturating it.
-        sleep_ms(66).await;
+        // A frame the server dropped gets no answer: after REPLY_WAIT_MS, send anyway.
+        let mut waited = 0;
+        while awaiting_reply.get() && waited < REPLY_WAIT_MS {
+            sleep_ms(REPLY_POLL_MS).await;
+            waited += REPLY_POLL_MS;
+        }
+        // Never faster than the camera has new pictures.
+        let since_last = js_sys::Date::now() - last_sent;
+        if since_last < CAMERA_FRAME_MS {
+            sleep_ms((CAMERA_FRAME_MS - since_last).ceil() as i32).await;
+        }
 
         if ws.ready_state() != WebSocket::OPEN {
             ws_state.set(WsState::Disconnected);
@@ -449,16 +470,23 @@ async fn run_arcane(
             .draw_image_with_html_video_element(&video, 0.0, 0.0)
             .ok();
 
-        // Encode as JPEG (via browser's dataURL API) and ship as binary.
-        if let Ok(url) = capture_canvas.to_data_url_with_type("image/jpeg") {
-            if let Some(b64) = url.strip_prefix("data:image/jpeg;base64,") {
-                if let Ok(binary) = window.atob(b64) {
-                    // atob returns a Latin-1 string; each char's code point is one byte.
-                    let bytes: Vec<u8> = binary.chars().map(|c| c as u8).collect();
-                    let ta = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
-                    ta.copy_from(&bytes);
-                    ws.send_with_array_buffer(&ta.buffer()).ok();
-                }
+        // Encode as JPEG and ship as binary. `toBlob` hands the bytes over as they are;
+        // a data URL would have to be decoded from base64 again, on this thread.
+        let encoded = JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
+            let failed = resolve.clone();
+            let done = Closure::once_into_js(move |blob: JsValue| {
+                resolve.call1(&JsValue::NULL, &blob).ok();
+            });
+            if capture_canvas.to_blob_with_type(done.unchecked_ref(), "image/jpeg").is_err() {
+                failed.call1(&JsValue::NULL, &JsValue::NULL).ok();
+            }
+        }))
+        .await;
+        // The blob is null if the canvas could not be encoded: skip this frame.
+        if let Ok(blob) = encoded.and_then(|blob| blob.dyn_into::<web_sys::Blob>()) {
+            if ws.ready_state() == WebSocket::OPEN && ws.send_with_blob(&blob).is_ok() {
+                awaiting_reply.set(true);
+                last_sent = js_sys::Date::now();
             }
         }
 
@@ -514,6 +542,16 @@ fn stop_tracks(stream: &web_sys::MediaStream) {
         }
     }
 }
+
+/// The camera's frame interval (30 a second): the page never sends frames faster.
+#[cfg(target_arch = "wasm32")]
+const CAMERA_FRAME_MS: f64 = 33.0;
+/// How long the page waits for the answer to a frame before sending the next one anyway.
+#[cfg(target_arch = "wasm32")]
+const REPLY_WAIT_MS: i32 = 250;
+/// How often it looks for that answer.
+#[cfg(target_arch = "wasm32")]
+const REPLY_POLL_MS: i32 = 4;
 
 /// Tick the async event loop for `ms` milliseconds using a JS setTimeout.
 #[cfg(target_arch = "wasm32")]

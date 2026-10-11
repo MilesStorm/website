@@ -191,7 +191,7 @@ pub struct SessionTrace {
     rolls: u64,
     /// Frames replaced by a newer one before they were inferred.
     superseded: u64,
-    /// Frames the inference thread didn't take: its queue was full, or it is gone.
+    /// Frames the inference thread didn't take: it is gone.
     refused: u64,
     /// Drops since the last unit trace, reported on the next one.
     unreported_superseded: u64,
@@ -214,7 +214,7 @@ impl SessionTrace {
         self.last_seq = seq;
     }
 
-    /// The frame just taken was not inferred: the inference thread's queue was full.
+    /// The frame just taken was not inferred: the inference thread is gone.
     pub fn refused(&mut self) {
         self.refused += 1;
         self.unreported_refused += 1;
@@ -561,7 +561,8 @@ pub mod tests {
         assert_eq!(attribute(named(&spans, "session close")[0], "frames_failed"), Some(1.into()));
     }
 
-    /// One die lying still: the tracker settles a roll on frame `SETTLE_FRAMES + 1`.
+    /// One die lying still: at a frame every 100 ms (`traced_frames`) the tracker settles a
+    /// roll on frame `SETTLE_FRAMES + 1`.
     fn steady_die() -> Vec<Observation> {
         let mut probs = vec![0.005; 21];
         probs[16] = 0.9;
@@ -577,7 +578,7 @@ pub mod tests {
         for seq in 1..=frames {
             let times = times(Instant::now());
             session.took(seq);
-            let roll = tracker.update(&steady_die(), seq);
+            let roll = tracker.update(&steady_die(), seq * 100);
             let outcome = match &roll {
                 Some(roll) => Outcome::Roll { detections: 1, roll },
                 None => Outcome::Frame { detections: 1 },
@@ -653,7 +654,7 @@ pub mod tests {
         let (tracer, exporter) = in_memory(0);
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
         let mut tracker = RollTracker::new(0.7, class_value);
-        let roll = (1..=10).find_map(|now| tracker.update(&steady_die(), now)).unwrap();
+        let roll = (1..=10).find_map(|frame| tracker.update(&steady_die(), frame * 100)).unwrap();
         let times = times(Instant::now());
 
         let mut unit = session.frame(6, &times, Outcome::Roll { detections: 1, roll: &roll }).unwrap();
@@ -683,7 +684,7 @@ pub mod tests {
         let (tracer, exporter) = in_memory(0);
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
         let mut tracker = RollTracker::new(0.7, class_value);
-        let roll = (1..=10).find_map(|now| tracker.update(&steady_die(), now)).unwrap();
+        let roll = (1..=10).find_map(|frame| tracker.update(&steady_die(), frame * 100)).unwrap();
         let mut unit = session.frame(6, &times(Instant::now()), Outcome::Roll { detections: 1, roll: &roll }).unwrap();
         unit.roll_send(&roll.roll_id).unwrap();
         drop(unit);
