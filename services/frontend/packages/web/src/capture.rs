@@ -36,8 +36,8 @@ use crate::rolls::{arcane_user, origin_allowed, Denied, RollHub};
 pub const HOLD_SECS: i64 = 600;
 /// Frames larger than this are never held or stored.
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
-/// Recent frames kept per camera connection to match `frame_seq` (~1 s at 15 fps;
-/// replies lag one or two frames).
+/// Recent frames kept per camera connection to match `frame_seq` (about half a second
+/// at the camera's 30 a second; a reply names the frame just sent).
 const FRAME_RING: usize = 16;
 const FLAGS_PER_HOUR: i64 = 30;
 const AUTO_SAMPLES_PER_DAY: i64 = 300;

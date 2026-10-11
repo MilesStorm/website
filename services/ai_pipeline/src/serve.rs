@@ -103,8 +103,8 @@ impl InferHandle {
     /// Starts the inference thread. `init` runs on it and returns what infers a frame;
     /// `Ready` tells how that went.
     fn start(init: impl FnOnce() -> Result<InferFn, String> + Send + 'static) -> (Self, Ready) {
-        // Bound of 1: if inference is busy, new frames replace the queued one
-        // rather than piling up, keeping latency low.
+        // Bound of 1: one frame waits here, and each other session waits to put its one
+        // frame in (`infer`). Frames never pile up: a session has one in flight.
         let (tx, mut rx) = trace::channel::<InferRequest>(1);
         let (ready_tx, ready) = trace::channel::<Result<(), String>>(1);
 
@@ -144,8 +144,11 @@ impl InferHandle {
         (Self { tx }, ready)
     }
 
-    /// Submit a frame for inference. Returns None if the inference thread has
-    /// exited or the frame was dropped due to backpressure.
+    /// Submit a frame for inference and wait for its result. A session that finds the
+    /// thread busy waits its turn (sessions are served in the order they asked) rather
+    /// than losing the frame: the page sends its next frame only when this one is
+    /// answered, so a dropped frame would leave it waiting for nothing. Returns None if
+    /// the inference thread has exited.
     async fn infer(&self, frame: Carried<Frame>) -> Option<Inferred> {
         #[allow(
             clippy::disallowed_methods,
@@ -153,8 +156,7 @@ impl InferHandle {
         )]
         let (reply, result) = oneshot::channel();
         let request = frame.map(|frame| InferRequest { frame, submitted: Instant::now(), reply });
-        // try_send drops the frame rather than blocking if the slot is full.
-        self.tx.try_send(request).ok()?;
+        self.tx.send(request).await.ok()?;
         result.await.ok()
     }
 }
@@ -458,7 +460,7 @@ async fn run_session<S>(
 
         let Some(Inferred { result, times }) = handle.infer(frame).await else {
             session.refused();
-            continue; // dropped under backpressure
+            continue; // the inference thread is gone
         };
         let mut replies = Vec::with_capacity(2);
         // The frame's trace, if it gets one: only now is it known whether it settled a roll.
@@ -617,8 +619,10 @@ mod tests {
         (client(&url, caller).await.unwrap(), server)
     }
 
-    /// Sends one frame and returns the replies up to and including its `frame` reply.
+    /// Sends one frame, `FRAME_GAP` after the one before, and returns the replies up to and
+    /// including its `frame` reply.
     async fn send_frame(client: &mut Client, seq: u64) -> Vec<serde_json::Value> {
+        tokio::time::sleep(FRAME_GAP).await;
         client.send(Message::binary(vec![0u8; 4])).await.unwrap();
         let mut replies = Vec::new();
         loop {
@@ -633,7 +637,10 @@ mod tests {
         }
     }
 
-    /// The frame on which `fake_inference`'s die settles.
+    /// The time between the test camera's frames: slow enough that the die has rested for
+    /// `SETTLE_MS` once it has been seen still in `SETTLE_FRAMES` frames.
+    const FRAME_GAP: Duration = Duration::from_millis(crate::roll::SETTLE_MS / crate::roll::SETTLE_FRAMES as u64 + 20);
+    /// The frame on which `fake_inference`'s die then settles.
     const SETTLES_ON: u64 = crate::roll::SETTLE_FRAMES as u64 + 1;
 
     /// A `traceparent` sent on the WebSocket handshake (as the frontend's camera session
