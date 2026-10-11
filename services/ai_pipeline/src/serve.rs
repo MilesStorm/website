@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,6 +14,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::error::{Error as WsError, ProtocolError};
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -268,7 +270,6 @@ async fn serve_on(
                 Err(e) => break Err(e.into()),
             },
         };
-        tracing::info!(%peer, "client connected");
         // Replies are small and sent one after another: with Nagle on, the second (a roll)
         // waits ~40 ms for the peer's delayed ACK of the first.
         if let Err(e) = stream.set_nodelay(true) {
@@ -281,10 +282,12 @@ async fn serve_on(
         trace::spawn_loop(
             "camera session: each frame or roll is a trace of its own",
             sessions.track_future(async move {
-                if let Err(e) = handle_connection(stream, handle, tracer, dice_threshold, model, closing).await {
-                    tracing::error!(%peer, error = %e, "connection error");
+                match handle_connection(stream, peer, handle, tracer, dice_threshold, model, closing).await {
+                    Ok(Ended::Session) => tracing::info!(%peer, "client disconnected"),
+                    // The readiness probe opens the port every 2 s on every pod: no log line.
+                    Ok(Ended::Probe) => {}
+                    Err(e) => tracing::error!(%peer, error = %e, "connection error"),
                 }
-                tracing::info!(%peer, "client disconnected");
             }),
         );
     };
@@ -299,15 +302,25 @@ async fn serve_on(
     result
 }
 
+/// What a connection turned out to be.
+#[derive(Debug, PartialEq)]
+enum Ended {
+    /// A camera session, now closed.
+    Session,
+    /// The peer closed the connection without sending a handshake: a port probe.
+    Probe,
+}
+
 #[expect(clippy::result_large_err, reason = "the handshake callback's error type is tungstenite's")]
 async fn handle_connection<S>(
     stream: S,
+    peer: SocketAddr,
     handle: Arc<InferHandle>,
     tracer: Arc<UnitTracer>,
     dice_threshold: f32,
     model: String,
     closing: CancellationToken,
-) -> anyhow::Result<()>
+) -> anyhow::Result<Ended>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -322,6 +335,7 @@ where
     .await;
     let ws = match accepted {
         Ok(ws) => ws,
+        Err(WsError::Protocol(ProtocolError::HandshakeIncomplete)) => return Ok(Ended::Probe),
         Err(e) => {
             // Only a caller that sent a trace context gets a span for its failed
             // handshake: port probes and scanners would each start a trace otherwise.
@@ -331,10 +345,11 @@ where
             return Err(e.into());
         }
     };
+    tracing::info!(%peer, "client connected");
     let session = tracer.open_session(accept_started, &parent, &model, None);
     let cx = session.cx();
     run_session(ws, handle, dice_threshold, model, session, closing).with_context(cx).await;
-    Ok(())
+    Ok(Ended::Session)
 }
 
 /// The trace context the handshake's `traceparent` carries (empty without one).
@@ -595,8 +610,9 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/", listener.local_addr().unwrap());
         let server = trace::spawn_loop("test: one camera session", async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            handle_connection(stream, fake_inference(), tracer, 0.7, "test-model".into(), closing).await.unwrap();
+            let (stream, peer) = listener.accept().await.unwrap();
+            let ended = handle_connection(stream, peer, fake_inference(), tracer, 0.7, "test-model".into(), closing);
+            assert_eq!(ended.await.unwrap(), Ended::Session);
         });
         (client(&url, caller).await.unwrap(), server)
     }
@@ -645,6 +661,22 @@ mod tests {
         assert_eq!(open.span_context.trace_id(), caller.trace_id());
         assert_eq!(open.parent_span_id, caller.span_id());
         assert_eq!(open.span_kind, SpanKind::Server);
+    }
+
+    /// The readiness probe opens the port and closes it without a word. That is neither a
+    /// session nor an error: it gets no span and no log line.
+    #[tokio::test]
+    async fn a_port_probe_is_not_a_session() {
+        let (tracer, exporter) = in_memory(1);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(tokio::net::TcpStream::connect(addr).await.unwrap());
+
+        let (stream, peer) = listener.accept().await.unwrap();
+        let ended = handle_connection(stream, peer, fake_inference(), tracer, 0.7, "m".into(), CancellationToken::new());
+
+        assert_eq!(ended.await.unwrap(), Ended::Probe);
+        assert!(exporter.get_finished_spans().unwrap().is_empty());
     }
 
     /// A whole session against a fake model: the roll message carries the `roll.settle`
