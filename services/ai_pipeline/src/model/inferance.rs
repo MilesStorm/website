@@ -18,6 +18,41 @@ fn yolo_onnx_path() -> String {
     std::env::var("YOLO_ONNX_PATH").unwrap_or_else(|_| YOLO_ONNX_DEFAULT.to_string())
 }
 
+/// The half-precision copy of the model (`tools/yolo_fp16.py`; the image builds it). Its
+/// input and output stay f32, so nothing else changes. None outside the image.
+fn yolo_fp16_onnx_path() -> Option<String> {
+    std::env::var("YOLO_FP16_ONNX_PATH").ok()
+}
+
+/// The model name of the GPU this container was given, e.g. "NVIDIA GeForce RTX 2060
+/// SUPER". Kubernetes hands the pod either of the node's cards, so it is read at start:
+/// the NVIDIA runtime names the card's UUID in NVIDIA_VISIBLE_DEVICES, and the driver
+/// lists every card in /proc. Reading /proc opens no GPU device.
+fn gpu_model() -> Option<String> {
+    let uuid = std::env::var("NVIDIA_VISIBLE_DEVICES").ok()?;
+    let cards = std::fs::read_dir("/proc/driver/nvidia/gpus").ok()?;
+    cards
+        .flatten()
+        .filter_map(|card| std::fs::read_to_string(card.path().join("information")).ok())
+        .find_map(|information| model_of(&information, &uuid))
+}
+
+/// The `Model:` of a card's /proc `information`, if the card's `GPU UUID:` is `uuid`.
+fn model_of(information: &str, uuid: &str) -> Option<String> {
+    let field = |name: &str| {
+        information.lines().find_map(|line| line.strip_prefix(name)).map(|value| value.trim().to_string())
+    };
+    (field("GPU UUID:")? == uuid).then(|| field("Model:")).flatten()
+}
+
+/// Whether half precision pays on this card. RTX cards have tensor cores, which are
+/// built for half-precision convolutions. GTX 16-series cards have none, and are widely
+/// reported to return NaN from half-precision convolutions, so they and any card not
+/// recognized keep the f32 model.
+fn has_tensor_cores(model: &str) -> bool {
+    model.contains("RTX")
+}
+
 /// The YOLO detector, run by ONNX Runtime on the GPU (its CUDA provider uses cuDNN).
 /// burn's CUDA backend ran the same model in ~100 ms a frame on a GTX 1660 SUPER
 /// (production 2026-10-11): it has a fixed cost per layer, and YOLO has hundreds.
@@ -36,7 +71,11 @@ impl Yolo {
     }
 
     fn load_on(gpu: bool) -> anyhow::Result<Self> {
-        let path = yolo_onnx_path();
+        let card = if gpu { gpu_model() } else { None };
+        let fp16 = yolo_fp16_onnx_path().filter(|_| card.as_deref().is_some_and(has_tensor_cores));
+        let precision = if fp16.is_some() { "fp16" } else { "fp32" };
+        let path = fp16.unwrap_or_else(yolo_onnx_path);
+        tracing::info!(gpu = card.as_deref().unwrap_or("unknown"), precision, model = %path, "loading YOLO");
         let context = |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("YOLO ({path}): {what}: {e}");
         let mut builder = ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
         // Outside the test build the GPU provider is always required.
@@ -551,7 +590,27 @@ pub fn export_yolo_crops<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use super::{BoxDet, YOLO_INPUT, Yolo, letterbox_to_chw, suppress_duplicates};
+    use super::{BoxDet, YOLO_INPUT, Yolo, has_tensor_cores, letterbox_to_chw, model_of, suppress_duplicates};
+
+    /// eta's two cards, as the driver lists them in /proc/driver/nvidia/gpus/*/information.
+    const RTX_2060: &str = "Model: \t\t NVIDIA GeForce RTX 2060 SUPER\nIRQ:   \t\t 136\nGPU UUID: \t GPU-4061671a-fa52-81d1-d007-ce786b0e13de\nVideo BIOS: \t 90.06.44.80.56\n";
+    const GTX_1660: &str = "Model: \t\t NVIDIA GeForce GTX 1660 SUPER\nIRQ:   \t\t 137\nGPU UUID: \t GPU-5520ea75-84bd-7884-58cc-96bf86457f88\n";
+
+    #[test]
+    fn the_card_the_container_was_given_decides_the_precision() {
+        let model = |uuid| [RTX_2060, GTX_1660].iter().find_map(|information| model_of(information, uuid));
+
+        let rtx = model("GPU-4061671a-fa52-81d1-d007-ce786b0e13de").unwrap();
+        assert_eq!(rtx, "NVIDIA GeForce RTX 2060 SUPER");
+        assert!(has_tensor_cores(&rtx));
+
+        let gtx = model("GPU-5520ea75-84bd-7884-58cc-96bf86457f88").unwrap();
+        assert_eq!(gtx, "NVIDIA GeForce GTX 1660 SUPER");
+        assert!(!has_tensor_cores(&gtx));
+
+        // No UUID to match ("all", an index): the card is unknown, and stays on f32.
+        assert_eq!(model("all"), None);
+    }
 
     #[test]
     fn a_wide_frame_is_letterboxed_between_grey_bars() {

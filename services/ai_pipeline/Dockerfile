@@ -48,6 +48,13 @@ RUN mkdir -p /onnxruntime \
  && rm /onnxruntime/lib/libonnxruntime_providers_tensorrt.so
 
 
+# The half-precision copy of YOLO, for cards with tensor cores (src/model/inferance.rs).
+FROM python:3.12-slim AS fp16
+RUN pip install --no-cache-dir onnx==1.23.2 onnxruntime==1.31.0 sympy==1.14.0
+COPY tools/yolo_fp16.py src/model/yolo26s.onnx /work/
+RUN python /work/yolo_fp16.py /work/yolo26s.onnx /work/yolo26s_fp16.onnx
+
+
 # NVIDIA's runtime image: ONNX Runtime's CUDA provider needs cuDNN, cuBLAS and the
 # other CUDA libraries it ships, and burn's CUDA backend (the dice head) needs its NVRTC.
 # The GPU driver itself comes from the host through the NVIDIA container runtime.
@@ -84,6 +91,7 @@ WORKDIR /app
 # --chown on each copy; a separate `chown -R` would store every file a second time.
 COPY --chown=appuser:appuser --from=builder /app/target/release/dice_detector ./dice_detector
 COPY --chown=appuser:appuser src/model/yolo26s.onnx                        ./models/yolo26s.onnx
+COPY --chown=appuser:appuser --from=fp16 /work/yolo26s_fp16.onnx           ./models/yolo26s_fp16.onnx
 
 # Dice-value head (ResNet18 trained by tools/train_head_torch.py --all). Model
 # weights never go in git: the file is a GitHub Release asset, pinned by SHA-256
@@ -95,6 +103,7 @@ ADD --chown=appuser:appuser --chmod=0644 --checksum=sha256:6b6e71693e5b9b667c2d0
 USER appuser
 
 ENV YOLO_ONNX_PATH=/app/models/yolo26s.onnx
+ENV YOLO_FP16_ONNX_PATH=/app/models/yolo26s_fp16.onnx
 ENV DICE_HEAD_PATH=/app/models/dice_head_resnet18.safetensors
 # Minimum averaged confidence to report a die's value; below it the die is
 # reported as unreadable (null) instead of guessed.

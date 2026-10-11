@@ -11,6 +11,7 @@ weights/
 .cargo/
 .venv/
 tools/
+!tools/yolo_fp16.py
 *.pt
 *.safetensors
 *.f32
