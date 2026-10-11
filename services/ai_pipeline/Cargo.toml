@@ -21,6 +21,9 @@ burn-store = { version = "^0.21.0", features = [
   "safetensors",
   "std",
 ], default-features = false }
+# YOLO runs in ONNX Runtime. The library is loaded at run time (ORT_DYLIB_PATH): the image
+# ships Microsoft's CUDA 12 build, matching the CUDA the rest of the image has.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "cuda", "api-22"] }
 image = "^0.25.10"
 anyhow = "1.0.102"
 rand = "0.10.1"
@@ -42,6 +45,3 @@ serde_json = "1"
 [dev-dependencies]
 opentelemetry_sdk = { version = "0.32", features = ["testing"] }
 toml = "1"
-
-[build-dependencies]
-burn-onnx = { version = "0.21.0", features = ["mmap"] }

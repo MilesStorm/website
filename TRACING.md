@@ -191,7 +191,8 @@ restart, and would say nothing about where time went. So:
 - **Units.** Each piece of work on the stream is its own short trace, linked to the open span
   and carrying `session.id`:
   - ai_pipeline `roll.settle`: a roll that settled, with `frame.pending`, `infer.queue`,
-    `infer.decode`, `infer.yolo`, `infer.crop`, `infer.head` and `ws.send` under it. Their
+    `infer.decode`, `infer.prepare`, `infer.yolo`, `infer.crop`, `infer.head` and `ws.send`
+    under it. Their
     times are measured in the inference thread and written as spans afterwards, so the
     per-frame code creates no spans. `infer.crop` leaves out the crop's upload. A roll's
     `ws.send` is a PRODUCER span, started before the send: the roll message names it.

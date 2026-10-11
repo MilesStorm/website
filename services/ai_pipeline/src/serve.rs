@@ -24,9 +24,8 @@ use crate::roll::{Observation, RollEvent, RollTracker};
 use crate::trace::{self, Carried};
 use crate::unit_trace::{FrameTimes, Outcome, SessionTrace, UnitTrace, UnitTracer};
 
-// f32 inference: the ONNX-imported YOLO graph carries f32 constants that clash
-// with bf16 activations (DTypeMismatch at runtime), and yolo26s + ResNet18 are
-// small enough that f32 stays comfortably real-time.
+// The head's backend (YOLO runs in ONNX Runtime, `model/inferance.rs`). f32: ResNet18 on
+// 64x64 crops is small enough that f32 stays comfortably real-time.
 type InferBackend = Cuda<f32>;
 
 /// On shutdown, how long sessions get to record their `session close` span.
@@ -565,8 +564,9 @@ mod tests {
                     confident: true,
                     probs,
                 };
+                let prepare = Instant::now();
                 let yolo = Instant::now();
-                let stages = StageEnds { yolo, crop: Some(Instant::now()), head: Some(Instant::now()) };
+                let stages = StageEnds { prepare, yolo, crop: Some(Instant::now()), head: Some(Instant::now()) };
                 (Ok(vec![die]), decoded, Some(stages))
             }) as InferFn)
         })
@@ -711,7 +711,16 @@ mod tests {
                 .collect();
             assert_eq!(
                 children,
-                ["frame.pending", "infer.queue", "infer.decode", "infer.yolo", "infer.crop", "infer.head", "ws.send"]
+                [
+                    "frame.pending",
+                    "infer.queue",
+                    "infer.decode",
+                    "infer.prepare",
+                    "infer.yolo",
+                    "infer.crop",
+                    "infer.head",
+                    "ws.send"
+                ]
             );
             // The stages lie inside the unit, which lasts until its replies are sent.
             for child in spans.iter().filter(|s| s.parent_span_id == unit.span_context.span_id()) {

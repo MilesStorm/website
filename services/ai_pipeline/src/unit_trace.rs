@@ -83,7 +83,8 @@ impl FrameTimes {
             // In the inference thread's queue while it worked on another session's frame.
             Some(("infer.queue", self.submitted, self.dequeued)),
             self.decoded.map(|decoded| ("infer.decode", self.dequeued, decoded)),
-            self.decoded.zip(stages).map(|(decoded, s)| ("infer.yolo", decoded, s.yolo)),
+            self.decoded.zip(stages).map(|(decoded, s)| ("infer.prepare", decoded, s.prepare)),
+            stages.map(|s| ("infer.yolo", s.prepare, s.yolo)),
             stages.and_then(|s| s.crop.map(|crop| ("infer.crop", s.yolo, crop))),
             stages.and_then(|s| s.crop.zip(s.head)).map(|(crop, head)| ("infer.head", crop, head)),
         ]
@@ -470,7 +471,7 @@ pub mod tests {
             submitted: at(3),
             dequeued: at(5),
             decoded: Some(at(9)),
-            stages: Some(StageEnds { yolo: at(100), crop: Some(at(104)), head: Some(at(140)) }),
+            stages: Some(StageEnds { prepare: at(12), yolo: at(100), crop: Some(at(104)), head: Some(at(140)) }),
             done: at(141),
         }
     }
@@ -510,7 +511,8 @@ pub mod tests {
             ("frame.pending", 0, 3),
             ("infer.queue", 3, 5),
             ("infer.decode", 5, 9),
-            ("infer.yolo", 9, 100),
+            ("infer.prepare", 9, 12),
+            ("infer.yolo", 12, 100),
             ("infer.crop", 100, 104),
             ("infer.head", 104, 140),
             ("ws.send", 142, 150),
@@ -530,7 +532,8 @@ pub mod tests {
         let mut session = tracer.open_session(Instant::now(), &Context::new(), "m", None);
         let t0 = Instant::now();
         let mut times = times(t0);
-        times.stages = Some(StageEnds { yolo: t0 + Duration::from_millis(100), crop: None, head: None });
+        let at = |ms| t0 + Duration::from_millis(ms);
+        times.stages = Some(StageEnds { prepare: at(12), yolo: at(100), crop: None, head: None });
 
         session.frame(1, &times, Outcome::Frame { detections: 0 }).unwrap().sent(times.done, times.done, true);
 
