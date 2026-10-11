@@ -561,8 +561,7 @@ pub mod tests {
         assert_eq!(attribute(named(&spans, "session close")[0], "frames_failed"), Some(1.into()));
     }
 
-    /// One die lying still: at a frame every 100 ms (`traced_frames`) the tracker settles a
-    /// roll on frame `SETTLE_FRAMES + 1`.
+    /// One die lying still: the tracker settles a roll on frame `SETTLE_FRAMES + 1`.
     fn steady_die() -> Vec<Observation> {
         let mut probs = vec![0.005; 21];
         probs[16] = 0.9;
