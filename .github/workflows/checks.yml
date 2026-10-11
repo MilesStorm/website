@@ -85,3 +85,13 @@ jobs:
           python3 -m venv /tmp/onnx && /tmp/onnx/bin/pip install --quiet onnx==1.23.2
           /tmp/onnx/bin/python tools/head_onnx.py /tmp/dice_head.safetensors /tmp/dice_head.onnx
           ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=/tmp/dice_head.onnx cargo test -- --ignored head_runs
+      # The half-precision copies answer as the f32 models do: the check the service makes on
+      # the card at every start, here on the CPU.
+      - name: Half-precision models
+        run: |
+          /tmp/onnx/bin/pip install --quiet onnxruntime==1.31.0 sympy==1.14.0
+          /tmp/onnx/bin/python tools/onnx_fp16.py src/model/yolo26s.onnx /tmp/yolo_fp16.onnx
+          /tmp/onnx/bin/python tools/onnx_fp16.py /tmp/dice_head.onnx /tmp/dice_head_fp16.onnx
+          ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=/tmp/dice_head.onnx \
+            YOLO_FP16_ONNX_PATH=/tmp/yolo_fp16.onnx DICE_HEAD_FP16_ONNX_PATH=/tmp/dice_head_fp16.onnx \
+            cargo test -- --ignored fp16

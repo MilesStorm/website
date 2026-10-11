@@ -38,23 +38,37 @@ fn head_fp16_onnx_path() -> Option<String> {
 
 /// The model name of the GPU this container was given, e.g. "NVIDIA GeForce RTX 2060
 /// SUPER". Kubernetes hands the pod either of the node's cards, so it is read at start:
-/// the NVIDIA runtime names the card's UUID in NVIDIA_VISIBLE_DEVICES, and the driver
-/// lists every card in /proc. Reading /proc opens no GPU device.
+/// the container has a device file for its own card only (/dev/nvidia0 or /dev/nvidia1),
+/// and the driver lists every card in /proc with its `Device Minor`. Neither read opens a
+/// GPU device.
+///
+/// NVIDIA_VISIBLE_DEVICES does not say which card: the NVIDIA runtime gives this process
+/// "void" once it has put the device in (production 2026-10-11; `kubectl exec` shows the
+/// card's UUID there, the service never saw it and ran f32 on both cards).
 fn gpu_model() -> Option<String> {
-    let uuid = std::env::var("NVIDIA_VISIBLE_DEVICES").ok()?;
+    let devices = std::fs::read_dir("/dev").ok()?.flatten().filter_map(|file| file.file_name().into_string().ok());
+    let minor = device_minor(devices)?;
     let cards = std::fs::read_dir("/proc/driver/nvidia/gpus").ok()?;
     cards
         .flatten()
         .filter_map(|card| std::fs::read_to_string(card.path().join("information")).ok())
-        .find_map(|information| model_of(&information, &uuid))
+        .find_map(|information| model_of(&information, minor))
 }
 
-/// The `Model:` of a card's /proc `information`, if the card's `GPU UUID:` is `uuid`.
-fn model_of(information: &str, uuid: &str) -> Option<String> {
+/// The N of the one `nvidiaN` among the files in /dev. None with no card or several:
+/// then it is not known which one a model will run on.
+fn device_minor(files: impl Iterator<Item = String>) -> Option<u32> {
+    let mut minors = files.filter_map(|file| file.strip_prefix("nvidia")?.parse::<u32>().ok());
+    let minor = minors.next()?;
+    minors.next().is_none().then_some(minor)
+}
+
+/// The `Model:` of a card's /proc `information`, if the card's `Device Minor:` is `minor`.
+fn model_of(information: &str, minor: u32) -> Option<String> {
     let field = |name: &str| {
         information.lines().find_map(|line| line.strip_prefix(name)).map(|value| value.trim().to_string())
     };
-    (field("GPU UUID:")? == uuid).then(|| field("Model:")).flatten()
+    (field("Device Minor:")?.parse() == Ok(minor)).then(|| field("Model:")).flatten()
 }
 
 /// Whether half precision pays on this card. RTX cards have tensor cores, which are
@@ -73,13 +87,7 @@ fn has_tensor_cores(model: &str) -> bool {
 /// ships Microsoft's CUDA 12 build). A model runs on the GPU or not at all: this fails if
 /// the CUDA provider can't load. Only the test build can run one on the CPU (`gpu` false).
 ///
-/// `fp16` is the model's half-precision copy, used when the card has tensor cores.
-fn load_session(name: &str, fp32: String, fp16: Option<String>, gpu: bool) -> anyhow::Result<ort::session::Session> {
-    let card = if gpu { gpu_model() } else { None };
-    let fp16 = fp16.filter(|_| card.as_deref().is_some_and(has_tensor_cores));
-    let precision = if fp16.is_some() { "fp16" } else { "fp32" };
-    let path = fp16.unwrap_or(fp32);
-    tracing::info!(name, gpu = card.as_deref().unwrap_or("unknown"), precision, model = %path, "loading model");
+fn load_session(name: &str, path: &str, gpu: bool) -> anyhow::Result<ort::session::Session> {
     let context = |what: &str, e: &dyn std::fmt::Display| anyhow::anyhow!("{name} ({path}): {what}: {e}");
     let mut builder = ort::session::Session::builder().map_err(|e| context("onnxruntime", &e))?;
     // Outside the test build the GPU provider is always required.
@@ -91,7 +99,61 @@ fn load_session(name: &str, fp32: String, fp16: Option<String>, gpu: bool) -> an
             .error_on_failure();
         builder = builder.with_execution_providers([cuda]).map_err(|e| context("CUDA provider", &e))?;
     }
-    builder.commit_from_file(&path).map_err(|e| context("loading the model", &e))
+    builder.commit_from_file(path).map_err(|e| context("loading the model", &e))
+}
+
+/// Most a half-precision model's answer may differ from the f32 model's, in any value.
+const FP16_TOLERANCE: f32 = 0.05;
+
+/// Loads the model this card should run: the half-precision copy (`fp16`) if the card has
+/// tensor cores and the copy gives the f32 model's answer there, otherwise the f32 model.
+///
+/// `answer` runs a model on a fixed input and returns values to compare (confidences,
+/// probabilities). The comparison is made on the card itself, at every start: half
+/// precision is known to go wrong on some cards (NaN on GTX 16-series), and a model that
+/// answers differently must never serve.
+fn load_for_card(
+    name: &str,
+    fp32: String,
+    fp16: Option<String>,
+    gpu: bool,
+    answer: impl Fn(&mut ort::session::Session) -> Vec<f32>,
+) -> anyhow::Result<ort::session::Session> {
+    let card = if gpu { gpu_model() } else { None };
+    let gpu_name = card.as_deref().unwrap_or("unknown");
+    let mut full = load_session(name, &fp32, gpu)?;
+    let Some(fp16) = fp16.filter(|_| card.as_deref().is_some_and(has_tensor_cores)) else {
+        tracing::info!(name, gpu = gpu_name, precision = "fp32", model = %fp32, "model loaded");
+        return Ok(full);
+    };
+    let mut half = load_session(name, &fp16, gpu)?;
+    let difference = max_difference(&answer(&mut full), &answer(&mut half));
+    if difference.is_some_and(|difference| difference <= FP16_TOLERANCE) {
+        tracing::info!(name, gpu = gpu_name, precision = "fp16", model = %fp16, "model loaded");
+        Ok(half)
+    } else {
+        tracing::warn!(
+            name,
+            gpu = gpu_name,
+            precision = "fp32",
+            model = %fp32,
+            difference = difference.map(f64::from),
+            "the half-precision model answers differently on this card: serving the f32 model"
+        );
+        Ok(full)
+    }
+}
+
+/// The largest difference between two answers. None if they can't be compared: different
+/// lengths, or a value that is not a number.
+fn max_difference(a: &[f32], b: &[f32]) -> Option<f32> {
+    (a.len() == b.len() && a.iter().chain(b).all(|v| v.is_finite()))
+        .then(|| a.iter().zip(b).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max))
+}
+
+/// A fixed picture that is neither blank nor regular, as `len` values in [0, 1].
+fn test_pattern(len: usize) -> Vec<f32> {
+    (0..len).map(|i| (i.wrapping_mul(2_654_435_761) >> 7) as u8 as f32 / 255.0).collect()
 }
 
 /// The YOLO detector.
@@ -106,19 +168,29 @@ impl Yolo {
     }
 
     fn load_on(gpu: bool) -> anyhow::Result<Self> {
-        let session = load_session("YOLO", yolo_onnx_path(), yolo_fp16_onnx_path(), gpu)?;
+        // Compared: every candidate box's confidence, most confident first.
+        let confidences = |session: &mut ort::session::Session| {
+            let raw = Self::run(session, test_pattern(3 * YOLO_INPUT * YOLO_INPUT));
+            let mut confidences: Vec<f32> = raw.as_chunks::<6>().0.iter().map(|row| row[4]).collect();
+            confidences.sort_by(|a, b| b.total_cmp(a));
+            confidences
+        };
+        let session = load_for_card("YOLO", yolo_onnx_path(), yolo_fp16_onnx_path(), gpu, confidences)?;
         Ok(Self { session: Mutex::new(session) })
+    }
+
+    fn run(session: &mut ort::session::Session, input: Vec<f32>) -> Vec<f32> {
+        let input = ort::value::Tensor::from_array(([1usize, 3, YOLO_INPUT, YOLO_INPUT], input))
+            .expect("the letterboxed frame has the model's input shape");
+        let outputs = session.run(ort::inputs![input]).expect("YOLO forward pass");
+        let (_, raw) = outputs[0].try_extract_tensor::<f32>().expect("YOLO's output is f32");
+        raw.to_vec()
     }
 
     /// `input` is the letterboxed frame, [1, 3, 640, 640]. Returns the [1, 300, 6] output:
     /// each row = [x1, y1, x2, y2, conf, class], in letterboxed pixels.
     fn forward(&self, input: Vec<f32>) -> Vec<f32> {
-        let input = ort::value::Tensor::from_array(([1usize, 3, YOLO_INPUT, YOLO_INPUT], input))
-            .expect("the letterboxed frame has the model's input shape");
-        let mut session = self.session.lock().unwrap();
-        let outputs = session.run(ort::inputs![input]).expect("YOLO forward pass");
-        let (_, raw) = outputs[0].try_extract_tensor::<f32>().expect("YOLO's output is f32");
-        raw.to_vec()
+        Self::run(&mut self.session.lock().unwrap(), input)
     }
 }
 
@@ -135,8 +207,21 @@ impl Head {
     }
 
     fn load_on(gpu: bool) -> anyhow::Result<Self> {
-        let session = load_session("dice head", head_onnx_path()?, head_fp16_onnx_path(), gpu)?;
+        // Compared: the probabilities of a full pass of crops.
+        let probabilities = |session: &mut ort::session::Session| {
+            Self::run(session, test_pattern(HEAD_BATCH * CROP_LEN)).into_iter().flatten().collect()
+        };
+        let session = load_for_card("dice head", head_onnx_path()?, head_fp16_onnx_path(), gpu, probabilities)?;
         Ok(Self { session: Mutex::new(session) })
+    }
+
+    /// One pass: `input` is HEAD_BATCH crops. Returns each crop's probability per class.
+    fn run(session: &mut ort::session::Session, input: Vec<f32>) -> Vec<[f32; NUM_CLASSES]> {
+        let input = ort::value::Tensor::from_array(([HEAD_BATCH, 3, HEAD_INPUT, HEAD_INPUT], input))
+            .expect("the crops have the head's input shape");
+        let outputs = session.run(ort::inputs![input]).expect("dice head forward pass");
+        let (_, logits) = outputs[0].try_extract_tensor::<f32>().expect("the head's output is f32");
+        logits.as_chunks::<NUM_CLASSES>().0.iter().map(softmax).collect()
     }
 
     /// `crops`: one `pack_chw` crop per die. Returns each die's probability per class.
@@ -148,11 +233,7 @@ impl Head {
             for (slot, crop) in input.as_chunks_mut::<CROP_LEN>().0.iter_mut().zip(dice) {
                 slot.copy_from_slice(crop);
             }
-            let input = ort::value::Tensor::from_array(([HEAD_BATCH, 3, HEAD_INPUT, HEAD_INPUT], input))
-                .expect("the crops have the head's input shape");
-            let outputs = session.run(ort::inputs![input]).expect("dice head forward pass");
-            let (_, logits) = outputs[0].try_extract_tensor::<f32>().expect("the head's output is f32");
-            probs.extend(logits.as_chunks::<NUM_CLASSES>().0.iter().take(dice.len()).map(softmax));
+            probs.extend(Self::run(&mut session, input).into_iter().take(dice.len()));
         }
         probs
     }
@@ -633,28 +714,42 @@ pub fn export_yolo_crops(
 #[cfg(test)]
 mod tests {
     use super::{
-        BoxDet, CROP_LEN, HEAD_BATCH, Head, YOLO_INPUT, Yolo, has_tensor_cores, letterbox_to_chw, model_of, softmax,
-        suppress_duplicates,
+        BoxDet, CROP_LEN, FP16_TOLERANCE, HEAD_BATCH, Head, YOLO_INPUT, Yolo, device_minor, has_tensor_cores,
+        letterbox_to_chw, load_session, max_difference, model_of, softmax, suppress_duplicates, test_pattern,
     };
 
     /// eta's two cards, as the driver lists them in /proc/driver/nvidia/gpus/*/information.
-    const RTX_2060: &str = "Model: \t\t NVIDIA GeForce RTX 2060 SUPER\nIRQ:   \t\t 136\nGPU UUID: \t GPU-4061671a-fa52-81d1-d007-ce786b0e13de\nVideo BIOS: \t 90.06.44.80.56\n";
-    const GTX_1660: &str = "Model: \t\t NVIDIA GeForce GTX 1660 SUPER\nIRQ:   \t\t 137\nGPU UUID: \t GPU-5520ea75-84bd-7884-58cc-96bf86457f88\n";
+    const RTX_2060: &str = "Model: \t\t NVIDIA GeForce RTX 2060 SUPER\nIRQ:   \t\t 93\nGPU UUID: \t GPU-4061671a-fa52-81d1-d007-ce786b0e13de\nVideo BIOS: \t 90.06.44.40.73\nBus Location: \t 0000:09:00.0\nDevice Minor: \t 0\n";
+    const GTX_1660: &str = "Model: \t\t NVIDIA GeForce GTX 1660 SUPER\nIRQ:   \t\t 94\nGPU UUID: \t GPU-5520ea75-84bd-7884-58cc-96bf86457f88\nDevice Minor: \t 1\n";
+
+    /// /dev in a pod that was given one card (production 2026-10-11).
+    fn dev(card: &str) -> impl Iterator<Item = String> {
+        ["null", "nvidia-modeset", "nvidia-uvm", "nvidia-uvm-tools", card, "nvidiactl", "shm"].into_iter().map(String::from)
+    }
 
     #[test]
     fn the_card_the_container_was_given_decides_the_precision() {
-        let model = |uuid| [RTX_2060, GTX_1660].iter().find_map(|information| model_of(information, uuid));
+        let model = |minor| [RTX_2060, GTX_1660].iter().find_map(|information| model_of(information, minor));
 
-        let rtx = model("GPU-4061671a-fa52-81d1-d007-ce786b0e13de").unwrap();
+        let rtx = model(device_minor(dev("nvidia0")).unwrap()).unwrap();
         assert_eq!(rtx, "NVIDIA GeForce RTX 2060 SUPER");
         assert!(has_tensor_cores(&rtx));
 
-        let gtx = model("GPU-5520ea75-84bd-7884-58cc-96bf86457f88").unwrap();
+        let gtx = model(device_minor(dev("nvidia1")).unwrap()).unwrap();
         assert_eq!(gtx, "NVIDIA GeForce GTX 1660 SUPER");
         assert!(!has_tensor_cores(&gtx));
 
-        // No UUID to match ("all", an index): the card is unknown, and stays on f32.
-        assert_eq!(model("all"), None);
+        // No card, both cards, or a card the driver doesn't list: unknown, and f32.
+        assert_eq!(device_minor(dev("tty")), None);
+        assert_eq!(device_minor(dev("nvidia0").chain(dev("nvidia1"))), None);
+        assert_eq!(model(2), None);
+    }
+
+    #[test]
+    fn a_half_precision_answer_must_be_close_and_all_numbers() {
+        assert_eq!(max_difference(&[0.25, 0.5], &[0.25, 0.75]), Some(0.25));
+        assert_eq!(max_difference(&[0.9, 0.1], &[0.9, f32::NAN]), None);
+        assert_eq!(max_difference(&[0.9, 0.1], &[0.9]), None);
     }
 
     #[test]
@@ -709,6 +804,33 @@ mod tests {
             }
         }
         assert!(probs[0].iter().zip(&probs[1]).any(|(a, b)| (a - b).abs() > 1e-3), "different crops read alike");
+    }
+
+    /// The check `load_for_card` makes on the card, made here on the CPU: the half-precision
+    /// models answer the test pattern as the f32 models do. CI builds both and runs this:
+    /// `... YOLO_FP16_ONNX_PATH=<yolo_fp16.onnx> DICE_HEAD_FP16_ONNX_PATH=<head_fp16.onnx> cargo test -- --ignored fp16`.
+    #[test]
+    #[ignore = "needs ONNX Runtime and the built models: see checks.yml"]
+    fn the_fp16_models_answer_the_test_pattern_as_the_f32_models_do() {
+        let session = |path: String| load_session("test", &path, false).unwrap();
+        let confidences = |path: String| {
+            let raw = Yolo::run(&mut session(path), test_pattern(3 * YOLO_INPUT * YOLO_INPUT));
+            let mut confidences: Vec<f32> = raw.as_chunks::<6>().0.iter().map(|row| row[4]).collect();
+            confidences.sort_by(|a, b| b.total_cmp(a));
+            confidences
+        };
+        let probabilities = |path: String| -> Vec<f32> {
+            Head::run(&mut session(path), test_pattern(HEAD_BATCH * CROP_LEN)).into_iter().flatten().collect()
+        };
+
+        let yolo = max_difference(&confidences(super::yolo_onnx_path()), &confidences(super::yolo_fp16_onnx_path().unwrap()));
+        let head = max_difference(
+            &probabilities(super::head_onnx_path().unwrap()),
+            &probabilities(super::head_fp16_onnx_path().unwrap()),
+        );
+        println!("fp16 against f32 on the test pattern: YOLO {yolo:?}, head {head:?}");
+        assert!(yolo.unwrap() <= FP16_TOLERANCE);
+        assert!(head.unwrap() <= FP16_TOLERANCE);
     }
 
     #[test]
