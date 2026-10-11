@@ -270,6 +270,11 @@ async fn serve_on(
             },
         };
         tracing::info!(%peer, "client connected");
+        // Replies are small and sent one after another: with Nagle on, the second (a roll)
+        // waits ~40 ms for the peer's delayed ACK of the first.
+        if let Err(e) = stream.set_nodelay(true) {
+            tracing::warn!(%peer, error = %e, "could not turn TCP_NODELAY on");
+        }
         let handle = Arc::clone(&handle);
         let tracer = Arc::clone(&tracer);
         let model = model.clone();

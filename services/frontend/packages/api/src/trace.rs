@@ -403,7 +403,8 @@ mod server {
             peer.service = peer,
         );
         inject(&span, req.headers_mut());
-        let connected = tokio::time::timeout(timeout, tokio_tungstenite::connect_async(req))
+        // TCP_NODELAY (the `true`): small messages go out at once instead of waiting for an ACK.
+        let connected = tokio::time::timeout(timeout, tokio_tungstenite::connect_async_with_config(req, None, true))
             .instrument(span.clone())
             .await;
         match connected {
