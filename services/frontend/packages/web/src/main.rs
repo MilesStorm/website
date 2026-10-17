@@ -5,8 +5,8 @@ use dioxus::prelude::*;
 use api::{check_login_status, get_my_permissions, logout};
 use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
 use views::{
-    AccountDeleted, AdminPanel, Arcane, Ark, AssholeTimer, DeleteAccount, ForgotPassword, Invite, Landing, Login,
-    NotFound, Profile, Register, ResetPassword, VerifyEmail,
+    AccountDeleted, AdminPanel, Arcane, Ark, AssholeTimer, DeleteAccount, Enshrouded, ForgotPassword, Invite, Landing,
+    Login, NotFound, Profile, Register, ResetPassword, VerifyEmail,
 };
 
 mod views;
@@ -826,6 +826,8 @@ enum Route {
         Profile {},
         #[route("/ark")]
         Ark {},
+        #[route("/enshrouded")]
+        Enshrouded {},
         #[route("/arcane")]
         Arcane {},
         #[route("/asshole")]
@@ -910,6 +912,7 @@ fn WebNavbar() -> Element {
             picture: account.as_ref().and_then(|a| a.picture_url()),
             on_logout: logout_handler,
             has_ark: perms.contains_key("llama"),
+            has_enshrouded: perms.contains_key("enshrouded"),
             has_arcane: perms.contains_key("arcane"),
             has_admin: perms.contains_key("manage_permissions"),
         }

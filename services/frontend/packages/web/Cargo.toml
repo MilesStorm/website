@@ -63,6 +63,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 web-sys = { version = "0.3", features = [
     "Window",
+    "Document",
     "Location",
     "Navigator",
     "MediaDevices",

@@ -1,6 +1,7 @@
 mod account_email;
 pub mod arcane;
 mod core;
+mod enshrouded;
 mod internal;
 mod invites;
 mod mail;
@@ -206,6 +207,7 @@ impl Auth {
             backend,
             mailer: mail::Mailer::from_env(),
             ark_http: game_http,
+            enshrouded: enshrouded::Control::from_env(),
         };
 
         let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();

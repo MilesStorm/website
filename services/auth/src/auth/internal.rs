@@ -29,6 +29,8 @@ pub struct InternalState {
     pub mailer: Mailer,
     /// Shared client for the ark host (`Auth::server` builds it once).
     pub ark_http: TracedClient,
+    /// The Enshrouded server's control port and query (`Auth::server` builds it once).
+    pub enshrouded: std::sync::Arc<super::enshrouded::Control>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,6 +67,8 @@ pub fn router(state: InternalState) -> Router<()> {
         .merge(account_email::routes())
         // Invite links that give a role
         .merge(invites::routes())
+        // The Enshrouded server panel
+        .merge(super::enshrouded::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             verify_service_token,

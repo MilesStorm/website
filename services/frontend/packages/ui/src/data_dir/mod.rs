@@ -95,6 +95,63 @@ impl Display for CommandResult {
     }
 }
 
+/// The Enshrouded server as the panel (`/enshrouded`) shows it; auth's `StatusResp`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnshroudedStatus {
+    pub state: EnshroudedState,
+    /// `None` when the server doesn't answer the query.
+    pub players: Option<EnshroudedPlayers>,
+    /// The game's own version string.
+    pub version: Option<String>,
+    /// Seconds the server process has been running.
+    pub uptime_secs: Option<i64>,
+    /// When Steam last published a build (unix seconds).
+    pub latest_build_at: Option<i64>,
+    /// A build newer than the running server exists.
+    pub update_pending: bool,
+    /// Someone asked for an update that waits for the server to be empty.
+    #[serde(default)]
+    pub update_queued: bool,
+    /// Whether Restart / Force update can be sent right now.
+    pub can_control: bool,
+    /// Latest commands, newest first.
+    pub recent: Vec<EnshroudedAction>,
+    /// When the next command may be sent (unix seconds), while that is in the future.
+    pub next_command_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EnshroudedState {
+    Online,
+    /// The process runs but the world isn't loaded yet.
+    Starting,
+    Restarting,
+    Updating,
+    Stopping,
+    Stopped,
+    Crashed,
+    /// Neither the server nor its control port answers.
+    Unreachable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnshroudedPlayers {
+    pub online: u8,
+    pub max: u8,
+    /// How long each player has been connected, in seconds (the game sends no names).
+    pub sessions: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnshroudedAction {
+    /// `None` when the account was deleted.
+    pub name: Option<String>,
+    /// `restart`, `update` or `update_now`.
+    pub action: String,
+    /// Unix seconds.
+    pub at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientUser {
     pub id: i64,
