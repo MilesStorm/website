@@ -101,14 +101,8 @@ pub struct EnshroudedStatus {
     pub state: EnshroudedState,
     /// `None` when the server doesn't answer the query.
     pub players: Option<EnshroudedPlayers>,
-    /// The game's own version (its SVN revision).
+    /// The game's build number.
     pub version: Option<String>,
-    /// The installed Steam build, when known.
-    #[serde(default)]
-    pub build: Option<String>,
-    /// Steam's latest public build.
-    #[serde(default)]
-    pub latest_build: Option<String>,
     /// Seconds the server process has been running.
     pub uptime_secs: Option<i64>,
     /// When Steam last published a build (unix seconds).

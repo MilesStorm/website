@@ -165,10 +165,7 @@ fn Header(status: EnshroudedStatus) -> Element {
                     span { "Up for {duration(up)}" }
                 }
                 if let Some(v) = &status.version {
-                    span { "Game version {v}" }
-                }
-                if let Some(b) = &status.build {
-                    span { "Steam build {b}" }
+                    span { "Build {v}" }
                 }
             }
         }
@@ -213,21 +210,17 @@ fn UpdateNotice(status: EnshroudedStatus, now: i64) -> Element {
         };
     }
     let Some(built) = status.latest_build_at else { return rsx! {} };
-    let latest = status.latest_build.as_deref().map(|b| format!(" ({b})")).unwrap_or_default();
     if !status.update_pending {
         return rsx! {
-            p { class: "px-1 text-sm opacity-60", "Up to date: Steam's latest build{latest} is from {ago(now, built)}." }
+            p { class: "px-1 text-sm opacity-60", "Up to date: Steam's latest build is from {ago(now, built)}." }
         };
     }
     rsx! {
         div { role: "alert", class: "alert alert-info",
             div {
-                p { class: "font-semibold", "A new build{latest} came out {ago(now, built)}." }
+                p { class: "font-semibold", "A new build came out {ago(now, built)}." }
                 p { class: "text-sm",
-                    if let Some(b) = &status.build {
-                        "The server runs build {b}. "
-                    }
-                    "It installs the new one by itself when nobody is online (it checks every 30 minutes). Force update installs it now."
+                    "The server installs it by itself when nobody is online (it checks every 30 minutes). Force update installs it now."
                 }
             }
         }
@@ -437,8 +430,6 @@ mod tests {
             state: EnshroudedState::Online,
             players: Some(ui::data_dir::EnshroudedPlayers { online: 2, max: 16, sessions: vec![300, 7500] }),
             version: Some("1269579".into()),
-            build: Some("25988414".into()),
-            latest_build: Some("26000000".into()),
             uptime_secs: Some(90_000),
             latest_build_at: Some(1_000),
             update_pending: true,
@@ -481,10 +472,8 @@ mod tests {
         for text in [
             "Online",
             "Up for 1 d 1 h",
-            "Game version 1269579",
-            "Steam build 25988414",
-            "A new build (26000000) came out 2 h 30 min ago",
-            "The server runs build 25988414.",
+            "Build 1269579",
+            "A new build came out 2 h 30 min ago",
             "on for 5 min",
             "on for 2 h 5 min",
             "Ada",
@@ -513,10 +502,6 @@ mod tests {
         };
         let html = render(empty, CommandUi::Confirming(Command::Update), 10_000);
         assert!(html.contains("Yes, update") && !html.contains("Update now anyway"), "{html}");
-
-        let current = EnshroudedStatus { update_pending: false, latest_build: Some("25988414".into()), ..status() };
-        let html = render(current, CommandUi::Idle, 10_000);
-        assert!(html.contains("latest build (25988414) is from 2 h 30 min ago"), "{html}");
 
         let queued = EnshroudedStatus { update_queued: true, ..status() };
         assert!(render(queued, CommandUi::Idle, 10_000).contains("An update is queued."));

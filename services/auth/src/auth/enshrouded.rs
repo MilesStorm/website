@@ -277,12 +277,8 @@ struct StatusResp {
     state: ServerState,
     /// `None` when the server doesn't answer the query.
     players: Option<Players>,
-    /// The game's own version (its SVN revision), from the query.
+    /// The game's build number, from the query.
     version: Option<String>,
-    /// The installed Steam build, when known.
-    build: Option<String>,
-    /// Steam's latest public build.
-    latest_build: Option<String>,
     /// Seconds the server process has been running.
     uptime_secs: Option<i64>,
     /// When Steam last published a build (unix seconds).
@@ -334,9 +330,7 @@ async fn status(State(state): State<InternalState>, Json(req): Json<TokenReq>) -
         players: query.map(|q| Players { online: q.players, max: q.max_players, sessions: q.sessions }),
         uptime_secs: server.filter(|p| p.statename == "RUNNING").map(|p| p.now - p.start),
         update_pending: update_pending(latest.as_ref(), installed.as_deref(), running_since),
-        latest_build_at: latest.as_ref().map(|b| b.at),
-        latest_build: latest.map(|b| b.id),
-        build: installed,
+        latest_build_at: latest.map(|b| b.at),
         update_queued: update_queued(&recent, running_since),
         can_control: processes.is_some(),
         recent,
@@ -568,7 +562,7 @@ fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
 struct Query {
     players: u8,
     max_players: u8,
-    /// The game's SVN revision, which its log calls "Game Version".
+    /// The game's build number (its SVN revision; the log's "Game Version").
     version: Option<String>,
     sessions: Vec<u32>,
 }
