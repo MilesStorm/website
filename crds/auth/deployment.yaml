@@ -70,6 +70,15 @@ spec:
               secretKeyRef:
                 name: website-secrets
                 key: BFF_SERVICE_SECRET
+          # The Enshrouded server's control port (homelab enshrouded/manifests/control.yaml; same
+          # value as SUPERVISOR_RPC_PASSWORD in Infisical /enshrouded). Optional: without it the
+          # panel shows the server but can't restart or update it.
+          - name: ENSHROUDED_RPC_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: website-secrets
+                key: ENSHROUDED_RPC_PASSWORD
+                optional: true
           - name: BFF_CALLBACK_URL
             value: "https://milesstorm.com"
           - name: SERVER_IP

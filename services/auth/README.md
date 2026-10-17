@@ -11,6 +11,9 @@
 - `RESEND_API_KEY`: API key for [Resend](https://resend.com), which sends the account emails. Without it no email is sent (debug builds print them to the log instead, links included)
 - `MAIL_FROM`: the sender, default `milesstorm.com <no-reply@milesstorm.com>`; its domain must be verified in Resend
 - `SITE_URL`: the website's address for links in emails, e.g. `https://milesstorm.com` (default: `BFF_CALLBACK_URL`)
+- `ENSHROUDED_RPC_PASSWORD`: password of the Enshrouded server's control port (homelab `enshrouded/manifests/control.yaml`). Without it the panel shows the server but can't restart or update it
+- `ENSHROUDED_RPC_URL`: the control port, default `http://enshrouded-control.enshrouded.svc.cluster.local:9001/RPC2`
+- `ENSHROUDED_QUERY_ADDR`: the game's query port, default `enshrouded.enshrouded.svc.cluster.local:15637`
 
 ## Account emails
 
@@ -39,6 +42,15 @@ the role, how many days the link works and how many people can use it. The link 
 once, when made (only its SHA-256 is stored, in `invites`), and can be turned off there.
 Someone without an account is asked to sign up or log in first, and joins right after.
 Links use `SITE_URL`, like the emails.
+
+## Enshrouded server panel
+
+The website's `/enshrouded` page, for users with the `enshrouded` permission (give them the
+`enshrouded` role in the admin panel or with an invite link): whether the server is up, players
+online and for how long, whether a newer build is out, and Restart / Force update
+(`src/auth/enshrouded.rs`). Force update waits until nobody is online (like homelab's
+`force-update.sh`), unless the user picks "update now anyway", which disconnects players. Commands go to supervisord in the game's pod; each is stored in
+`enshrouded_actions` with who sent it, and the next one can only come 2 minutes later.
 
 ## Running the server
 

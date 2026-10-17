@@ -4,7 +4,8 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub use ui::data_dir::{
-    AdminInvite, AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, LoginStatus, PagedResult,
+    AdminInvite, AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, EnshroudedStatus, LoginStatus,
+    PagedResult,
 };
 
 pub mod trace;
@@ -809,6 +810,83 @@ pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
     metrics::counter!("bff_ark_commands_total", "cmd" => cmd_label, "status" => "success").increment(1);
     body.command_result
         .ok_or_else(|| ServerFnError::new("No command result"))
+}
+
+// ---- Enshrouded server panel ----
+
+/// The session's token, for auth's calls that act as the user.
+#[cfg(feature = "server")]
+async fn session_token() -> Result<String, ServerFnError> {
+    let sess = session::get_session().ok_or_else(|| auth_error(401, "Not logged in"))?;
+    sess.get::<String>("opaque_token")
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .ok_or_else(|| auth_error(401, "Not logged in"))
+}
+
+/// What auth's `{"error": code}` from the Enshrouded endpoints means for the user.
+#[cfg(feature = "server")]
+fn enshrouded_error(status: u16, reply: &serde_json::Value) -> ServerFnError {
+    let message = match reply.get("error").and_then(|e| e.as_str()) {
+        Some("forbidden") => "You don't have access to the Enshrouded server.",
+        Some("too_soon") => "Someone just sent a command. Wait a moment and try again.",
+        Some("busy") => "A restart or update is already under way.",
+        Some("not_configured") => "The website can't control the server yet (no control password).",
+        Some("unreachable") => "The server's control port doesn't answer.",
+        _ => "Something went wrong. Try again later.",
+    };
+    auth_error(status, message)
+}
+
+/// The Enshrouded server's state, players, and the latest commands.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.enshrouded_status", skip_all)]
+pub async fn enshrouded_status() -> Result<EnshroudedStatus, ServerFnError> {
+    trace::rejectable(async move {
+        #[derive(Serialize)]
+        struct Req {
+            token: String,
+        }
+        let token = session_token().await?;
+        let (status, reply) = auth_json("/internal/enshrouded/status", &Req { token })
+            .await
+            .map_err(|_| auth_error(502, "The website can't reach the server right now."))?;
+        if status != 200 {
+            return Err(enshrouded_error(status, &reply));
+        }
+        serde_json::from_value(reply).map_err(|e| ServerFnError::new(e.to_string()))
+    })
+    .await
+}
+
+/// Restart (`restart`) or force-update the Enshrouded server: `update` waits until nobody is
+/// online, `update_now` disconnects players.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.enshrouded_command", skip_all, fields(cmd = %cmd))]
+pub async fn enshrouded_command(cmd: String) -> Result<(), ServerFnError> {
+    trace::rejectable(async move {
+        #[derive(Serialize)]
+        struct Req {
+            token: String,
+            cmd: String,
+        }
+        let token = session_token().await?;
+        let label = match cmd.as_str() {
+            "restart" => "restart",
+            "update_now" => "update_now",
+            _ => "update",
+        };
+        let (status, reply) = auth_json("/internal/enshrouded/command", &Req { token, cmd })
+            .await
+            .map_err(|_| auth_error(502, "The website can't reach the server right now."))?;
+        let outcome = if status == 200 { "success" } else { "error" };
+        metrics::counter!("bff_enshrouded_commands_total", "cmd" => label, "status" => outcome).increment(1);
+        if status != 200 {
+            return Err(enshrouded_error(status, &reply));
+        }
+        Ok(())
+    })
+    .await
 }
 
 // ---- Admin RBAC server functions ----

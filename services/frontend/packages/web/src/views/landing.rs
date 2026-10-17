@@ -36,6 +36,14 @@ const FEATURES: &[Feature] = &[
         icon: "M5 12h14M5 12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2M5 12a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2M7 8h.01M7 16h.01",
     },
     Feature {
+        title: "Enshrouded server",
+        text: "See who's on the Chronicle server, and restart or update it when it needs it.",
+        to: "/enshrouded",
+        permission: Some("enshrouded"),
+        advertised: false,
+        icon: "M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M6.3 17.7l2.8-2.8M14.9 9.1l2.8-2.8M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z",
+    },
+    Feature {
         title: "Your profile",
         text: "Your display name, profile picture and site theme.",
         to: "/profile",
@@ -128,7 +136,7 @@ fn Home(username: String) -> Element {
     let perms = PERMISSIONS.read();
     let has = |f: &Feature| f.permission.is_none_or(|p| perms.contains_key(p));
 
-    // Open ones first, then locked advertised ones; unadvertised ones (Ark, admin)
+    // Open ones first, then locked advertised ones; unadvertised ones (Ark, Enshrouded, admin)
     // only for people who have them.
     let mut cards: Vec<(&Feature, bool)> = FEATURES
         .iter()

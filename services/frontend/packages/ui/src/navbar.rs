@@ -18,7 +18,7 @@ pub fn Navbarr(children: Element) -> Element {
 
 /// Full DaisyUI navbar. `user` drives the profile dropdown.
 /// `on_logout` is called when the user clicks Logout.
-/// `has_ark` / `has_arcane` / `has_admin` gate the permission-protected nav items.
+/// `has_ark` / `has_enshrouded` / `has_arcane` / `has_admin` gate the permission-protected nav items.
 /// `name` (display name) and `picture` (image URL) replace the username and the
 /// default avatar when set.
 #[component]
@@ -28,6 +28,7 @@ pub fn Navbar(
     picture: Option<String>,
     on_logout: EventHandler<()>,
     has_ark: bool,
+    has_enshrouded: bool,
     has_arcane: bool,
     has_admin: bool,
 ) -> Element {
@@ -58,6 +59,7 @@ pub fn Navbar(
                         match &user {
                             LoginStatus::LoggedIn(_) => rsx! {
                                 if has_ark { li { Link { to: "/ark", "Ark" } } }
+                                if has_enshrouded { li { Link { to: "/enshrouded", "Enshrouded" } } }
                                 if has_arcane { li { Link { to: "/arcane", "Arcane" } } }
                                 if has_admin { li { Link { to: "/admin", "Admin" } } }
                                 li { Link { to: "/profile", "Profile" } }
@@ -78,6 +80,7 @@ pub fn Navbar(
                     match &user {
                         LoginStatus::LoggedIn(_) => rsx! {
                             if has_ark { li { Link { to: "/ark", "Ark" } } }
+                            if has_enshrouded { li { Link { to: "/enshrouded", "Enshrouded" } } }
                             if has_arcane { li { Link { to: "/arcane", "Arcane" } } }
                             if has_admin { li { Link { to: "/admin", "Admin" } } }
                         },

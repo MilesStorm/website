@@ -25,6 +25,17 @@ pub fn ark_command(cmd: &str, status: &str) {
     .increment(1);
 }
 
+/// A command from the Enshrouded panel: `status` is success / denied / invalid / too_soon /
+/// busy / not_configured / unreachable.
+pub fn enshrouded_command(cmd: &str, status: &str) {
+    metrics::counter!(
+        "auth_enshrouded_commands_total",
+        "cmd" => cmd.to_string(),
+        "status" => status.to_string()
+    )
+    .increment(1);
+}
+
 /// An account email: `kind` is verify_email / reset_password / delete_account,
 /// `status` is sent / failed.
 pub fn email(kind: &str, status: &str) {
