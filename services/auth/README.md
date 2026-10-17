@@ -51,6 +51,9 @@ online and for how long, whether a newer build is out, and Restart / Force updat
 (`src/auth/enshrouded.rs`). Force update waits until nobody is online (like homelab's
 `force-update.sh`), unless the user picks "update now anyway", which disconnects players. Commands go to supervisord in the game's pod; each is stored in
 `enshrouded_actions` with who sent it, and the next one can only come 2 minutes later.
+The game's version comes from its query answer; the installed Steam build from homelab's
+`website-version` program, compared with Steam's latest to tell whether an update is out (by
+build time instead, until the pod has started with that program).
 
 ## Running the server
 
