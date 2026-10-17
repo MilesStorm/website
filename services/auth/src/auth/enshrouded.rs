@@ -40,8 +40,10 @@ const COOLDOWN_SECS: i64 = 120;
 const RECENT_LIMIT: i64 = 5;
 /// How long to wait for one A2S answer. The server answers in a millisecond when it is up.
 const A2S_TIMEOUT: Duration = Duration::from_millis(1500);
-/// How long Steam's latest build time is reused before asking again.
+/// How long Steam's latest build is reused before asking again.
 const STEAM_CACHE: Duration = Duration::from_secs(600);
+/// How long the installed build is reused before asking supervisord again.
+const INSTALLED_CACHE: Duration = Duration::from_secs(60);
 const STEAM_APP_ID: &str = "2278520";
 
 /// The image's supervisor programs (homelab `enshrouded/manifests`).
@@ -54,6 +56,8 @@ const FORCE_UPDATE: &str = "enshrouded-force-update";
 /// Stops the server first, so the update happens now (homelab `control.yaml`).
 const FORCE_UPDATE_NOW: &str = "website-force-update";
 const UPDATE_PROGRAMS: [&str; 3] = ["enshrouded-updater", FORCE_UPDATE, FORCE_UPDATE_NOW];
+/// Prints `build=<installed Steam build>` to its log (homelab `control.yaml`).
+const VERSION: &str = "website-version";
 
 /// Where the server is and how to reach it; `Auth::server` builds it once.
 pub struct Control {
@@ -63,8 +67,18 @@ pub struct Control {
     rpc_password: Option<String>,
     query_addr: String,
     steam: TracedClient,
-    /// Steam's latest public build time (unix seconds), and when it was fetched.
-    latest_build: Mutex<Option<(Instant, Option<i64>)>>,
+    /// Steam's latest public build, and when it was fetched.
+    latest_build: Mutex<Option<(Instant, Option<SteamBuild>)>>,
+    /// The installed Steam build, and when it was read.
+    installed_build: Mutex<Option<(Instant, Option<String>)>>,
+}
+
+/// A build on Steam's public branch.
+#[derive(Clone, Debug, PartialEq)]
+struct SteamBuild {
+    id: String,
+    /// When it was published (unix seconds).
+    at: i64,
 }
 
 impl Control {
@@ -89,6 +103,7 @@ impl Control {
                 reqwest::redirect::Policy::default(),
             ),
             latest_build: Mutex::new(None),
+            installed_build: Mutex::new(None),
         })
     }
 
@@ -129,19 +144,19 @@ impl Control {
         self.rpc("supervisor.startProcess", &params).await.map(|_| ())
     }
 
-    /// When Steam's public branch last got a new build (unix seconds), cached for `STEAM_CACHE`.
-    async fn latest_build_at(&self) -> Option<i64> {
-        if let Some((at, value)) = *self.latest_build.lock().unwrap()
+    /// Steam's public branch's latest build, cached for `STEAM_CACHE`.
+    async fn latest_build(&self) -> Option<SteamBuild> {
+        if let Some((at, value)) = &*self.latest_build.lock().unwrap()
             && at.elapsed() < STEAM_CACHE
         {
-            return value;
+            return value.clone();
         }
         let value = self.fetch_latest_build().await;
-        *self.latest_build.lock().unwrap() = Some((Instant::now(), value));
+        *self.latest_build.lock().unwrap() = Some((Instant::now(), value.clone()));
         value
     }
 
-    async fn fetch_latest_build(&self) -> Option<i64> {
+    async fn fetch_latest_build(&self) -> Option<SteamBuild> {
         let resp = self
             .steam
             .get(format!("https://api.steamcmd.net/v1/info/{STEAM_APP_ID}"))
@@ -149,11 +164,43 @@ impl Control {
             .await
             .ok()?;
         let body: serde_json::Value = resp.json().await.ok()?;
-        body["data"][STEAM_APP_ID]["depots"]["branches"]["public"]["timebuildupdated"]
-            .as_str()?
-            .parse()
-            .ok()
+        let public = &body["data"][STEAM_APP_ID]["depots"]["branches"]["public"];
+        Some(SteamBuild {
+            id: public["buildid"].as_str()?.to_string(),
+            at: public["timebuildupdated"].as_str()?.parse().ok()?,
+        })
     }
+
+    /// The installed Steam build, cached for `INSTALLED_CACHE`. `None` while an update is under
+    /// way, and until the pod has started with the `website-version` program.
+    async fn installed_build(&self) -> Option<String> {
+        if let Some((at, value)) = &*self.installed_build.lock().unwrap()
+            && at.elapsed() < INSTALLED_CACHE
+        {
+            return value.clone();
+        }
+        // The previous run's answer, then a new run for the next time: reading right after
+        // starting it could miss its line.
+        let params = format!(
+            "<param><value><string>{VERSION}</string></value></param><param><value><int>0</int></value></param><param><value><int>256</int></value></param>"
+        );
+        let value = match self.rpc("supervisor.tailProcessStdoutLog", &params).await {
+            Ok(xml) => last_build(&xml),
+            Err(RpcError::Fault) => None,
+            // Not configured or down: nothing to start either.
+            Err(_) => return None,
+        };
+        let _ = self.start(VERSION).await;
+        *self.installed_build.lock().unwrap() = Some((Instant::now(), value.clone()));
+        value
+    }
+}
+
+/// The build in the last `build=` line of `website-version`'s log tail.
+fn last_build(xml: &str) -> Option<String> {
+    let line = between(xml, "<string>", "</string>")?.lines().rev().find(|l| l.starts_with("build="))?;
+    let build = line.trim_start_matches("build=").trim();
+    (!build.is_empty()).then(|| build.to_string())
 }
 
 #[derive(Debug, PartialEq)]
@@ -230,13 +277,13 @@ struct StatusResp {
     state: ServerState,
     /// `None` when the server doesn't answer the query.
     players: Option<Players>,
-    /// The game's own version string.
+    /// The game's build number, from the query.
     version: Option<String>,
     /// Seconds the server process has been running.
     uptime_secs: Option<i64>,
     /// When Steam last published a build (unix seconds).
     latest_build_at: Option<i64>,
-    /// A build newer than the running server exists: it updates itself when nobody is online.
+    /// Steam has a build the server doesn't run: it updates itself when nobody is online.
     update_pending: bool,
     /// Someone asked for an update that hasn't happened yet (players were online).
     update_queued: bool,
@@ -261,10 +308,11 @@ async fn status(State(state): State<InternalState>, Json(req): Json<TokenReq>) -
         Err(e) => return db_error("checking the enshrouded permission", e),
     }
     let control = &state.enshrouded;
-    let (processes, query, latest_build_at, recent) = tokio::join!(
+    let (processes, query, latest, installed, recent) = tokio::join!(
         control.processes(),
         a2s_query(&control.query_addr),
-        control.latest_build_at(),
+        control.latest_build(),
+        control.installed_build(),
         recent_actions(&state.db),
     );
     let recent = match recent {
@@ -278,11 +326,11 @@ async fn status(State(state): State<InternalState>, Json(req): Json<TokenReq>) -
 
     Json(StatusResp {
         state: server_state(processes.as_deref(), query.is_some()),
-        version: query.as_ref().map(|q| q.version.clone()),
+        version: query.as_ref().and_then(|q| q.version.clone()),
         players: query.map(|q| Players { online: q.players, max: q.max_players, sessions: q.sessions }),
         uptime_secs: server.filter(|p| p.statename == "RUNNING").map(|p| p.now - p.start),
-        latest_build_at,
-        update_pending: matches!((latest_build_at, running_since), (Some(built), Some(started)) if built > started),
+        update_pending: update_pending(latest.as_ref(), installed.as_deref(), running_since),
+        latest_build_at: latest.map(|b| b.at),
         update_queued: update_queued(&recent, running_since),
         can_control: processes.is_some(),
         recent,
@@ -302,6 +350,16 @@ async fn recent_actions(db: &Db) -> Result<Vec<Action>, sqlx::Error> {
     .fetch_all(db)
     .await
     .inspect_err(trace::db_failed)
+}
+
+/// Whether Steam has a build the server doesn't run. Exact when the installed build is known;
+/// otherwise, whether Steam published one after the server started.
+fn update_pending(latest: Option<&SteamBuild>, installed: Option<&str>, running_since: Option<i64>) -> bool {
+    match (latest, installed, running_since) {
+        (Some(latest), Some(installed), _) => latest.id != installed,
+        (Some(latest), None, Some(started)) => latest.at > started,
+        _ => false,
+    }
 }
 
 /// Whether an `update` was asked for after the server last started: an update restarts the
@@ -504,7 +562,8 @@ fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
 struct Query {
     players: u8,
     max_players: u8,
-    version: String,
+    /// The game's build number (its SVN revision; the log's "Game Version").
+    version: Option<String>,
     sessions: Vec<u32>,
 }
 
@@ -548,8 +607,10 @@ async fn a2s_request(socket: &UdpSocket, payload: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-/// Players, slots and version from an A2S_INFO reply (`I`, then the Source format).
-fn parse_info(reply: &[u8]) -> Option<(u8, u8, String)> {
+/// Players, slots and the game's version from an A2S_INFO reply (`I`, then the Source format).
+/// The version field is a fixed "0.0.15.0"; the real one is the second of the keywords
+/// (`3;1269579;…`), in the extra data.
+fn parse_info(reply: &[u8]) -> Option<(u8, u8, Option<String>)> {
     let mut r = Reader { buf: reply.strip_prefix(b"I")? };
     r.byte()?; // protocol
     for _ in 0..4 {
@@ -559,7 +620,29 @@ fn parse_info(reply: &[u8]) -> Option<(u8, u8, String)> {
     let players = r.byte()?;
     let max_players = r.byte()?;
     r.take(5)?; // bots, server type, environment, visibility, VAC
-    Some((players, max_players, r.cstr()?))
+    r.cstr()?; // version
+    Some((players, max_players, game_version(&mut r)))
+}
+
+/// The second keyword, from the extra data flags (EDF) and the fields they announce.
+fn game_version(r: &mut Reader) -> Option<String> {
+    let edf = r.byte()?;
+    if edf & 0x80 != 0 {
+        r.take(2)?; // game port
+    }
+    if edf & 0x10 != 0 {
+        r.take(8)?; // steam id
+    }
+    if edf & 0x40 != 0 {
+        r.take(2)?; // spectator port
+        r.cstr()?; // spectator name
+    }
+    if edf & 0x20 == 0 {
+        return None;
+    }
+    let keywords = r.cstr()?;
+    let version = keywords.split(';').nth(1)?;
+    (!version.is_empty() && version.bytes().all(|b| b.is_ascii_digit())).then(|| version.to_string())
 }
 
 /// Each player's connected time from an A2S_PLAYER reply (`D`, count, then the players).
@@ -610,7 +693,7 @@ mod tests {
 
     #[test]
     fn reads_the_servers_a2s_answers() {
-        assert_eq!(parse_info(INFO), Some((1, 16, "0.0.15.0".to_string())));
+        assert_eq!(parse_info(INFO), Some((1, 16, Some("1269579".to_string()))));
         assert_eq!(parse_players(PLAYERS), Some(vec![248]));
         assert_eq!(parse_players(b"D\x00"), Some(vec![]));
     }
@@ -618,6 +701,8 @@ mod tests {
     #[test]
     fn short_a2s_answers_are_none() {
         assert_eq!(parse_info(&INFO[..20]), None);
+        // Cut inside the extra data: the counts still read, the version doesn't.
+        assert_eq!(parse_info(&INFO[..62]), Some((1, 16, None)));
         assert_eq!(parse_players(&PLAYERS[..8]), None);
         assert_eq!(parse_info(b"X"), None);
     }
@@ -680,6 +765,42 @@ mod tests {
         );
     }
 
+    /// `tailProcessStdoutLog` of `website-version` (the 1.8.0 image), the second run during an
+    /// update.
+    const VERSION_LOG: &str = "<?xml version='1.0'?>
+<methodResponse>
+<params>
+<param>
+<value><array><data>
+<value><string>build=25988414
+build=
+</string></value>
+<value><int>22</int></value>
+<value><boolean>0</boolean></value>
+</data></array></value>
+</param>
+</params>
+</methodResponse>";
+
+    #[test]
+    fn reads_the_installed_build() {
+        assert_eq!(last_build(VERSION_LOG), None);
+        assert_eq!(last_build(&VERSION_LOG.replace("build=\n</string>", "</string>")), Some("25988414".into()));
+        assert_eq!(last_build("<value><string></string></value>"), None);
+    }
+
+    #[test]
+    fn an_update_is_pending_when_steam_has_another_build() {
+        let latest = SteamBuild { id: "2".into(), at: 200 };
+        assert!(update_pending(Some(&latest), Some("1"), Some(300)));
+        assert!(!update_pending(Some(&latest), Some("2"), Some(100)));
+        // The installed build unknown: by time.
+        assert!(update_pending(Some(&latest), None, Some(100)));
+        assert!(!update_pending(Some(&latest), None, Some(300)));
+        assert!(!update_pending(Some(&latest), None, None));
+        assert!(!update_pending(None, Some("1"), Some(100)));
+    }
+
     #[test]
     fn an_update_is_queued_until_the_server_restarts() {
         let action = |action: &str, at| Action { name: None, action: action.into(), at };
@@ -730,6 +851,9 @@ mod tests {
                     fake.started.lock().unwrap().push(between(&body, "<string>", "</string>").unwrap().to_string());
                     return "<methodResponse><params><param><value><boolean>1</boolean></value></param></params></methodResponse>".to_string();
                 }
+                if body.contains("supervisor.tailProcessStdoutLog") {
+                    return VERSION_LOG.to_string();
+                }
                 let updater = *fake.updater.lock().unwrap();
                 PROCESSES.replace("EXITED", updater)
             }
@@ -746,6 +870,7 @@ mod tests {
             query_addr: "127.0.0.1:9".into(),
             steam: client(),
             latest_build: Mutex::new(None),
+            installed_build: Mutex::new(None),
         }
     }
 
@@ -787,6 +912,21 @@ mod tests {
         assert_eq!(recent_actions(&db).await.unwrap().len(), 2);
     }
 
+    /// The installed build comes from the last run's log, and each read (at most once a minute)
+    /// starts another run.
+    #[tokio::test]
+    async fn the_installed_build_is_read_from_the_last_run() {
+        let fake = FakeSupervisor::default();
+        let ctl = control(&fake_supervisor(fake.clone()).await, Some("pw"));
+        // The last run was during an update.
+        assert_eq!(ctl.installed_build().await, None);
+        assert_eq!(*fake.started.lock().unwrap(), vec![VERSION.to_string()]);
+        assert_eq!(ctl.installed_build().await, None);
+        assert_eq!(fake.started.lock().unwrap().len(), 1, "cached");
+
+        assert_eq!(control("http://127.0.0.1:9", None).installed_build().await, None);
+    }
+
     /// Against the real server on the LAN: `ENSHROUDED_QUERY_ADDR=192.168.1.129:15637 cargo
     /// test a2s_against_the_server -- --ignored`.
     #[tokio::test]
@@ -796,5 +936,20 @@ mod tests {
         let q = a2s_query(&addr).await.expect("an answer");
         assert_eq!(q.max_players, 16);
         assert_eq!(q.sessions.len(), q.players as usize);
+        assert!(q.version.is_some(), "the game's version");
+    }
+
+    /// Against a supervisord with homelab's `control.yaml` (e.g. the image run locally with it
+    /// mounted): `ENSHROUDED_RPC_URL=http://127.0.0.1:19001/RPC2 ENSHROUDED_RPC_PASSWORD=pw cargo
+    /// test installed_build_against_supervisord -- --ignored`.
+    #[tokio::test]
+    #[ignore = "needs supervisord"]
+    async fn installed_build_against_supervisord() {
+        let ctl = Control::from_env();
+        ctl.installed_build().await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        *ctl.installed_build.lock().unwrap() = None;
+        let build = ctl.installed_build().await.expect("a build");
+        assert!(build.bytes().all(|b| b.is_ascii_digit()), "{build}");
     }
 }

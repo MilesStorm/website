@@ -165,7 +165,7 @@ fn Header(status: EnshroudedStatus) -> Element {
                     span { "Up for {duration(up)}" }
                 }
                 if let Some(v) = &status.version {
-                    span { "Version {v}" }
+                    span { "Build {v}" }
                 }
             }
         }
@@ -429,7 +429,7 @@ mod tests {
         EnshroudedStatus {
             state: EnshroudedState::Online,
             players: Some(ui::data_dir::EnshroudedPlayers { online: 2, max: 16, sessions: vec![300, 7500] }),
-            version: Some("0.0.15.0".into()),
+            version: Some("1269579".into()),
             uptime_secs: Some(90_000),
             latest_build_at: Some(1_000),
             update_pending: true,
@@ -472,7 +472,7 @@ mod tests {
         for text in [
             "Online",
             "Up for 1 d 1 h",
-            "Version 0.0.15.0",
+            "Build 1269579",
             "A new build came out 2 h 30 min ago",
             "on for 5 min",
             "on for 2 h 5 min",
