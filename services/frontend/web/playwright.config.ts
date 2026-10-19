@@ -3,14 +3,20 @@
 // the staging test users).
 import { defineConfig, devices } from '@playwright/test';
 
+// Against staging the tests log in with real accounts: a trace, screenshot or HTML report would
+// record their passwords and session cookies, so none are kept there.
+const staging = !!process.env.E2E_BASE_URL;
+
 export default defineConfig({
   testDir: 'e2e',
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+  reporter: process.env.CI && !staging ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:8090',
-    trace: 'retain-on-failure',
+    trace: staging ? 'off' : 'retain-on-failure',
+    screenshot: 'off',
+    video: 'off',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });

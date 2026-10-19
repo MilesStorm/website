@@ -3,7 +3,8 @@ name: staging-journeys
 # The end-to-end tests (services/frontend/web/e2e) against https://staging.milesstorm.com, with
 # real auth and staging's test accounts. Run by hand before approving a release to production.
 # The accounts' names and passwords are secrets of the `staging` environment (ENV.md, "Staging
-# test accounts"): one with no permissions, one with every permission the site knows.
+# test accounts"): one with no permissions, one with every permission the site knows. Nothing
+# is uploaded: this repository is public, and a report would hold those accounts' sessions.
 
 on:
   workflow_dispatch:
@@ -33,8 +34,3 @@ jobs:
           E2E_PLAIN_PASSWORD: ${{ secrets.STAGING_PLAIN_PASSWORD }}
           E2E_ALL_USERNAME: ${{ secrets.STAGING_ALL_USERNAME }}
           E2E_ALL_PASSWORD: ${{ secrets.STAGING_ALL_PASSWORD }}
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: services/frontend/web/playwright-report

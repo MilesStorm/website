@@ -83,7 +83,7 @@ jobs:
           cache-from: type=gha,scope=frontend-e2e
           cache-to: type=gha,mode=max,scope=frontend-e2e
       - name: No Node in the image
-        run: '! docker run --rm --entrypoint sh frontend:e2e -c "command -v node || ls /usr/local/bin/node /usr/bin/node 2>/dev/null"'
+        run: docker run --rm --entrypoint sh frontend:e2e -c '! command -v node && test -z "$(find / -xdev -name node -type f 2>/dev/null)"'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
