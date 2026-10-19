@@ -28,7 +28,7 @@ const SITE: &str = "https://milesstorm.test";
 struct Auth {
     introspected: Mutex<HashMap<String, usize>>,
     picture: Mutex<Option<(String, i64)>>,
-    /// The SurrealDB statements run, in order.
+    /// The SurrealDB statements run, and `delete/confirm` calls to auth, in order.
     queries: Mutex<Vec<String>>,
 }
 
@@ -46,6 +46,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     use axum::response::IntoResponse;
 
     let pictures = auth.clone();
+    let confirmed = auth.clone();
     let introspect = move |body: axum::Json<Value>| async move {
         let token = body["token"].as_str().unwrap_or_default().to_string();
         *auth.introspected.lock().unwrap().entry(token.clone()).or_default() += 1;
@@ -90,7 +91,9 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
         let sql = body["params"][0].as_str().unwrap_or_default();
         pictures.queries.lock().unwrap().push(sql.to_string());
         let mut stored = pictures.picture.lock().unwrap();
-        let result = if sql.starts_with("DELETE roll_sample") {
+        let result = if sql.starts_with("DELETE roll_sample") && body["params"][1]["user"] == "user-stuck" {
+            return axum::Json(json!({"id": 1, "error": {"code": -32000, "message": "the store is down"}}));
+        } else if sql.starts_with("DELETE roll_sample") {
             json!([{"id": 1}, {"id": 2}])
         } else if sql.starts_with("UPSERT") {
             *stored = Some((body["params"][1]["jpeg"].as_str().unwrap().to_string(), 1700));
@@ -113,7 +116,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
                 match body["code"].as_str() {
                     Some("good") if body["password"].as_str() == Some("short") => refuse(StatusCode::BAD_REQUEST, "weak_password"),
                     Some("good") => axum::Json(ok).into_response(),
-                    _ => refuse(StatusCode::BAD_REQUEST, "invalid_code"),
+                    _ => refuse(StatusCode::NOT_FOUND, "invalid_code"),
                 }
             }
         }
@@ -130,6 +133,26 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
             }
         }
     };
+    // `stuck`: an account whose shared rolls can't be deleted (the store fails for it).
+    let delete_check = move |body: axum::Json<Value>| async move {
+        match body["code"].as_str() {
+            Some("good") => axum::Json(json!({"username": "user-all", "user_id": 7})).into_response(),
+            Some("stuck") => axum::Json(json!({"username": "user-stuck", "user_id": 8})).into_response(),
+            _ => refuse(StatusCode::NOT_FOUND, "invalid_code"),
+        }
+    };
+    let delete_confirm = move |body: axum::Json<Value>| async move {
+        confirmed.queries.lock().unwrap().push(format!("auth delete/confirm {}", body["code"]));
+        axum::Json(json!({}))
+    };
+    // Auth's own checks of a login, and a refusal this site doesn't know.
+    let forgot = move |body: axum::Json<Value>| async move {
+        match body["login"].as_str() {
+            Some("brand-new-refusal") => refuse(StatusCode::UNPROCESSABLE_ENTITY, "something_new"),
+            Some("auth-broke") => refuse(StatusCode::INTERNAL_SERVER_ERROR, "boom"),
+            _ => axum::Json(json!({})).into_response(),
+        }
+    };
     let invite = |body: axum::Json<Value>| async move {
         match (body["code"].as_str(), body["token"].as_str()) {
             (_, Some("dead")) => StatusCode::UNAUTHORIZED.into_response(),
@@ -140,11 +163,11 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     let app = axum::Router::new()
         .route("/internal/email/verify/send", post(by_token(json!({"email": "a@b.c"}))))
         .route("/internal/email/verify/confirm", post(by_code(json!({"username": "user-all"}))))
-        .route("/internal/password/forgot", post(|| async { axum::Json(json!({})) }))
+        .route("/internal/password/forgot", post(forgot))
         .route("/internal/password/reset", post(by_code(json!({"username": "user-all"}))))
         .route("/internal/account/delete/request", post(by_token(json!({"email": "a@b.c"}))))
-        .route("/internal/account/delete/check", post(by_code(json!({"username": "user-all", "user_id": 7}))))
-        .route("/internal/account/delete/confirm", post(by_code(json!({}))))
+        .route("/internal/account/delete/check", post(delete_check))
+        .route("/internal/account/delete/confirm", post(delete_confirm))
         .route("/internal/account/delete/direct", post(by_token(json!({}))))
         .route("/internal/invite/redeem", post(invite))
         .route("/internal/invite/check", post(invite))
@@ -394,7 +417,18 @@ async fn changes_from_another_site_are_refused() {
     envelope(&site.send(Method::DELETE, "/api/session", evil, None).await, 403, "forbidden");
     envelope(&site.send(Method::DELETE, "/api/account/picture", evil, None).await, 403, "forbidden");
     envelope(&site.send(Method::POST, "/api/profile/picture", evil, Some(("image/png", vec![1]))).await, 403, "forbidden");
-    // Still logged in.
+    envelope(&site.send(Method::DELETE, "/api/account/sharing/data", evil, None).await, 403, "forbidden");
+    for (path, body) in [
+        ("/api/deletion/confirm", json!({"code": "good"})),
+        ("/api/password/reset", json!({"code": "good", "password": "long enough"})),
+        ("/api/invites/open", json!({"code": "join"})),
+        ("/api/account/deletion/direct", json!({"confirm": "user-all"})),
+    ] {
+        let body = Some(("application/json", body.to_string().into_bytes()));
+        envelope(&site.send(Method::POST, path, evil, body).await, 403, "forbidden");
+    }
+    // Still logged in, and nothing was deleted.
+    assert!(site.auth.queries.lock().unwrap().is_empty());
     assert_eq!(site.get("/api/session").await.body["viewer"]["username"], "user-all");
     // Reads are fine from anywhere (the browser keeps the answer from the other site), and
     // requests without an Origin aren't from a browser.
@@ -680,15 +714,42 @@ async fn emailed_codes_work_logged_out() {
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     assert_eq!(reply.body, json!({"username": "user-all", "logged_out": false}));
     // The pictures went before the account.
-    let queries = site.auth.queries.lock().unwrap().clone();
-    assert!(queries.iter().any(|q| q.starts_with("DELETE roll_sample")), "{queries:?}");
-    assert!(queries.iter().any(|q| q.starts_with("DELETE type::record('profile_picture'")), "{queries:?}");
+    let order = |q: &str| site.auth.queries.lock().unwrap().iter().position(|x| x.starts_with(q));
+    let rolls = order("DELETE roll_sample").expect("shared rolls deleted");
+    let picture = order("DELETE type::record('profile_picture'").expect("picture deleted");
+    let account = order("auth delete/confirm").expect("account deleted");
+    assert!(rolls < picture && picture < account, "{:?}", site.auth.queries.lock().unwrap());
 
-    for path in ["/api/email/confirm", "/api/deletion/check", "/api/deletion/confirm"] {
-        let reply = site.json(Method::POST, path, json!({"code": "used"})).await;
-        envelope(&reply, 400, "gone");
-        assert_eq!(reply.body["message"], "This link has expired or was already used. Ask for a new one.");
+    // A code auth doesn't know is auth's 404; one that can't be a code isn't sent to auth.
+    for code in ["used", "a b", &"a".repeat(65)] {
+        for path in ["/api/email/confirm", "/api/deletion/check", "/api/deletion/confirm", "/api/password/reset"] {
+            let reply = site.json(Method::POST, path, json!({"code": code, "password": "long enough"})).await;
+            envelope(&reply, 404, "gone");
+            assert_eq!(reply.body["message"], "This link has expired or was already used. Ask for a new one.");
+        }
     }
+}
+
+#[tokio::test]
+async fn an_account_whose_pictures_cant_be_removed_is_not_deleted() {
+    let mut site = Site::new().await.with_pictures();
+    let reply = site.json(Method::POST, "/api/deletion/confirm", json!({"code": "stuck"})).await;
+    envelope(&reply, 502, "upstream");
+    assert_eq!(reply.body["message"], "Your data couldn't be removed right now, so nothing was deleted. Try again in a few minutes.");
+    let queries = site.auth.queries.lock().unwrap().clone();
+    assert!(!queries.iter().any(|q| q.starts_with("auth delete/confirm")), "auth was asked to delete: {queries:?}");
+}
+
+#[tokio::test]
+async fn auths_refusals_keep_their_status() {
+    let mut site = Site::new().await;
+    let forgot = |login: &str| json!({"login": login});
+    let reply = site.json(Method::POST, "/api/password/forgot", forgot(&"a".repeat(255))).await;
+    envelope(&reply, 400, "invalid");
+    assert_eq!(reply.body["message"], "Enter your username or email.");
+    // One this site doesn't know is still an answer, with auth's status.
+    envelope(&site.json(Method::POST, "/api/password/forgot", forgot("brand-new-refusal")).await, 422, "invalid");
+    envelope(&site.json(Method::POST, "/api/password/forgot", forgot("auth-broke")).await, 502, "upstream");
 }
 
 #[tokio::test]
@@ -800,7 +861,9 @@ async fn email_invite_and_sharing_server_functions() {
     let all = session_of(Some("all")).await;
 
     assert_eq!(in_request(&logged_out().await, emails::confirm_email("good".into())).await.unwrap(), "user-all");
-    assert_eq!(status(in_request(&all, emails::confirm_email("used".into())).await.unwrap_err()).0, 400);
+    assert_eq!(status(in_request(&all, emails::confirm_email("used".into())).await.unwrap_err()).0, 404);
+    // Not sent to auth: it can't be a code.
+    assert_eq!(status(in_request(&all, emails::account_to_delete("a&b".into())).await.unwrap_err()).0, 404);
     in_request(&logged_out().await, emails::forgot_password("anyone".into())).await.unwrap();
     assert_eq!(status(in_request(&all, emails::forgot_password(" ".into())).await.unwrap_err()).0, 400);
     assert_eq!(in_request(&all, emails::send_confirmation_email()).await.unwrap(), "a@b.c");
@@ -832,6 +895,9 @@ async fn email_invite_and_sharing_server_functions() {
     assert_eq!(state, api_types::SharingState { available: false, share: false });
     let (code, _) = status(in_request(&session_of(Some("all")).await, sharing::delete_my_dataset()).await.unwrap_err());
     assert_eq!(code, 503);
+    // A token auth dropped: logged out, not deleting by the session's stale username.
+    let (code, _) = status(in_request(&session_of(Some("dead")).await, sharing::delete_my_dataset()).await.unwrap_err());
+    assert_eq!(code, 401);
 }
 
 #[tokio::test]

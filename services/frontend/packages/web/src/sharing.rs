@@ -85,57 +85,42 @@ pub(crate) mod server {
     }
 }
 
-/// For a server function: the calling user (username, session token, roll hub), checked as
-/// described above. `need_arcane` is false only for deleting: anyone may remove what they
-/// shared, even after losing access to the dice roller.
+/// For a server function: the request's session and roll hub, after checking it came from
+/// this site.
 #[cfg(not(target_arch = "wasm32"))]
-async fn caller(need_arcane: bool) -> Result<(String, String, Option<crate::rolls::RollHub>), ServerFnError> {
-    use dioxus::fullstack::FullstackContext;
+fn request() -> Result<(tower_sessions::Session, Option<crate::rolls::RollHub>), ServerFnError> {
+    let (session, hub) = crate::emails::server::request()?;
+    Ok((session.ok_or_else(|| ServerFnError::new("not logged in"))?, hub))
+}
 
-    let ctx = FullstackContext::current().ok_or_else(|| ServerFnError::new("no request context"))?;
-    let (session, hub, origin_ok) = {
-        let parts = ctx.parts_mut();
-        (
-            parts.extensions.get::<tower_sessions::Session>().cloned(),
-            parts.extensions.get::<crate::rolls::RollHub>().cloned(),
-            crate::rolls::origin_allowed(&parts.headers),
-        )
-    };
-    if !origin_ok {
-        return Err(ServerFnError::new("forbidden"));
-    }
-    let session = session.ok_or_else(|| ServerFnError::new("not logged in"))?;
-    let user = if need_arcane {
-        crate::rolls::arcane_user(&session)
-            .await
-            .map_err(|_| ServerFnError::new("not allowed"))?
-    } else {
-        session
-            .get::<String>("username")
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| ServerFnError::new("not logged in"))?
-    };
-    let token: String = session.get("opaque_token").await.ok().flatten().unwrap_or_default();
-    Ok((user, token, hub))
+/// For a server function: the session's token, if it holds the `arcane` permission.
+#[cfg(not(target_arch = "wasm32"))]
+async fn arcane_token() -> Result<String, ServerFnError> {
+    let (session, _) = request()?;
+    crate::rolls::arcane_user(&session).await.map_err(|_| ServerFnError::new("not allowed"))?;
+    Ok(session.get("opaque_token").await.ok().flatten().unwrap_or_default())
 }
 
 #[server(prefix = "/bff")]
 pub async fn get_dataset_sharing() -> Result<SharingState, ServerFnError> {
-    let (_, token, _) = caller(true).await?;
-    server::sharing(&token).await.map_err(api::server_error)
+    server::sharing(&arcane_token().await?).await.map_err(api::server_error)
 }
 
 #[server(prefix = "/bff")]
 pub async fn set_dataset_sharing(share: bool) -> Result<SharingState, ServerFnError> {
-    let (_, token, _) = caller(true).await?;
-    server::set_sharing(&token, share).await.map_err(api::server_error)
+    server::set_sharing(&arcane_token().await?, share).await.map_err(api::server_error)
 }
 
-/// Deletes everything the user shared or flagged. Returns how many rolls were deleted.
+/// Deletes everything the user shared or flagged. Returns how many rolls were deleted. Anyone
+/// logged in may, even after losing access to the dice roller or while auth is down; a token
+/// auth has dropped is logged out.
 #[server(prefix = "/bff")]
 pub async fn delete_my_dataset() -> Result<usize, ServerFnError> {
-    let (user, token, hub) = caller(false).await?;
-    server::delete_shared(user, Some(&token), hub).await.map_err(api::server_error)
+    let (session, hub) = request()?;
+    let (user, token) = match api::viewer(&session).await.map_err(ServerFnError::new)? {
+        api::Viewer::User { username, token, .. } => (username, Some(token)),
+        api::Viewer::Degraded { username } => (username, None),
+        api::Viewer::Anonymous => return Err(api::server_error(api_types::ApiError::logged_out())),
+    };
+    server::delete_shared(user, token.as_deref(), hub).await.map_err(api::server_error)
 }

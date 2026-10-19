@@ -54,12 +54,34 @@ pub(crate) mod server {
 
     pub(crate) const OFFLINE: &str = "Something went wrong on our side. Try again in a minute.";
 
+    /// Whether `code` looks like a link code (auth makes them URL-safe base64, 43 characters),
+    /// before asking auth. An invite's is later put into a page address, so nothing else may
+    /// get through.
+    pub(crate) fn code_ok(code: &str) -> bool {
+        (1..=64).contains(&code.len()) && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }
+
+    /// An emailed link's code that auth doesn't know (or that can't be one): auth's 404.
+    fn expired() -> ApiError {
+        ApiError::new(ErrorCode::Gone, "This link has expired or was already used. Ask for a new one.").with_status(404)
+    }
+
+    /// `expired` unless `code` can be a link code.
+    fn checked(code: &str) -> Result<&str, ApiError> {
+        if code_ok(code) {
+            Ok(code)
+        } else {
+            Err(expired())
+        }
+    }
+
     pub(crate) fn offline() -> ApiError {
         ApiError::new(ErrorCode::Upstream, OFFLINE)
     }
 
-    /// Calls auth; `Ok` with the reply on 2xx, otherwise the page's message for the
-    /// error code auth gave, with auth's 4xx status.
+    /// Calls auth; `Ok` with the reply on 2xx, otherwise the page's message for the error code
+    /// auth gave, with auth's status when it is a 4xx (a refusal is an answer, also one this
+    /// doesn't know); anything else is a gateway error.
     async fn call(path: &str, body: Value) -> Result<Value, ApiError> {
         let (status, reply) = api::auth_json(path, &body).await.map_err(|e| {
             tracing::error!(error = %e, path, "reaching auth failed");
@@ -69,8 +91,11 @@ pub(crate) mod server {
             return Ok(reply);
         }
         let code = reply.get("error").and_then(Value::as_str).unwrap_or("");
+        let refused = (400..500).contains(&status);
         let (error, message) = match code {
             "invalid_code" => (ErrorCode::Gone, "This link has expired or was already used. Ask for a new one."),
+            "invalid_login" => (ErrorCode::Invalid, "Enter your username or email."),
+            "has_email" => (ErrorCode::Conflict, "Your email is confirmed: use the emailed link."),
             "too_soon" => (
                 ErrorCode::RateLimited,
                 "An email was just sent. Check your inbox (and spam folder), or wait a minute before asking again.",
@@ -80,13 +105,23 @@ pub(crate) mod server {
             "no_email" => (ErrorCode::Invalid, "Your account has no email address."),
             "weak_password" => (ErrorCode::Invalid, "Use at least 8 characters."),
             "logged_out" => return Err(ApiError::logged_out()),
+            _ if refused => {
+                tracing::warn!(path, status, code, "auth refused an email request");
+                let error = match status {
+                    403 => ErrorCode::Forbidden,
+                    404 => ErrorCode::NotFound,
+                    409 => ErrorCode::Conflict,
+                    429 => ErrorCode::RateLimited,
+                    _ => ErrorCode::Invalid,
+                };
+                (error, OFFLINE)
+            }
             _ => {
-                tracing::error!(path, status, code, "auth refused an email request");
+                tracing::error!(path, status, code, "auth failed an email request");
                 return Err(offline());
             }
         };
-        // As `api::auth_error`: auth's 4xx is kept; anything else is a gateway error.
-        Err(ApiError::new(error, message).with_status(if (400..500).contains(&status) { status } else { 502 }))
+        Err(ApiError::new(error, message).with_status(if refused { status } else { 502 }))
     }
 
     fn text(reply: &Value, key: &str) -> String {
@@ -139,7 +174,7 @@ pub(crate) mod server {
     #[tracing::instrument(name = "bff.confirm_email", skip_all)]
     pub async fn confirm(code: &str) -> Result<String, ApiError> {
         api::trace::rejectable(async {
-            let reply = call("/internal/email/verify/confirm", json!({ "code": code })).await?;
+            let reply = call("/internal/email/verify/confirm", json!({ "code": checked(code)? })).await?;
             Ok(text(&reply, "username"))
         })
         .await
@@ -150,7 +185,8 @@ pub(crate) mod server {
     #[tracing::instrument(name = "bff.forgot_password", skip_all)]
     pub async fn forgot(login: &str) -> Result<(), ApiError> {
         api::trace::rejectable(async {
-            if login.trim().is_empty() {
+            // Auth's own limit: the longest email address.
+            if login.trim().is_empty() || login.trim().len() > 254 {
                 return Err(ApiError::new(ErrorCode::Invalid, "Enter your username or email."));
             }
             call("/internal/password/forgot", json!({ "login": login.trim() })).await?;
@@ -164,7 +200,7 @@ pub(crate) mod server {
     #[tracing::instrument(name = "bff.reset_password", skip_all)]
     pub async fn reset(session: Option<&Session>, code: &str, password: &str) -> Result<Done, ApiError> {
         api::trace::rejectable(async {
-            let reply = call("/internal/password/reset", json!({ "code": code, "password": password })).await?;
+            let reply = call("/internal/password/reset", json!({ "code": checked(code)?, "password": password })).await?;
             let username = text(&reply, "username");
             let logged_out = log_out_if(session, &username).await;
             Ok(Done { username, logged_out })
@@ -186,7 +222,7 @@ pub(crate) mod server {
     #[tracing::instrument(name = "bff.account_to_delete", skip_all)]
     pub async fn deletion(code: &str) -> Result<Deletion, ApiError> {
         api::trace::rejectable(async {
-            let reply = call("/internal/account/delete/check", json!({ "code": code })).await?;
+            let reply = call("/internal/account/delete/check", json!({ "code": checked(code)? })).await?;
             Ok(Deletion { username: text(&reply, "username") })
         })
         .await
@@ -196,9 +232,9 @@ pub(crate) mod server {
     #[tracing::instrument(name = "bff.delete_account", skip_all)]
     pub async fn delete(session: Option<&Session>, hub: Option<&RollHub>, code: &str) -> Result<Done, ApiError> {
         api::trace::rejectable(async {
-            let reply = call("/internal/account/delete/check", json!({ "code": code })).await?;
+            let reply = call("/internal/account/delete/check", json!({ "code": checked(code)? })).await?;
             let user_id = reply.get("user_id").and_then(Value::as_i64).ok_or_else(|| {
-                tracing::error!(reply = %reply, "deleting an account: auth's reply has no user_id");
+                tracing::error!("deleting an account: auth's reply has no user_id");
                 offline()
             })?;
             let username = text(&reply, "username");

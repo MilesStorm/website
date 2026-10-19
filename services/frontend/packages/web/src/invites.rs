@@ -38,12 +38,6 @@ pub(crate) mod server {
     const INVALID: &str =
         "This invite link has expired, been used up, or been turned off. Ask whoever sent it for a new one.";
 
-    /// Whether `code` looks like a link code (URL-safe base64), before asking auth.
-    /// It is later put into a page address, so nothing else may get through.
-    pub(super) fn code_ok(code: &str) -> bool {
-        (1..=64).contains(&code.len()) && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    }
-
     enum Refused {
         Invalid,
         LoggedOut,
@@ -65,7 +59,7 @@ pub(crate) mod server {
             401 => Err(Refused::LoggedOut),
             403 => Err(Refused::Removed),
             _ => {
-                tracing::error!(path, status, reply = %reply, "auth refused an invite request");
+                tracing::error!(path, status, error = ?reply.get("error"), "auth refused an invite request");
                 Err(Refused::Other(crate::emails::server::offline()))
             }
         }
@@ -88,7 +82,7 @@ pub(crate) mod server {
     #[tracing::instrument(name = "bff.open_invite", skip_all)]
     pub async fn open(session: &Session, code: &str) -> Result<Opened, ApiError> {
         api::trace::rejectable(async {
-            if !code_ok(code) {
+            if !crate::emails::server::code_ok(code) {
                 return Err(ApiError::new(ErrorCode::Invalid, INVALID));
             }
             let token: Option<String> = session.get("opaque_token").await.ok().flatten();
@@ -135,7 +129,8 @@ pub async fn after_login_path() -> Result<String, ServerFnError> {
 
 #[cfg(test)]
 mod tests {
-    use super::server::{code_ok, group_name};
+    use super::server::group_name;
+    use crate::emails::server::code_ok;
     use super::*;
 
     #[test]

@@ -7,8 +7,9 @@
 //! Access is per route group, as layers ([`access`]): `/api/account/*` needs a login, and its
 //! sharing settings the `arcane` permission; the session, password, email, deletion and invite
 //! routes are public (a code in the body authorizes them). The one exception under
-//! `/api/account/` is deleting shared pictures, which needs only the session's username. Every non-GET request must come from the site itself
-//! ([`same_origin`]). Unknown `/api/*` paths and methods get the error envelope too.
+//! `/api/account/` is deleting shared pictures, which needs only the session's username. Every
+//! non-GET request must come from the site itself ([`same_origin`]). Unknown `/api/*` paths and
+//! methods get the error envelope too.
 
 use aide::axum::routing::{delete, get, get_with, post, put};
 use aide::axum::ApiRouter;
@@ -81,9 +82,9 @@ fn rejections(
 }
 
 /// A rejected request body as an `invalid` error with the rejection's status (400, 413, 415,
-/// 422). The rejection's text (serde's, naming fields and types) goes only to the log.
-fn rejected(status: StatusCode, text: String) -> ApiError {
-    tracing::info!(status = status.as_u16(), reason = %text, "API request body rejected");
+/// 422). Only the status is logged: the rejection's text can quote what was sent.
+fn rejected(status: StatusCode) -> ApiError {
+    tracing::info!(status = status.as_u16(), "API request body rejected");
     api_types::ApiError::new(ErrorCode::Invalid, "The request body isn't valid.").with_status(status.as_u16()).into()
 }
 
@@ -96,7 +97,7 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
     async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
         match Json::<T>::from_request(req, state).await {
             Ok(Json(body)) => Ok(Self(body)),
-            Err(e) => Err(rejected(e.status(), e.body_text())),
+            Err(e) => Err(rejected(e.status())),
         }
     }
 }
@@ -123,7 +124,7 @@ impl<S: Send + Sync> FromRequest<S> for Bytes {
     async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
         match axum::body::Bytes::from_request(req, state).await {
             Ok(bytes) => Ok(Self(bytes)),
-            Err(e) => Err(rejected(e.status(), e.body_text())),
+            Err(e) => Err(rejected(e.status())),
         }
     }
 }
