@@ -14,7 +14,11 @@ fn offline() -> ApiError {
 fn refused(status: u16, reply: &Value) -> ApiError {
     let code = reply.get("error").and_then(Value::as_str).unwrap_or("");
     let (error, message) = match code {
-        _ if status == 401 => return ApiError::logged_out(),
+        // Auth answers 401 only to a wrong service secret: ours, not the user's.
+        _ if status == 401 => {
+            tracing::error!(status, "auth refused the website's service secret");
+            (ErrorCode::Upstream, "Something went wrong. Try again later.")
+        }
         "forbidden" => (ErrorCode::Forbidden, "You don't have access to the Enshrouded server."),
         "too_soon" => (ErrorCode::RateLimited, "Someone just sent a command. Wait a moment and try again."),
         "busy" => (ErrorCode::Conflict, "A restart or update is already under way."),
@@ -88,7 +92,8 @@ mod tests {
         assert_eq!(error(400, "invalid_command"), (400, ErrorCode::Invalid));
         // A refusal this site doesn't know: its status is its code's.
         assert_eq!(error(422, "something_new"), (400, ErrorCode::Invalid));
-        assert_eq!(error(401, ""), (401, ErrorCode::LoggedOut));
+        // A wrong service secret, not the user's login.
+        assert_eq!(error(401, ""), (502, ErrorCode::Upstream));
         assert_eq!(error(500, "boom"), (502, ErrorCode::Upstream));
         assert_eq!(refused(500, &Value::Null).status(), 502);
     }
