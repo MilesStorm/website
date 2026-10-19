@@ -17,6 +17,8 @@ dotenvy = { workspace = true }
 tower-sessions = { workspace = true }
 tower-sessions-redis-store = { workspace = true }
 axum = { workspace = true }
+# Astro's hashed files under /_astro/ (src/pages.rs); the version Dioxus uses.
+tower-http = { version = "0.6.8", features = ["fs"] }
 # The JSON API under /api/* and its OpenAPI document (src/json_api.rs).
 aide = { workspace = true }
 schemars = { workspace = true }
@@ -63,6 +65,8 @@ opentelemetry_sdk = { workspace = true, features = ["testing"] }
 testcontainers-modules = { version = "0.15", features = ["redis"] }
 # `oneshot`: requests to the API router in its contract tests (src/json_api/tests.rs).
 tower = { version = "0.5", features = ["util"] }
+# Reads tracing/leaf_spans.toml (src/pages/tests.rs).
+toml = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

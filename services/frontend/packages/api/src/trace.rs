@@ -49,14 +49,26 @@ pub fn in_request_trace<F: Future>(name: &'static str, fut: F) -> Instrumented<F
 pub fn traceparent() -> Option<String> {
     #[cfg(feature = "server")]
     {
-        use opentelemetry::trace::TraceContextExt as _;
-        let cx = server::server_span_context()?;
-        let sc = cx.span().span_context().clone();
-        (sc.is_valid() && sc.is_sampled())
-            .then(|| format!("00-{}-{}-{:02x}", sc.trace_id(), sc.span_id(), sc.trace_flags().to_u8()))
+        sampled_traceparent(&server::server_span_context()?)
     }
     #[cfg(not(feature = "server"))]
     None
+}
+
+/// [`traceparent`] for a page served by a plain axum handler (the Astro pages), from the
+/// request's [`RequestTraceContext`]: the request's own span, whatever span is current in the
+/// handler. `None` for an unsampled request.
+#[cfg(feature = "server")]
+pub fn page_traceparent(request: &RequestTraceContext) -> Option<String> {
+    sampled_traceparent(&request.0)
+}
+
+#[cfg(feature = "server")]
+fn sampled_traceparent(cx: &opentelemetry::Context) -> Option<String> {
+    use opentelemetry::trace::TraceContextExt as _;
+    let sc = cx.span().span_context().clone();
+    (sc.is_valid() && sc.is_sampled())
+        .then(|| format!("00-{}-{}-{:02x}", sc.trace_id(), sc.span_id(), sc.trace_flags().to_u8()))
 }
 
 /// The commit this build was made from (the image's `GIT_SHA`), for the `<meta>` the

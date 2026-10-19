@@ -24,6 +24,8 @@ mod emails;
 mod invites;
 #[cfg(not(target_arch = "wasm32"))]
 mod json_api;
+#[cfg(not(target_arch = "wasm32"))]
+mod pages;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
@@ -32,26 +34,44 @@ pub static ACCOUNT: GlobalSignal<Option<account::AccountInfo>> = Signal::global(
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 
+#[cfg(target_arch = "wasm32")]
 fn main() {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // `web openapi`: the JSON API's OpenAPI document, with no .env, Redis or network.
-        if std::env::args().nth(1).as_deref() == Some("openapi") {
-            print!("{}", json_api::openapi_json());
-            return;
-        }
-        match dotenvy::dotenv() {
-            Ok(_) => {}
-            Err(_) if !cfg!(debug_assertions) => {}
-            Err(e) => panic!("could not load .env: {e}"),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    server_launch();
-
-    #[cfg(target_arch = "wasm32")]
     dioxus::launch(App);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() -> std::process::ExitCode {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        // `web openapi`: the JSON API's OpenAPI document, with no .env, Redis or network.
+        Some("openapi") => {
+            print!("{}", json_api::openapi_json());
+            return std::process::ExitCode::SUCCESS;
+        }
+        // `web check-pages <dir>`: whether an Astro build has exactly the pages (the image's
+        // verify stage; the server checks the same at startup with FRONTEND_UI=astro).
+        Some("check-pages") => {
+            let dir = std::path::PathBuf::from(args.next().unwrap_or_else(|| "web/dist".into()));
+            return match pages::Built::load(&dir) {
+                Ok(_) => {
+                    println!("{}: every page in PAGES and no other", dir.display());
+                    std::process::ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e:#}");
+                    std::process::ExitCode::FAILURE
+                }
+            };
+        }
+        _ => {}
+    }
+    match dotenvy::dotenv() {
+        Ok(_) => {}
+        Err(_) if !cfg!(debug_assertions) => {}
+        Err(e) => panic!("could not load .env: {e}"),
+    }
+    server_launch();
+    std::process::ExitCode::SUCCESS
 }
 
 // ---- Server launch ----
@@ -338,8 +358,10 @@ async fn router(
         .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+    // FRONTEND_UI=astro: Astro's pages instead of Dioxus's, where there is one.
+    let astro = pages::from_env()?;
 
-    let router = Router::new()
+    let routes = Router::new()
         .serve_dioxus_application(ServeConfig::default(), App)
         .route("/oauth/start/{provider}", get(oauth_start))
         .route("/oauth/callback/{provider}", get(oauth_callback))
@@ -348,7 +370,8 @@ async fn router(
         .route(
             "/metrics",
             get(move || async move { metric_handle.render() }),
-        )
+        );
+    let router = pages::mount(routes, astro)?
         .layer(axum::middleware::from_fn(render_span))
         .layer(axum::Extension(roll_hub))
         .layer(axum::middleware::from_fn(no_store))
