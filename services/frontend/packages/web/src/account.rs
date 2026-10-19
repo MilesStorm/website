@@ -57,10 +57,10 @@ mod server {
         };
         AccountInfo {
             shown_name: profile.display_name.clone().unwrap_or_else(|| profile.username.clone()),
+            picture_url: picture_version.map(|v| api_types::picture_url(&profile.username, v)),
             username: profile.username,
             display_name: profile.display_name,
             picture_version,
-            picture_url: picture_version.map(api_types::picture_url),
             pictures_available,
             email: profile.email,
             email_verified: profile.email_verified,

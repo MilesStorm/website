@@ -1,7 +1,8 @@
 //! Contract tests of the JSON API: statuses, the error envelope, access by login, the origin
-//! check and one call to auth per request. Auth is a stand-in that answers by token:
-//! `all` (every permission, plus one the site doesn't know), `none`, `dead` (a token auth
-//! dropped) and `down` (auth failing).
+//! check and one introspect call to auth per request; and the Dioxus server functions over the
+//! same functions. Auth is a stand-in that answers by token: `all` (every permission, plus one
+//! the site doesn't know), `none`, `lost` (an account auth can't load), `dead` (a token auth
+//! dropped) and `down` (auth failing). The same stand-in plays SurrealDB for pictures.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -20,10 +21,11 @@ pub(crate) static AUTH_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_n
 const HOST: &str = "milesstorm.test";
 const SITE: &str = "https://milesstorm.test";
 
-/// Introspect calls, by token.
+/// Introspect calls, by token, and the stored picture (base64 JPEG, version).
 #[derive(Default)]
 struct Auth {
     introspected: Mutex<HashMap<String, usize>>,
+    picture: Mutex<Option<(String, i64)>>,
 }
 
 impl Auth {
@@ -39,12 +41,13 @@ fn profile(token: &str, display_name: Option<&str>) -> Value {
 async fn stand_in_auth(auth: Arc<Auth>) -> String {
     use axum::response::IntoResponse;
 
+    let pictures = auth.clone();
     let introspect = move |body: axum::Json<Value>| async move {
         let token = body["token"].as_str().unwrap_or_default().to_string();
         *auth.introspected.lock().unwrap().entry(token.clone()).or_default() += 1;
         match token.as_str() {
             "all" => axum::Json(json!({"permissions": ["llama", "enshrouded", "arcane", "manage_permissions", "brand_new"]})).into_response(),
-            "none" => axum::Json(json!({"permissions": []})).into_response(),
+            "none" | "lost" => axum::Json(json!({"permissions": []})).into_response(),
             "dead" => (StatusCode::UNAUTHORIZED, "Invalid or expired token").into_response(),
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
@@ -77,7 +80,26 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
             None => StatusCode::BAD_REQUEST.into_response(),
         }
     };
+    // SurrealDB's `/rpc`, for the picture queries (dataset.rs).
+    let rpc = move |body: axum::Json<Value>| async move {
+        let sql = body["params"][0].as_str().unwrap_or_default();
+        let mut stored = pictures.picture.lock().unwrap();
+        let result = if sql.starts_with("UPSERT") {
+            *stored = Some((body["params"][1]["jpeg"].as_str().unwrap().to_string(), 1700));
+            json!([1700])
+        } else if sql.starts_with("DELETE") {
+            *stored = None;
+            Value::Null
+        } else if sql.starts_with("SELECT VALUE") {
+            stored.as_ref().map_or(Value::Null, |(_, v)| json!(v))
+        } else {
+            stored.as_ref().map_or(Value::Null, |(jpeg, v)| json!({"jpeg": jpeg, "version": v}))
+        };
+        axum::Json(json!({"id": 1, "result": [{"status": "OK", "result": result}]}))
+    };
     let app = axum::Router::new()
+        .route("/signin", post(|| async { json!({"code": 200, "token": "token-1"}).to_string() }))
+        .route("/rpc", post(rpc))
         .route("/internal/token/introspect", post(introspect))
         .route("/internal/profile", post(profile_of))
         .route("/internal/profile/display_name", post(display_name))
@@ -90,7 +112,8 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
 }
 
 /// The API as the server mounts it, behind an in-memory session layer, and a browser with
-/// a cookie jar of one.
+/// a cookie jar of one. A `Site` holds [`AUTH_ENV`] until dropped: drop one before making
+/// the next in the same test, or the test waits for itself.
 struct Site {
     app: axum::Router,
     auth: Arc<Auth>,
@@ -100,6 +123,8 @@ struct Site {
 
 struct Reply {
     status: StatusCode,
+    content_type: Option<String>,
+    bytes: Vec<u8>,
     body: Value,
 }
 
@@ -107,8 +132,10 @@ impl Site {
     async fn new() -> Self {
         let env = AUTH_ENV.lock().await;
         let auth = Arc::new(Auth::default());
-        std::env::set_var("AUTH_SERVICE_URL", stand_in_auth(auth.clone()).await);
+        let url = stand_in_auth(auth.clone()).await;
+        std::env::set_var("AUTH_SERVICE_URL", &url);
         std::env::set_var("BFF_SERVICE_SECRET", "test-only");
+        crate::dataset::install_for_tests(None);
         // A session logged in with the token in the body, as a login leaves it.
         let seed = |session: Session, token: String| async move {
             session.insert("opaque_token", &token).await.unwrap();
@@ -143,8 +170,17 @@ impl Site {
             self.cookie = set.to_str().unwrap().split(';').next().map(str::to_string);
         }
         let status = res.status();
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
-        Reply { status, body: serde_json::from_slice(&bytes).unwrap_or(Value::Null) }
+        let content_type = res.headers().get(header::CONTENT_TYPE).map(|v| v.to_str().unwrap().to_string());
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec();
+        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        Reply { status, content_type, bytes, body }
+    }
+
+    /// Pictures on, stored by the stand-in.
+    fn with_pictures(self) -> Self {
+        let url = std::env::var("AUTH_SERVICE_URL").unwrap();
+        crate::dataset::install_for_tests(Some(crate::dataset::Dataset::for_tests(url, "pw")));
+        self
     }
 
     async fn get(&mut self, path: &str) -> Reply {
@@ -248,7 +284,10 @@ async fn the_display_name_is_set_or_refused_with_a_message() {
 #[tokio::test]
 async fn bad_request_bodies_are_invalid_envelopes() {
     let mut site = Site::logged_in("all").await;
-    envelope(&site.json(Method::PUT, "/api/account/display-name", json!({"nom": "x"})).await, 422, "invalid");
+    let reply = site.json(Method::PUT, "/api/account/display-name", json!({"nom": "x"})).await;
+    envelope(&reply, 422, "invalid");
+    // serde's text (field names, types) stays in the log.
+    assert_eq!(reply.body["message"], "The request body isn't valid.");
     let not_json = Some(("application/json", b"{".to_vec()));
     envelope(&site.send(Method::PUT, "/api/account/display-name", Some(SITE), not_json).await, 400, "invalid");
     let no_type = Some(("text/plain", b"{}".to_vec()));
@@ -323,12 +362,26 @@ fn errors_answer_their_status_with_the_envelope() {
 #[test]
 fn the_api_mounts_beside_the_dioxus_app() {
     use dioxus::prelude::*;
-    // Dioxus routes each file of its public dir (as the image has it: dx's bundle).
-    let public = std::env::temp_dir().join(format!("web-public-{}", std::process::id()));
-    std::fs::create_dir_all(public.join("assets")).unwrap();
-    std::fs::write(public.join("assets/web.js"), "").unwrap();
-    std::fs::write(public.join("favicon.ico"), "").unwrap();
-    std::env::set_var("DIOXUS_PUBLIC_PATH", &public);
+    // Dioxus routes each file of its public dir (as the image has it: dx's bundle). Nothing
+    // else reads DIOXUS_PUBLIC_PATH; it is put back, and the directory removed, either way.
+    struct Public(std::path::PathBuf, Option<std::ffi::OsString>);
+    impl Drop for Public {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(old) => std::env::set_var("DIOXUS_PUBLIC_PATH", old),
+                None => std::env::remove_var("DIOXUS_PUBLIC_PATH"),
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let public = Public(
+        std::env::temp_dir().join(format!("web-public-{}", std::process::id())),
+        std::env::var_os("DIOXUS_PUBLIC_PATH"),
+    );
+    std::fs::create_dir_all(public.0.join("assets")).unwrap();
+    std::fs::write(public.0.join("assets/web.js"), "").unwrap();
+    std::fs::write(public.0.join("favicon.ico"), "").unwrap();
+    std::env::set_var("DIOXUS_PUBLIC_PATH", &public.0);
     // axum panics on overlapping routes when the router is built.
     let _ = axum::Router::new()
         .serve_dioxus_application(ServeConfig::default(), crate::App)
@@ -363,4 +416,165 @@ fn the_document_has_every_route_and_leaves_the_old_picture_path_out() {
     // Literal unions for TypeScript.
     assert_eq!(doc["components"]["schemas"]["KnownPermission"]["enum"], json!(["llama", "enshrouded", "arcane", "manage_permissions"]));
     assert_eq!(doc["components"]["schemas"]["Bootstrap"]["required"], json!(["viewer"]));
+}
+
+#[tokio::test]
+async fn without_the_account_the_viewer_is_shown_by_username() {
+    let mut site = Site::logged_in("lost").await;
+    let reply = site.get("/api/session").await;
+    assert_eq!(
+        reply.body["viewer"],
+        json!({"username": "user-lost", "shown_name": "user-lost", "picture_url": null, "permissions": []})
+    );
+}
+
+#[tokio::test]
+async fn login_spans_fail_on_outages_not_on_wrong_passwords() {
+    use opentelemetry::trace::Status;
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let mut site = Site::new().await;
+    site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "wrong"})).await;
+    assert_eq!(crate::trace_tests::span(&exporter, "bff.login_password").await.status, Status::Unset);
+    exporter.reset();
+    site.json(Method::POST, "/api/session/login", json!({"username": "outage", "password": "x"})).await;
+    let span = crate::trace_tests::span(&exporter, "bff.login_password").await;
+    assert!(matches!(span.status, Status::Error { .. }), "{:?}", span.status);
+}
+
+#[tokio::test]
+async fn a_picture_is_uploaded_served_and_removed() {
+    let mut site = Site::logged_in("all").await.with_pictures();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(40, 30, image::Rgba([200, 0, 0, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+
+    let reply = site.send(Method::POST, "/api/account/picture", Some(SITE), Some(("image/png", png.into_inner()))).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(reply.body, json!({"version": 1700}));
+
+    let account = site.get("/api/account").await.body;
+    assert_eq!(account["pictures_available"], true);
+    assert_eq!(account["picture_url"], "/api/account/picture?u=user-all&v=1700");
+    assert_eq!(site.get("/api/session").await.body["viewer"]["picture_url"], account["picture_url"]);
+
+    for path in ["/api/account/picture?u=user-all&v=1700", "/api/profile/picture"] {
+        let reply = site.get(path).await;
+        assert_eq!(reply.status, StatusCode::OK, "{path}");
+        assert_eq!(reply.content_type.as_deref(), Some("image/jpeg"), "{path}");
+        assert_eq!(image::load_from_memory(&reply.bytes).unwrap().width(), 256, "{path}");
+    }
+
+    let reply = site.send(Method::DELETE, "/api/account/picture", Some(SITE), None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(reply.body["picture_version"], Value::Null);
+    envelope(&site.get("/api/account/picture").await, 404, "not_found");
+}
+
+#[tokio::test]
+async fn pictures_need_auth_to_answer() {
+    let mut site = Site::logged_in("down").await.with_pictures();
+    envelope(&site.get("/api/account/picture").await, 503, "unavailable");
+    envelope(&site.send(Method::POST, "/api/account/picture", Some(SITE), Some(("image/png", vec![1]))).await, 503, "unavailable");
+}
+
+#[tokio::test]
+async fn origins_let_in_for_arcane_are_not_let_into_the_api() {
+    let mut site = Site::logged_in("all").await;
+    let old = std::env::var_os("ARCANE_ALLOWED_ORIGINS");
+    std::env::set_var("ARCANE_ALLOWED_ORIGINS", "https://dev.example");
+    let reply = site.send(Method::DELETE, "/api/session", Some("https://dev.example"), None).await;
+    match old {
+        Some(old) => std::env::set_var("ARCANE_ALLOWED_ORIGINS", old),
+        None => std::env::remove_var("ARCANE_ALLOWED_ORIGINS"),
+    }
+    envelope(&reply, 403, "forbidden");
+}
+
+#[tokio::test]
+async fn unknown_api_paths_and_methods_get_the_envelope_and_plain_routes_still_match() {
+    let mut site = Site::new().await;
+    site.app = site.app.clone().route("/api/arcane/me", axum::routing::get(|| async { "plain" }));
+    envelope(&site.get("/api/nope").await, 404, "not_found");
+    envelope(&site.send(Method::POST, "/api/account/nope", Some(SITE), None).await, 404, "not_found");
+    envelope(&site.send(Method::PATCH, "/api/session", Some(SITE), None).await, 405, "invalid");
+    let plain = site.get("/api/arcane/me").await;
+    assert_eq!((plain.status, plain.bytes.as_slice()), (StatusCode::OK, &b"plain"[..]));
+}
+
+#[test]
+fn access_by_login_and_permission() {
+    use api_types::{Access, ErrorCode, KnownPermission, Permission};
+    let user = |permissions| super::Viewer(api::Viewer::User { username: "u".into(), token: "t".into(), permissions });
+    let status = |access, viewer: &super::Viewer| super::allowed(access, viewer).map_err(|e| (e.0.status(), e.0.error));
+
+    let anonymous = super::Viewer(api::Viewer::Anonymous);
+    let degraded = super::Viewer(api::Viewer::Degraded { username: "u".into() });
+    let arcane = Access::Perm(KnownPermission::Arcane);
+    for access in [Access::LoggedIn, arcane] {
+        assert_eq!(status(access, &anonymous), Err((401, ErrorCode::LoggedOut)));
+        assert_eq!(status(access, &degraded), Err((503, ErrorCode::Unavailable)));
+    }
+    let plain = user(vec![Permission::Other("arcane2".into())]);
+    assert_eq!(status(Access::LoggedIn, &plain), Ok(()));
+    assert_eq!(status(arcane, &plain), Err((403, ErrorCode::Forbidden)));
+    assert_eq!(status(arcane, &user(vec![Permission::Known(KnownPermission::Arcane)])), Ok(()));
+}
+
+// ---- The Dioxus server functions over the same functions ----
+
+/// Runs a server function in a request with `session`, as Dioxus does.
+async fn in_request<F: std::future::Future>(session: &Session, call: F) -> F::Output {
+    use dioxus::fullstack::FullstackContext;
+    let (mut parts, ()) = Request::builder().uri("/bff/fn").header(header::HOST, HOST).body(()).unwrap().into_parts();
+    parts.extensions.insert(session.clone());
+    FullstackContext::new(parts).scope(call).await
+}
+
+async fn session_of(token: Option<&str>) -> Session {
+    let session = Session::new(None, Arc::new(MemoryStore::default()), None);
+    if let Some(token) = token {
+        session.insert("opaque_token", token).await.unwrap();
+        session.insert("username", format!("user-{token}")).await.unwrap();
+    }
+    session
+}
+
+#[tokio::test]
+async fn login_status_and_permissions_server_functions() {
+    use ui::data_dir::LoginStatus;
+    let _site = Site::new().await;
+
+    let all = session_of(Some("all")).await;
+    assert_eq!(in_request(&all, api::check_login_status()).await.unwrap(), LoginStatus::LoggedIn("user-all".into()));
+    // Unknown names too: the Dioxus pages show what auth says.
+    assert_eq!(
+        in_request(&all, api::get_my_permissions()).await.unwrap(),
+        ["llama", "enshrouded", "arcane", "manage_permissions", "brand_new"]
+    );
+
+    let down = session_of(Some("down")).await;
+    assert_eq!(in_request(&down, api::check_login_status()).await.unwrap(), LoginStatus::LoggedIn("user-down".into()));
+    assert!(in_request(&down, api::get_my_permissions()).await.unwrap().is_empty());
+
+    let dead = session_of(Some("dead")).await;
+    assert_eq!(in_request(&dead, api::check_login_status()).await.unwrap(), LoginStatus::LoggedOut);
+    assert_eq!(dead.get::<String>("username").await.unwrap(), None, "the session is cleared");
+    assert!(in_request(&session_of(None).await, api::get_my_permissions()).await.unwrap().is_empty());
+
+    in_request(&all, api::logout()).await.unwrap();
+    assert_eq!(all.get::<String>("username").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn account_server_functions_logged_out_say_so() {
+    use dioxus::prelude::ServerFnError;
+    let _site = Site::new().await;
+    let logged_out = session_of(None).await;
+    let expect = |r: Result<api_types::AccountInfo, ServerFnError>| match r {
+        Err(ServerFnError::ServerError { code, message, .. }) => assert_eq!((code, message.as_str()), (401, "You've been logged out. Log in again.")),
+        other => panic!("{other:?}"),
+    };
+    expect(in_request(&logged_out, crate::account::get_account()).await);
+    expect(in_request(&logged_out, crate::account::set_account_display_name("x".into())).await);
+    // A token auth dropped meanwhile: auth's 401, the same answer.
+    expect(in_request(&session_of(Some("dead")).await, crate::account::get_account()).await);
 }

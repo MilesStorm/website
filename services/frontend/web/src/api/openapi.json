@@ -371,7 +371,7 @@
         ]
       },
       "ErrorCode": {
-        "description": "What kind of failure an [`ApiError`] is: for the code paths that branch on it (`logged_out`\nsends the browser to the login page). The rest is in the message.",
+        "description": "What kind of failure an [`ApiError`] is: for the code paths that branch on it. The rest is\nin the message. Clients send the user to the login page on `logged_out` only, never on a\n401 alone: a wrong password is a 401 too (`invalid`).",
         "type": "string",
         "enum": [
           "logged_out",

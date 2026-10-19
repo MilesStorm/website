@@ -4,19 +4,20 @@
 //! IntoApiResponse`, which aide can't see through. The Dioxus server functions call the same
 //! functions, so both keep the `bff.<fn>` spans.
 //!
-//! Access is per route group, as layers: `/api/account/*` needs a login; the session routes
-//! are public. Every non-GET request must come from the site itself ([`same_origin`]).
+//! Access is per route group, as layers ([`access`]): `/api/account/*` needs a login; the
+//! session routes are public. Every non-GET request must come from the site itself
+//! ([`same_origin`]). Unknown `/api/*` paths and methods get the error envelope too.
 
 use aide::axum::routing::{get, get_with, post, put};
 use aide::axum::ApiRouter;
 use aide::openapi::{Info, OpenApi};
 use aide::NoApi;
 use aide::{OperationInput, OperationOutput};
-use api_types::{AccountInfo, Bootstrap, DisplayName, ErrorCode, LoggedIn, Login, Registration};
-use axum::extract::{FromRequest, FromRequestParts, Request};
+use api_types::{Access, AccountInfo, Bootstrap, DisplayName, ErrorCode, LoggedIn, Login, Registration};
+use axum::extract::{FromRequest, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::{Method, StatusCode};
-use axum::middleware::{from_fn, Next};
+use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, NoContent, Response};
 use axum::Json;
 use serde::de::DeserializeOwned;
@@ -72,10 +73,11 @@ fn rejections(
     ApiError::inferred_responses(ctx, operation)
 }
 
-/// A rejected request body as an `invalid` error, with the rejection's status (400, 413,
-/// 415, 422) and text.
+/// A rejected request body as an `invalid` error with the rejection's status (400, 413, 415,
+/// 422). The rejection's text (serde's, naming fields and types) goes only to the log.
 fn rejected(status: StatusCode, text: String) -> ApiError {
-    api_types::ApiError::new(ErrorCode::Invalid, text).with_status(status.as_u16()).into()
+    tracing::info!(status = status.as_u16(), reason = %text, "API request body rejected");
+    api_types::ApiError::new(ErrorCode::Invalid, "The request body isn't valid.").with_status(status.as_u16()).into()
 }
 
 /// `axum::Json` as a request body, rejected with an [`ApiError`].
@@ -132,8 +134,8 @@ impl OperationInput for Bytes {
     }
 }
 
-/// Who the request comes from: resolved once per request (one call to auth) and kept in its
-/// extensions, so an access layer and the handler share it.
+/// Who the request comes from: resolved once per request (one introspect call to auth) and
+/// kept in its extensions, so the access layer and the handler share it.
 #[derive(Debug, Clone)]
 pub struct Viewer(pub api::Viewer);
 
@@ -177,21 +179,44 @@ impl OperationInput for Viewer {
     }
 }
 
-/// Access layer: only a logged-in viewer gets through (401 `logged_out`; 503 while auth can't
-/// say who is logged in).
-async fn logged_in(req: Request, next: Next) -> Response {
+/// Whether `viewer` may use a route of `access`: 401 `logged_out`, 403 `forbidden`, or 503
+/// while auth can't say who is logged in.
+fn allowed(access: Access, viewer: &Viewer) -> Result<(), ApiError> {
+    let permissions = match &viewer.0 {
+        api::Viewer::User { permissions, .. } => permissions,
+        _ => return viewer.token().map(|_| ()),
+    };
+    match access {
+        Access::Public | Access::LoggedIn => Ok(()),
+        Access::Perm(p) if permissions.iter().any(|q| q.known() == Some(p)) => Ok(()),
+        Access::Perm(_) => Err(api_types::ApiError::new(ErrorCode::Forbidden, "You don't have access to this.").into()),
+    }
+}
+
+/// The access layer of a group of routes: `.route_layer(from_fn_with_state(Access::LoggedIn,
+/// access))`. Public routes don't resolve the viewer.
+async fn access(State(access): State<Access>, req: Request, next: Next) -> Response {
+    if access == Access::Public {
+        return next.run(req).await;
+    }
     let (mut parts, body) = req.into_parts();
-    match Viewer::from_request_parts(&mut parts, &()).await.and_then(|v| v.token().map(|_| ())) {
+    let checked = match Viewer::from_request_parts(&mut parts, &()).await {
+        Ok(viewer) => allowed(access, &viewer),
+        Err(e) => Err(e),
+    };
+    match checked {
         Ok(()) => next.run(Request::from_parts(parts, body)).await,
         Err(e) => e.into_response(),
     }
 }
 
 /// Every request that changes something must come from the site's own pages (the session
-/// cookie is sent from any site's forms): `rolls::origin_allowed`, so requests without an
-/// `Origin` (not a browser) pass.
+/// cookie is sent from any site's forms): the `Origin` must be this host, over HTTPS (or
+/// HTTP in a debug build). Requests without an `Origin` aren't from a browser and pass. Unlike
+/// the Arcane routes, no extra origins (`ARCANE_ALLOWED_ORIGINS`) are let in.
 async fn same_origin(req: Request, next: Next) -> Response {
-    if req.method() == Method::GET || req.method() == Method::HEAD || crate::rolls::origin_allowed(req.headers()) {
+    let read = req.method() == Method::GET || req.method() == Method::HEAD;
+    if read || crate::rolls::origin_allowed_with(req.headers(), "", cfg!(debug_assertions)) {
         return next.run(req).await;
     }
     tracing::warn!(origin = ?req.headers().get(axum::http::header::ORIGIN), "API request rejected: foreign origin");
@@ -277,13 +302,13 @@ fn api_router() -> ApiRouter {
             "/api/profile/picture",
             axum::routing::get(account::get_picture).post(account::upload_picture).layer(picture_limit()),
         )
-        .route_layer(from_fn(logged_in));
-    ApiRouter::new()
+        .route_layer(from_fn_with_state(Access::LoggedIn, access));
+    let session = ApiRouter::new()
         .api_route("/api/session", get(session).delete(logout))
         .api_route("/api/session/login", post(login))
         .api_route("/api/session/register", post(register))
-        .merge(account)
-        .route_layer(from_fn(same_origin))
+        .route_layer(from_fn_with_state(Access::Public, access));
+    session.merge(account).route_layer(from_fn(same_origin))
 }
 
 /// The API's routes, and its OpenAPI document.
@@ -310,8 +335,18 @@ fn finish() -> (axum::Router, OpenApi) {
     (router, doc)
 }
 
+/// The API's routes, and the envelope for every other `/api/*` path and for a method a route
+/// doesn't have. The plain `/api/arcane/*` routes are explicit routes, so they still match
+/// before the catch-all.
 pub fn router() -> axum::Router {
-    finish().0
+    let not_found = || async { ApiError::from(api_types::ApiError::new(ErrorCode::NotFound, "There is no such API.")) };
+    let not_allowed = || async {
+        ApiError::from(api_types::ApiError::new(ErrorCode::Invalid, "That method isn't allowed here.").with_status(405))
+    };
+    finish()
+        .0
+        .method_not_allowed_fallback(not_allowed)
+        .route("/api/{*rest}", axum::routing::any(not_found))
 }
 
 /// The OpenAPI document as `web openapi` prints it (and web/src/api/openapi.json holds it).

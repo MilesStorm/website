@@ -140,7 +140,7 @@ fn AccountCard(account: AccountInfo) -> Element {
                                                 Ok(version) => {
                                                     if let Some(a) = ACCOUNT.write().as_mut() {
                                                         a.picture_version = Some(version);
-                                                        a.picture_url = Some(api_types::picture_url(version));
+                                                        a.picture_url = Some(api_types::picture_url(&a.username, version));
                                                     }
                                                     picture_msg.set(Some((false, "Picture updated.".into())));
                                                 }

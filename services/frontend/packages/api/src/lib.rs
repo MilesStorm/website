@@ -276,7 +276,7 @@ pub async fn log_in(sess: &tower_sessions::Session, username: String, password: 
 
 /// Clear the session.
 #[cfg(feature = "server")]
-#[tracing::instrument(name = "bff.logout", skip_all)]
+#[tracing::instrument(name = "bff.logout", skip_all, err)]
 pub async fn log_out(sess: &tower_sessions::Session) -> Result<(), ApiError> {
     let username: Option<String> = sess.get("username").await.ok().flatten();
     sess.flush().await.map_err(|e| {

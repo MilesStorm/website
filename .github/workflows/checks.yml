@@ -42,6 +42,9 @@ jobs:
         run: cargo run -q -p web --features web/server -- openapi | diff - web/src/api/openapi.json
       - name: TypeScript API types are current
         run: npm run api:types && git diff --exit-code -- web/src/api/schema.d.ts
+      # aide can't read a response type through `impl IntoApiResponse`: handlers name theirs.
+      - name: API handlers return concrete types
+        run: '! grep -rn "impl IntoApiResponse" packages/web/src'
 
   # The browser extension's scripts, type-checked (tsconfig.json); a job of its own so it runs
   # beside the frontend's.

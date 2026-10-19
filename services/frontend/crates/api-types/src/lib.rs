@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 
 // ---- Errors ----
 
-/// What kind of failure an [`ApiError`] is: for the code paths that branch on it (`logged_out`
-/// sends the browser to the login page). The rest is in the message.
+/// What kind of failure an [`ApiError`] is: for the code paths that branch on it. The rest is
+/// in the message. Clients send the user to the login page on `logged_out` only, never on a
+/// 401 alone: a wrong password is a 401 too (`invalid`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
@@ -144,6 +145,14 @@ impl Permission {
     }
 }
 
+/// Who may use a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Public,
+    LoggedIn,
+    Perm(KnownPermission),
+}
+
 // ---- Session ----
 
 /// Who is looking at the page: what `GET /api/session` answers.
@@ -217,9 +226,18 @@ pub struct PictureVersion {
     pub version: i64,
 }
 
-/// Where the picture of `version` is: a new picture is a new URL, so it can be cached for good.
-pub fn picture_url(version: i64) -> String {
-    format!("/api/account/picture?v={version}")
+/// Where `username`'s picture of `version` is. A new picture is a new URL, so it can be cached
+/// for good; the username keeps two accounts used in one browser apart in its cache (the
+/// server answers with the session's own picture and ignores both).
+pub fn picture_url(username: &str, version: i64) -> String {
+    let user: String = username
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => char::from(b).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    format!("/api/account/picture?u={user}&v={version}")
 }
 
 #[cfg(test)]
@@ -252,6 +270,13 @@ mod tests {
         );
         assert_eq!(ps.iter().filter_map(Permission::known).count(), 2);
         assert_eq!(ps.iter().map(Permission::name).collect::<Vec<_>>(), ["arcane", "manage_permissions", "brand_new"]);
+    }
+
+    #[test]
+    fn picture_urls_differ_by_user_and_are_query_safe() {
+        assert_eq!(picture_url("miles", 7), "/api/account/picture?u=miles&v=7");
+        assert_eq!(picture_url("a b&v=1", 7), "/api/account/picture?u=a%20b%26v%3D1&v=7");
+        assert_ne!(picture_url("ann", 7), picture_url("bob", 7));
     }
 
     #[test]

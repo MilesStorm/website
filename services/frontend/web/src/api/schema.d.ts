@@ -447,8 +447,9 @@ export interface components {
             name: string;
         };
         /**
-         * @description What kind of failure an [`ApiError`] is: for the code paths that branch on it (`logged_out`
-         *     sends the browser to the login page). The rest is in the message.
+         * @description What kind of failure an [`ApiError`] is: for the code paths that branch on it. The rest is
+         *     in the message. Clients send the user to the login page on `logged_out` only, never on a
+         *     401 alone: a wrong password is a 401 too (`invalid`).
          * @enum {string}
          */
         ErrorCode: "logged_out" | "forbidden" | "invalid" | "conflict" | "not_found" | "gone" | "rate_limited" | "unavailable" | "upstream" | "internal";
