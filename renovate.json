@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["cargo", "npm", "dockerfile", "github-actions"],
+  "packageRules": [
+    {
+      "description": "Every version bump waits for a manual merge.",
+      "matchPackageNames": ["*"],
+      "automerge": false
+    }
+  ]
+}
