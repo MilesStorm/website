@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 use api::get_my_permissions;
 
 use crate::emails::server_message;
-use crate::invites::{after_join, group_name, open_invite, Opened};
+use crate::invites::{after_join, open_invite, Opened};
 use crate::PERMISSIONS;
 
 #[component]
@@ -51,19 +51,19 @@ pub fn Invite(code: String) -> Element {
                         div { class: "alert alert-warning", span { "{message}" } }
                         Link { class: "btn btn-ghost", to: "/", "Go to the site" }
                     },
-                    Some(Ok(Opened::Joined { role })) => {
+                    Some(Ok(Opened::Joined { role, group_label })) => {
                         let (page, button) = after_join(&role);
                         rsx! {
                             div { class: "alert alert-success",
-                                span { "You're in! You've joined {group_name(&role)}." }
+                                span { "You're in! You've joined {group_label}." }
                             }
                             Link { class: "btn btn-primary", to: page, "{button}" }
                         }
                     },
-                    Some(Ok(Opened::NeedsAccount { role })) => rsx! {
+                    Some(Ok(Opened::NeedsAccount { group_label, .. })) => rsx! {
                         p { class: "text-center",
                             "You've been invited to join "
-                            span { class: "font-semibold", "{group_name(&role)}" }
+                            span { class: "font-semibold", "{group_label}" }
                             "."
                         }
                         p { class: "text-sm opacity-80 text-center",

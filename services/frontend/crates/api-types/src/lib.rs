@@ -240,6 +240,95 @@ pub fn picture_url(username: &str, version: i64) -> String {
     format!("/api/account/picture?u={user}&v={version}")
 }
 
+// ---- Account emails ----
+//
+// One-time codes from emailed links travel only in request bodies, never in a URL, so they
+// stay out of access logs and traces.
+
+/// A one-time code from an emailed link or an invite link.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Code {
+    pub code: String,
+}
+
+/// Where an email was sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EmailSent {
+    pub email: String,
+}
+
+/// An address confirmed with an emailed code: whose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Confirmed {
+    pub username: String,
+}
+
+/// `POST /api/password/forgot`: a username or an email address.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ForgotPassword {
+    pub login: String,
+}
+
+/// `POST /api/password/reset`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PasswordReset {
+    pub code: String,
+    pub password: String,
+}
+
+/// What a delete-account link is for, before it is used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Deletion {
+    pub username: String,
+}
+
+/// `POST /api/account/deletion/direct`: `confirm` must be the username.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DirectDeletion {
+    pub confirm: String,
+}
+
+/// After resetting a password or deleting an account: whether this browser's session was that
+/// account's and has been logged out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Done {
+    pub username: String,
+    pub logged_out: bool,
+}
+
+// ---- Invites ----
+
+/// What opening an invite link did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Opened {
+    /// The logged-in user now has `role` (or already had it through this link).
+    Joined { role: String, group_label: String },
+    /// Logged out: the invite is kept until they log in or sign up.
+    NeedsAccount { role: String, group_label: String },
+}
+
+// ---- Sharing roll pictures ----
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SharingState {
+    /// False when the training-data store isn't configured on this server.
+    pub available: bool,
+    pub share: bool,
+}
+
+/// `PUT /api/account/sharing`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Sharing {
+    pub share: bool,
+}
+
+/// How many shared rolls were deleted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Deleted {
+    pub deleted: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +366,17 @@ mod tests {
         assert_eq!(picture_url("miles", 7), "/api/account/picture?u=miles&v=7");
         assert_eq!(picture_url("a b&v=1", 7), "/api/account/picture?u=a%20b%26v%3D1&v=7");
         assert_ne!(picture_url("ann", 7), picture_url("bob", 7));
+    }
+
+    #[test]
+    fn opened_invites_are_tagged_by_kind() {
+        let joined = Opened::Joined { role: "arcane_user".into(), group_label: "the group".into() };
+        assert_eq!(
+            serde_json::to_value(joined).unwrap(),
+            json!({"kind": "joined", "role": "arcane_user", "group_label": "the group"})
+        );
+        let kept = Opened::NeedsAccount { role: "r".into(), group_label: "g".into() };
+        assert_eq!(serde_json::to_value(kept).unwrap()["kind"], "needs_account");
     }
 
     #[test]

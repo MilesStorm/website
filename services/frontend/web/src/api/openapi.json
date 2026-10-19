@@ -122,6 +122,247 @@
         }
       }
     },
+    "/api/email/confirm": {
+      "post": {
+        "requestBody": {
+          "description": "A one-time code from an emailed link or an invite link.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Code"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An address confirmed with an emailed code: whose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Confirmed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/password/forgot": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/password/forgot`: a username or an email address.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      }
+    },
+    "/api/password/reset": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/password/reset`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordReset"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "After resetting a password or deleting an account: whether this browser's session was that\naccount's and has been logged out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Done"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/deletion/check": {
+      "post": {
+        "requestBody": {
+          "description": "A one-time code from an emailed link or an invite link.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Code"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "What a delete-account link is for, before it is used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deletion"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/deletion/confirm": {
+      "post": {
+        "requestBody": {
+          "description": "A one-time code from an emailed link or an invite link.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Code"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "After resetting a password or deleting an account: whether this browser's session was that\naccount's and has been logged out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Done"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/invites/open": {
+      "post": {
+        "requestBody": {
+          "description": "A one-time code from an emailed link or an invite link.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Code"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "What opening an invite link did.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Opened"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/sharing/data": {
+      "delete": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "How many shared rolls were deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/account": {
       "get": {
         "responses": {
@@ -260,6 +501,156 @@
           }
         }
       }
+    },
+    "/api/account/email/send-confirmation": {
+      "post": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Where an email was sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/deletion/request": {
+      "post": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Where an email was sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/deletion/direct": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/account/deletion/direct`: `confirm` must be the username.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectDeletion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "After resetting a password or deleting an account: whether this browser's session was that\naccount's and has been logged out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Done"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/sharing": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharingState"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "requestBody": {
+          "description": "`PUT /api/account/sharing`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Sharing"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharingState"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -358,6 +749,68 @@
           "viewer"
         ]
       },
+      "Code": {
+        "description": "A one-time code from an emailed link or an invite link.",
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "Confirmed": {
+        "description": "An address confirmed with an emailed code: whose.",
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
+      "Deleted": {
+        "description": "How many shared rolls were deleted.",
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "deleted"
+        ]
+      },
+      "Deletion": {
+        "description": "What a delete-account link is for, before it is used.",
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
+      "DirectDeletion": {
+        "description": "`POST /api/account/deletion/direct`: `confirm` must be the username.",
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
       "DisplayName": {
         "description": "`PUT /api/account/display-name`. Blank clears it.",
         "type": "object",
@@ -368,6 +821,34 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "Done": {
+        "description": "After resetting a password or deleting an account: whether this browser's session was that\naccount's and has been logged out.",
+        "type": "object",
+        "properties": {
+          "logged_out": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "logged_out"
+        ]
+      },
+      "EmailSent": {
+        "description": "Where an email was sent.",
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
         ]
       },
       "ErrorCode": {
@@ -384,6 +865,18 @@
           "unavailable",
           "upstream",
           "internal"
+        ]
+      },
+      "ForgotPassword": {
+        "description": "`POST /api/password/forgot`: a username or an email address.",
+        "type": "object",
+        "properties": {
+          "login": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "login"
         ]
       },
       "KnownPermission": {
@@ -424,6 +917,69 @@
           "password"
         ]
       },
+      "Opened": {
+        "description": "What opening an invite link did.",
+        "oneOf": [
+          {
+            "description": "The logged-in user now has `role` (or already had it through this link).",
+            "type": "object",
+            "properties": {
+              "group_label": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "joined"
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "role",
+              "group_label"
+            ]
+          },
+          {
+            "description": "Logged out: the invite is kept until they log in or sign up.",
+            "type": "object",
+            "properties": {
+              "group_label": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "needs_account"
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "role",
+              "group_label"
+            ]
+          }
+        ]
+      },
+      "PasswordReset": {
+        "description": "`POST /api/password/reset`.",
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "password"
+        ]
+      },
       "PictureVersion": {
         "description": "A profile picture just stored.",
         "type": "object",
@@ -455,6 +1011,34 @@
           "username",
           "email",
           "password"
+        ]
+      },
+      "Sharing": {
+        "description": "`PUT /api/account/sharing`.",
+        "type": "object",
+        "properties": {
+          "share": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "share"
+        ]
+      },
+      "SharingState": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "description": "False when the training-data store isn't configured on this server.",
+            "type": "boolean"
+          },
+          "share": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available",
+          "share"
         ]
       },
       "Viewer": {

@@ -188,6 +188,376 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/email/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description A one-time code from an emailed link or an invite link. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Code"];
+                };
+            };
+            responses: {
+                /** @description An address confirmed with an emailed code: whose. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Confirmed"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/password/forgot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description `POST /api/password/forgot`: a username or an email address. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ForgotPassword"];
+                };
+            };
+            responses: {
+                /** @description no content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/password/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description `POST /api/password/reset`. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PasswordReset"];
+                };
+            };
+            responses: {
+                /**
+                 * @description After resetting a password or deleting an account: whether this browser's session was that
+                 *     account's and has been logged out.
+                 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Done"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deletion/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description A one-time code from an emailed link or an invite link. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Code"];
+                };
+            };
+            responses: {
+                /** @description What a delete-account link is for, before it is used. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Deletion"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deletion/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description A one-time code from an emailed link or an invite link. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Code"];
+                };
+            };
+            responses: {
+                /**
+                 * @description After resetting a password or deleting an account: whether this browser's session was that
+                 *     account's and has been logged out.
+                 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Done"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/invites/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description A one-time code from an emailed link or an invite link. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Code"];
+                };
+            };
+            responses: {
+                /** @description What opening an invite link did. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Opened"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/sharing/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description How many shared rolls were deleted. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Deleted"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/account": {
         parameters: {
             query?: never;
@@ -405,6 +775,241 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/account/email/send-confirmation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Where an email was sent. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailSent"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/deletion/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Where an email was sent. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EmailSent"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/deletion/direct": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description `POST /api/account/deletion/direct`: `confirm` must be the username. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["DirectDeletion"];
+                };
+            };
+            responses: {
+                /**
+                 * @description After resetting a password or deleting an account: whether this browser's session was that
+                 *     account's and has been logged out.
+                 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Done"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/sharing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SharingState"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description `PUT /api/account/sharing`. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Sharing"];
+                };
+            };
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SharingState"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -442,9 +1047,42 @@ export interface components {
             /** @description `None` when logged out. */
             viewer: components["schemas"]["Viewer"] | null;
         };
+        /** @description A one-time code from an emailed link or an invite link. */
+        Code: {
+            code: string;
+        };
+        /** @description An address confirmed with an emailed code: whose. */
+        Confirmed: {
+            username: string;
+        };
+        /** @description How many shared rolls were deleted. */
+        Deleted: {
+            /** Format: uint64 */
+            deleted: number;
+        };
+        /** @description What a delete-account link is for, before it is used. */
+        Deletion: {
+            username: string;
+        };
+        /** @description `POST /api/account/deletion/direct`: `confirm` must be the username. */
+        DirectDeletion: {
+            confirm: string;
+        };
         /** @description `PUT /api/account/display-name`. Blank clears it. */
         DisplayName: {
             name: string;
+        };
+        /**
+         * @description After resetting a password or deleting an account: whether this browser's session was that
+         *     account's and has been logged out.
+         */
+        Done: {
+            logged_out: boolean;
+            username: string;
+        };
+        /** @description Where an email was sent. */
+        EmailSent: {
+            email: string;
         };
         /**
          * @description What kind of failure an [`ApiError`] is: for the code paths that branch on it. The rest is
@@ -453,6 +1091,10 @@ export interface components {
          * @enum {string}
          */
         ErrorCode: "logged_out" | "forbidden" | "invalid" | "conflict" | "not_found" | "gone" | "rate_limited" | "unavailable" | "upstream" | "internal";
+        /** @description `POST /api/password/forgot`: a username or an email address. */
+        ForgotPassword: {
+            login: string;
+        };
         /**
          * @description The permissions the site knows. Every permission check uses this closed set, so TypeScript
          *     gets a literal union.
@@ -468,6 +1110,23 @@ export interface components {
             password: string;
             username: string;
         };
+        /** @description What opening an invite link did. */
+        Opened: {
+            group_label: string;
+            /** @constant */
+            kind: "joined";
+            role: string;
+        } | {
+            group_label: string;
+            /** @constant */
+            kind: "needs_account";
+            role: string;
+        };
+        /** @description `POST /api/password/reset`. */
+        PasswordReset: {
+            code: string;
+            password: string;
+        };
         /** @description A profile picture just stored. */
         PictureVersion: {
             /** Format: int64 */
@@ -478,6 +1137,15 @@ export interface components {
             email: string;
             password: string;
             username: string;
+        };
+        /** @description `PUT /api/account/sharing`. */
+        Sharing: {
+            share: boolean;
+        };
+        SharingState: {
+            /** @description False when the training-data store isn't configured on this server. */
+            available: boolean;
+            share: boolean;
         };
         /** @description The logged-in user, as the page shows them. */
         Viewer: {
