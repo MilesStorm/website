@@ -8,12 +8,20 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { getTheme, setTheme, type Theme } from '@/lib/theme';
+import { THEME_KEY, getTheme, setTheme, type Theme } from '@/lib/theme';
 
 /** Light, dark or the system's theme (shadcn's Astro mode toggle). */
 export function ModeToggle() {
   const [theme, set] = useState<Theme>('system');
-  useEffect(() => set(getTheme()), []);
+  useEffect(() => {
+    set(getTheme());
+    // Chosen in another tab: the page follows (the layout's script), and so does the menu.
+    const follow = (e: StorageEvent) => {
+      if (e.key === THEME_KEY) set(getTheme());
+    };
+    window.addEventListener('storage', follow);
+    return () => window.removeEventListener('storage', follow);
+  }, []);
   const choose = (value: string) => {
     const next = value as Theme;
     setTheme(next);

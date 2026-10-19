@@ -10,6 +10,9 @@ for (const who of VIEWERS) {
     test(`${path} as ${who}`, async ({ context, page }) => {
       expect(access).toBe('public');
       await logIn(context, who);
+      // The countdown reloads the page when it draws under 30 days (about one in twelve): a
+      // fixed draw keeps it still while the page is checked.
+      if (path === '/asshole') await page.addInitScript(() => (Math.random = () => 0.5));
       const res = await page.goto(path);
       expect(res?.status()).toBe(200);
       expect(res?.headers()['cache-control']).toBe('private, no-cache');
@@ -31,8 +34,9 @@ test('Astro files are cached for good, and only they are served from the build',
   const asset = await request.get(css!);
   expect(asset.status()).toBe(200);
   expect(asset.headers()['cache-control']).toBe('public, max-age=31536000, immutable');
-  // These go to the Dioxus app (its "not found" page), never to a file of the Astro build.
-  for (const path of ['/index.html', '/asshole.html', '/404.html', '/_astro/../index.html']) {
+  // These go to the Dioxus app (its "not found" page), never to a file of the Astro build. (A
+  // path through `/_astro/..` is the server's own test: the browser would tidy it away.)
+  for (const path of ['/index.html', '/asshole.html', '/404.html']) {
     const body = await (await request.get(path)).text();
     expect(body).not.toContain('bff-inject');
     expect(body).not.toContain('id="bootstrap"');

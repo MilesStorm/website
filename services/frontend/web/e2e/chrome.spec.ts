@@ -76,6 +76,21 @@ test('the cookie notice goes once accepted', async ({ page }) => {
   await notice.getByRole('button', { name: 'Accept' }).click();
   await expect(notice).toBeHidden();
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Tools for game nights with friends.' })).toBeVisible();
+  // The notice is a client-only island: hidden proves nothing until every island has started.
+  await page.waitForFunction(() => document.querySelector('astro-island[ssr]') === null);
   await expect(notice).toBeHidden();
+});
+
+test('an island whose script a deploy removed reloads the page once, then gives up', async ({ page }) => {
+  // Astro's retry adds a query (`?astro-retry=…`): gone for that too.
+  await page.route(/\/_astro\/ModeToggle\.[^/?]+\.js(\?.*)?$/, (route) => route.fulfill({ status: 404 }));
+  let loads = 0;
+  page.on('load', () => loads++);
+  await page.goto('/');
+  // Astro retries the import after a second; then the guard reloads, and the second failure is
+  // left alone (the same page and release).
+  await expect.poll(() => loads, { timeout: 10_000 }).toBe(2);
+  await page.waitForTimeout(3_000);
+  expect(loads).toBe(2);
+  await expect(page.getByRole('heading', { name: 'Tools for game nights with friends.' })).toBeVisible();
 });

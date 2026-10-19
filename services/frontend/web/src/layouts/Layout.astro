@@ -2,7 +2,8 @@
 // Every page's frame. The <head> order is a contract with the server and the tracing
 // (TRACING.md, "Browser"): the charset first (within the first 1024 bytes however large the
 // spliced data is), then the `bff-inject` marker the server replaces with the trace context and
-// the viewer, then the theme (before anything paints), then the tracing script (classic and
+// the viewer, then the theme (before anything paints) and the guard for islands whose script a
+// deploy removed (before any island loads), then the tracing script (classic and
 // synchronous, so fetch is wrapped before any module runs), then the CSS and the modules, which
 // Astro puts at the end of <head>.
 import '@/styles/global.css';
@@ -46,6 +47,37 @@ const { title, description = 'Tools for game nights with friends.' } = Astro.pro
       window.addEventListener('storage', function (e) {
         if (e.key === themeKey) { saved = e.newValue; apply(); }
       });
+    </script>
+    <script is:inline>
+      // An island whose script is gone (a tab open across a deploy, or the old pod's page asking
+      // the new pod during a rolling update) reloads the page, once per page and release, so a
+      // file that is missing for good can't loop. Astro has already retried the import once.
+      (function () {
+        function reloadOnce(tag) {
+          try {
+            var key = 'ms.skew:' + location.pathname;
+            var meta = document.querySelector('meta[name="service-version"]');
+            var value = (meta && meta.content) || tag;
+            if (sessionStorage.getItem(key) === value) return;
+            sessionStorage.setItem(key, value);
+          } catch (e) {
+            return;
+          }
+          location.reload();
+        }
+        // A failed import() is a TypeError naming the module in every browser; an island's own
+        // bug isn't a missing file.
+        document.addEventListener('astro:hydration-error', function (e) {
+          var d = e.detail || {};
+          if (d.error instanceof TypeError && /module/i.test(d.error.message) && d.componentUrl) {
+            reloadOnce(d.componentUrl);
+          }
+        });
+        window.addEventListener('vite:preloadError', function (e) {
+          e.preventDefault();
+          reloadOnce('preload');
+        });
+      })();
     </script>
     <script is:inline src={tracingUrl}></script>
     <style is:inline set:html={GATE_CSS}></style>
