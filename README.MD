@@ -12,7 +12,7 @@ My personal website and a home for the projects I use with friends, built in Rus
 - **Permissions and invitations:** role-based access to features, with an admin panel for users, roles, permissions, and invite links. Arcane access requires the `arcane` permission.
 - **Dice feedback:** opt in to sharing roll images, flag incorrect readings with corrections, and delete shared pictures from the profile page.
 
-The repository contains application code, container builds, and Kubernetes workload manifests. Shared cluster infrastructure is maintained separately. The deployed web application is the main target; desktop and mobile crates also exist in the frontend workspace.
+The repository contains application code, container builds, and Kubernetes workload manifests. Shared cluster infrastructure is maintained separately.
 
 ## Architecture
 
@@ -159,7 +159,7 @@ GitHub Actions builds the frontend, auth, and AI service images into GHCR when t
 
 | Path | Contents |
 | --- | --- |
-| [services/frontend/](services/frontend/) | Web application, shared UI/API crates, desktop/mobile entry points, and SurrealDB schema |
+| [services/frontend/](services/frontend/) | Web application, shared UI/API crates, and SurrealDB schema |
 | [services/auth/](services/auth/) | Auth server and PostgreSQL migrations |
 | [services/ai_pipeline/](services/ai_pipeline/) | Dice inference, training tools, and model work |
 | [extension/arcane-dice/](extension/arcane-dice/) | Browser extension, tests, and release configuration |
