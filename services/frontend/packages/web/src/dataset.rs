@@ -44,20 +44,34 @@ static SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 /// The store, for saving: only once the schema is applied, so nothing is written
 /// before the tables exist. None means sharing and flagging are off.
 pub fn dataset() -> Option<&'static Dataset> {
-    SCHEMA_READY.load(Ordering::Acquire).then(|| STORE.get()).flatten()
+    #[cfg(test)]
+    let store = *TEST_STORE.lock().unwrap();
+    #[cfg(not(test))]
+    let store = SCHEMA_READY.load(Ordering::Acquire).then(|| STORE.get()).flatten();
+    store
 }
 
-/// Makes `store` the configured store with its schema applied, as [`start`] does.
+/// In tests, the store instead of [`STORE`]: replaceable, so what a test sees doesn't depend on
+/// which test ran before it. It is process-global: any test that reaches [`dataset`] (or sets
+/// it) must hold `json_api::tests::AUTH_ENV`, as `json_api::tests::Site` does.
 #[cfg(test)]
-pub(crate) fn install_for_tests(store: Dataset) {
-    let _ = STORE.set(store);
-    SCHEMA_READY.store(true, Ordering::Release);
+static TEST_STORE: std::sync::Mutex<Option<&'static Dataset>> = std::sync::Mutex::new(None);
+
+/// Makes `store` the configured store with its schema applied, as [`start`] does; `None`
+/// turns sharing and pictures off.
+#[cfg(test)]
+pub(crate) fn install_for_tests(store: Option<Dataset>) {
+    *TEST_STORE.lock().unwrap() = store.map(|s| &*Box::leak(Box::new(s)));
 }
 
 /// The store whenever it's configured, schema applied or not. Only for deleting what
 /// users shared: that must keep working even while the schema step can't finish.
 pub fn configured() -> Option<&'static Dataset> {
-    STORE.get()
+    #[cfg(test)]
+    let store = *TEST_STORE.lock().unwrap();
+    #[cfg(not(test))]
+    let store = STORE.get();
+    store
 }
 
 /// One attempt to apply the schema may take this long before it's given up.

@@ -103,6 +103,8 @@ $("flag-cancel").addEventListener("click", () => {
   if (shown) renderFlag(shown);
 });
 
+const flagSend = /** @type {HTMLButtonElement} */ ($("flag-send"));
+
 $("flag-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!shown) return;
@@ -113,7 +115,7 @@ $("flag-form").addEventListener("submit", async (e) => {
   $("flag-invalid").hidden = body !== null;
   if (!body) return;
 
-  $("flag-send").disabled = true;
+  flagSend.disabled = true;
   let status = 0;
   try {
     const resp = await fetch(`${base}/api/arcane/flag`, {
@@ -127,7 +129,7 @@ $("flag-form").addEventListener("submit", async (e) => {
   } catch (err) {
     console.warn("arcane dice flag:", err);
   }
-  $("flag-send").disabled = false;
+  flagSend.disabled = false;
 
   const result = flagResult(status);
   if (result.ok) flagged.add(roll.rollId);
@@ -208,15 +210,16 @@ $("grant").addEventListener("click", async () => {
 // ── Roll20 ────────────────────────────────────────────────────────────────────
 
 const roll20 = { origins: [originPattern(ROLL20)] };
+const autoSend = /** @type {HTMLInputElement} */ ($("auto-send"));
 
 async function showRoll20() {
-  $("auto-send").checked = await autoSendOn();
+  autoSend.checked = await autoSendOn();
   // Without site access the Roll20 part of the extension doesn't run there.
-  $("grant-roll20").hidden = !$("auto-send").checked || (await chrome.permissions.contains(roll20));
+  $("grant-roll20").hidden = !autoSend.checked || (await chrome.permissions.contains(roll20));
 }
 
-$("auto-send").addEventListener("change", async (e) => {
-  await chrome.storage.local.set({ [AUTO_SEND_KEY]: e.target.checked });
+autoSend.addEventListener("change", async () => {
+  await chrome.storage.local.set({ [AUTO_SEND_KEY]: autoSend.checked });
   showRoll20();
 });
 // permissions.request needs a user click, so it can only happen here.

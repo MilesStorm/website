@@ -7,6 +7,7 @@ edition = "2021"
 dioxus = { workspace = true, features = ["router", "fullstack"] }
 ui = { workspace = true }
 api = { workspace = true }
+api-types = { workspace = true }
 manganis = { version = "0.7.7", features = ["dioxus"] }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
@@ -16,6 +17,9 @@ dotenvy = { workspace = true }
 tower-sessions = { workspace = true }
 tower-sessions-redis-store = { workspace = true }
 axum = { workspace = true }
+# The JSON API under /api/* and its OpenAPI document (src/json_api.rs).
+aide = { workspace = true }
+schemars = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -57,6 +61,8 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # A real Redis for the roll hub's trace tests (needs Docker).
 testcontainers-modules = { version = "0.15", features = ["redis"] }
+# `oneshot`: requests to the API router in its contract tests (src/json_api/tests.rs).
+tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

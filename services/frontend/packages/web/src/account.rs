@@ -1,43 +1,18 @@
 //! The profile page's account settings: display name (stored by auth with the
 //! account) and profile picture (SurrealDB, `profile_picture` table).
 //!
-//! The picture has plain HTTP routes rather than server functions so the browser
-//! can upload the raw file and show it with an ordinary `<img>`:
-//! - `GET /api/profile/picture`: the session's own picture (404 when none);
-//! - `POST /api/profile/picture`: raw image bytes, at most `PICTURE_MAX_UPLOAD`.
+//! The picture has plain HTTP routes rather than JSON so the browser can upload the
+//! raw file and show it with an ordinary `<img>` (`/api/account/picture`, and its old
+//! path `/api/profile/picture`; json_api.rs):
+//! - `GET`: the viewer's own picture (404 when none);
+//! - `POST`: raw image bytes, at most `PICTURE_MAX_UPLOAD`.
 //!
 //! Every upload is decoded and re-encoded to a 256x256 JPEG, so only pixels are
 //! stored: no hidden data such as location, and nothing but a plain JPEG is served.
 
 use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AccountInfo {
-    /// Login name; can't be changed.
-    pub username: String,
-    pub display_name: Option<String>,
-    /// Version of the profile picture (for the `?v=` cache key), `None` when there
-    /// is none.
-    pub picture_version: Option<i64>,
-    /// False when the picture store (SurrealDB) isn't reachable/configured.
-    pub pictures_available: bool,
-    /// `None` for accounts without one (GitHub logins).
-    pub email: Option<String>,
-    pub email_verified: bool,
-}
-
-impl AccountInfo {
-    /// Display name, or the username when none is set.
-    pub fn shown_name(&self) -> &str {
-        self.display_name.as_deref().unwrap_or(&self.username)
-    }
-
-    /// URL of the profile picture, when there is one.
-    pub fn picture_url(&self) -> Option<String> {
-        self.picture_version.map(|v| format!("/api/profile/picture?v={v}"))
-    }
-}
+pub use api_types::AccountInfo;
 
 /// Largest upload accepted, in bytes (phone photos are typically 2-5 MB).
 pub const PICTURE_MAX_UPLOAD: usize = 5 * 1024 * 1024;
@@ -48,31 +23,28 @@ const PICTURE_SIDE: u32 = 256;
 #[cfg(not(target_arch = "wasm32"))]
 mod server {
     use super::*;
+    use api_types::{ApiError, ErrorCode, PictureVersion};
     use axum::{
-        body::Bytes,
-        http::{header, HeaderMap, HeaderValue, StatusCode},
+        http::{header, HeaderValue},
         response::{IntoResponse, Response},
         Json,
     };
-    use serde_json::json;
 
-    /// The session's account, looked up with auth.
-    pub(super) async fn session_account(
-        session: &tower_sessions::Session,
-    ) -> Result<(String, api::AccountProfile), StatusCode> {
-        let token: Option<String> = session.get("opaque_token").await.ok().flatten();
-        let Some(token) = token else { return Err(StatusCode::UNAUTHORIZED) };
-        match api::account_profile(&token).await {
-            Ok(p) => Ok((token, p)),
-            Err(api::ProfileError::LoggedOut) => Err(StatusCode::UNAUTHORIZED),
+    use crate::json_api::{self, Viewer};
+
+    /// The token's account, looked up with auth.
+    async fn profile(token: &str) -> Result<api::AccountProfile, ApiError> {
+        match api::account_profile(token).await {
+            Ok(p) => Ok(p),
+            Err(api::ProfileError::LoggedOut) => Err(ApiError::logged_out()),
             Err(e) => {
                 tracing::error!(error = ?e, "reading the account from auth failed");
-                Err(StatusCode::BAD_GATEWAY)
+                Err(ApiError::new(ErrorCode::Upstream, "Your account can't be loaded right now. Try again later."))
             }
         }
     }
 
-    pub(super) async fn info(profile: api::AccountProfile) -> AccountInfo {
+    async fn info(profile: api::AccountProfile) -> AccountInfo {
         let (picture_version, pictures_available) = match crate::dataset::dataset() {
             Some(ds) => match ds.profile_picture_version(profile.user_id).await {
                 Ok(v) => (v, true),
@@ -84,6 +56,8 @@ mod server {
             None => (None, false),
         };
         AccountInfo {
+            shown_name: profile.display_name.clone().unwrap_or_else(|| profile.username.clone()),
+            picture_url: picture_version.map(|v| api_types::picture_url(&profile.username, v)),
             username: profile.username,
             display_name: profile.display_name,
             picture_version,
@@ -93,21 +67,59 @@ mod server {
         }
     }
 
-    fn error(status: StatusCode, code: &str) -> Response {
-        (status, Json(json!({ "error": code }))).into_response()
+    /// The token's account settings.
+    #[tracing::instrument(name = "bff.get_account", skip_all)]
+    pub async fn account(token: &str) -> Result<AccountInfo, ApiError> {
+        api::trace::rejectable(async { Ok(info(profile(token).await?).await) }).await
     }
 
-    /// `GET /api/profile/picture`: the session's own picture.
-    pub async fn get_picture(session: tower_sessions::Session) -> Response {
-        let (_, profile) = match session_account(&session).await {
-            Ok(a) => a,
-            Err(s) => return s.into_response(),
-        };
-        let Some(ds) = crate::dataset::dataset() else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
+    /// Set the display name; blank clears it. Errors carry a message for the page.
+    #[tracing::instrument(name = "bff.set_account_display_name", skip_all)]
+    pub async fn set_name(token: &str, name: &str) -> Result<AccountInfo, ApiError> {
+        api::trace::rejectable(async {
+            match api::set_display_name(token, Some(name)).await {
+                Ok(profile) => Ok(info(profile).await),
+                Err(api::ProfileError::Invalid) => Err(ApiError::new(
+                    ErrorCode::Invalid,
+                    "Use at most 40 characters, without line breaks or hidden characters.",
+                )),
+                Err(api::ProfileError::LoggedOut) => Err(ApiError::logged_out()),
+                Err(api::ProfileError::Other(e)) => {
+                    tracing::error!(error = %e, "saving the display name failed");
+                    Err(ApiError::new(ErrorCode::Upstream, "Couldn't save your name. Try again."))
+                }
+            }
+        })
+        .await
+    }
+
+    /// Remove the profile picture (back to the default one).
+    #[tracing::instrument(name = "bff.remove_profile_picture", skip_all)]
+    pub async fn remove_picture(token: &str) -> Result<AccountInfo, ApiError> {
+        api::trace::rejectable(async {
+            let profile = profile(token).await?;
+            let ds = crate::dataset::dataset().ok_or_else(pictures_unavailable)?;
+            ds.delete_profile_picture(profile.user_id).await.map_err(|e| {
+                tracing::error!(error = %e, "removing the profile picture failed");
+                ApiError::new(ErrorCode::Upstream, "Couldn't remove your picture. Try again.")
+            })?;
+            tracing::info!(user_id = profile.user_id, "profile picture removed");
+            Ok(info(profile).await)
+        })
+        .await
+    }
+
+    fn pictures_unavailable() -> ApiError {
+        ApiError::new(ErrorCode::Unavailable, "Pictures can't be changed right now.")
+    }
+
+    /// `GET /api/account/picture`: the viewer's own picture (404 when none).
+    pub async fn get_picture(viewer: Viewer) -> Result<Response, json_api::ApiError> {
+        let profile = profile(viewer.token()?).await?;
+        let no_picture = || ApiError::new(ErrorCode::NotFound, "There is no profile picture.");
+        let ds = crate::dataset::dataset().ok_or_else(no_picture)?;
         match ds.profile_picture(profile.user_id).await {
-            Ok(Some((jpeg, _))) => (
+            Ok(Some((jpeg, _))) => Ok((
                 [
                     (header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg")),
                     // The page asks for it with ?v=<version>, so a new picture is a new
@@ -117,32 +129,27 @@ mod server {
                 ],
                 jpeg,
             )
-                .into_response(),
-            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+                .into_response()),
+            Ok(None) => Err(no_picture().into()),
             Err(e) => {
                 tracing::error!(error = %e, "reading the profile picture failed");
-                StatusCode::BAD_GATEWAY.into_response()
+                Err(ApiError::new(ErrorCode::Upstream, "Your picture can't be loaded right now.").into())
             }
         }
     }
 
-    /// `POST /api/profile/picture`: replace the session's picture with the uploaded
-    /// image. Replies `{"version": n}`, or `{"error": code}` with 400 `not_image`,
-    /// 401, 403 `origin`, 413 `too_large`, 502 `store` or 503 `unavailable`.
-    pub async fn upload_picture(headers: HeaderMap, session: tower_sessions::Session, body: Bytes) -> Response {
-        if !crate::rolls::origin_allowed(&headers) {
-            return error(StatusCode::FORBIDDEN, "origin");
-        }
-        let (_, profile) = match session_account(&session).await {
-            Ok(a) => a,
-            Err(s) => return error(s, "login"),
-        };
-        let Some(ds) = crate::dataset::dataset() else {
-            return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable");
-        };
+    /// `POST /api/account/picture`: replace the viewer's picture with the uploaded image (raw
+    /// bytes). 400 when it isn't a usable image, 413 over `PICTURE_MAX_UPLOAD`.
+    pub async fn upload_picture(
+        viewer: Viewer,
+        json_api::Bytes(body): json_api::Bytes,
+    ) -> Result<Json<PictureVersion>, json_api::ApiError> {
+        let profile = profile(viewer.token()?).await?;
+        let ds = crate::dataset::dataset().ok_or_else(pictures_unavailable)?;
         if body.len() > PICTURE_MAX_UPLOAD {
-            return error(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
+            return Err(ApiError::new(ErrorCode::Invalid, "That picture is too large (at most 5 MB).").with_status(413).into());
         }
+        let not_image = || ApiError::new(ErrorCode::Invalid, "That file isn't a picture that can be read. Use JPEG, PNG, WebP or GIF.");
         // In a span of its own (made inside the closure), so the conversion's CPU time shows
         // under its own name.
         let convert = move || {
@@ -154,21 +161,21 @@ mod server {
             Ok(Ok(jpeg)) => jpeg,
             Ok(Err(e)) => {
                 tracing::info!(error = %e, "profile picture upload is not a usable image");
-                return error(StatusCode::BAD_REQUEST, "not_image");
+                return Err(not_image().into());
             }
             Err(e) => {
                 tracing::error!(error = %e, "profile picture conversion panicked");
-                return error(StatusCode::BAD_REQUEST, "not_image");
+                return Err(not_image().into());
             }
         };
         match ds.set_profile_picture(profile.user_id, &jpeg).await {
             Ok(version) => {
                 tracing::info!(user_id = profile.user_id, bytes = jpeg.len(), "profile picture changed");
-                Json(json!({ "version": version })).into_response()
+                Ok(Json(PictureVersion { version }))
             }
             Err(e) => {
                 tracing::error!(error = %e, "saving the profile picture failed");
-                error(StatusCode::BAD_GATEWAY, "store")
+                Err(ApiError::new(ErrorCode::Upstream, "Couldn't save your picture. Try again.").into())
             }
         }
     }
@@ -208,75 +215,44 @@ mod server {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use server::{get_picture, upload_picture};
+pub use server::{account, get_picture, remove_picture, set_name, upload_picture};
 
+/// The session's token, for a server function: like the API, only from the site's own pages.
 #[cfg(not(target_arch = "wasm32"))]
-async fn session() -> Result<tower_sessions::Session, ServerFnError> {
+async fn session_token() -> Result<String, ServerFnError> {
     use dioxus::fullstack::FullstackContext;
 
     let ctx = FullstackContext::current().ok_or_else(|| ServerFnError::new("no request context"))?;
-    let parts = ctx.parts_mut();
-    if !crate::rolls::origin_allowed(&parts.headers) {
-        return Err(ServerFnError::new("forbidden"));
-    }
-    parts
-        .extensions
-        .get::<tower_sessions::Session>()
-        .cloned()
-        .ok_or_else(|| ServerFnError::new("not logged in"))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn account_error(status: axum::http::StatusCode) -> ServerFnError {
-    if status == axum::http::StatusCode::UNAUTHORIZED {
-        ServerFnError::new("not logged in")
-    } else {
-        ServerFnError::new("Your account can't be loaded right now. Try again later.")
-    }
+    let session = {
+        let parts = ctx.parts_mut();
+        if !crate::rolls::origin_allowed(&parts.headers) {
+            return Err(ServerFnError::new("forbidden"));
+        }
+        parts.extensions.get::<tower_sessions::Session>().cloned()
+    };
+    let token: Option<String> = match session {
+        Some(session) => session.get("opaque_token").await.ok().flatten(),
+        None => None,
+    };
+    token.ok_or_else(|| api::server_error(api_types::ApiError::logged_out()))
 }
 
 /// The logged-in user's account settings.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.get_account", skip_all, err)]
 pub async fn get_account() -> Result<AccountInfo, ServerFnError> {
-    let session = session().await?;
-    let (_, profile) = server::session_account(&session).await.map_err(account_error)?;
-    Ok(server::info(profile).await)
+    account(&session_token().await?).await.map_err(api::server_error)
 }
 
 /// Set the display name; blank clears it. Errors carry a message for the page.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.set_account_display_name", skip_all, err)]
 pub async fn set_account_display_name(name: String) -> Result<AccountInfo, ServerFnError> {
-    let session = session().await?;
-    let (token, _) = server::session_account(&session).await.map_err(account_error)?;
-    match api::set_display_name(&token, Some(&name)).await {
-        Ok(profile) => Ok(server::info(profile).await),
-        Err(api::ProfileError::Invalid) => Err(ServerFnError::new(
-            "Use at most 40 characters, without line breaks or hidden characters.",
-        )),
-        Err(api::ProfileError::LoggedOut) => Err(ServerFnError::new("not logged in")),
-        Err(api::ProfileError::Other(e)) => {
-            tracing::error!(error = %e, "saving the display name failed");
-            Err(ServerFnError::new("Couldn't save your name. Try again."))
-        }
-    }
+    set_name(&session_token().await?, &name).await.map_err(api::server_error)
 }
 
 /// Remove the profile picture (back to the default one).
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.remove_profile_picture", skip_all, err)]
 pub async fn remove_profile_picture() -> Result<AccountInfo, ServerFnError> {
-    let session = session().await?;
-    let (_, profile) = server::session_account(&session).await.map_err(account_error)?;
-    let ds = crate::dataset::dataset()
-        .ok_or_else(|| ServerFnError::new("Pictures aren't available right now."))?;
-    ds.delete_profile_picture(profile.user_id).await.map_err(|e| {
-        tracing::error!(error = %e, "removing the profile picture failed");
-        ServerFnError::new("Couldn't remove your picture. Try again.")
-    })?;
-    tracing::info!(user_id = profile.user_id, "profile picture removed");
-    Ok(server::info(profile).await)
+    remove_picture(&session_token().await?).await.map_err(api::server_error)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

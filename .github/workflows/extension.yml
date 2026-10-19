@@ -68,7 +68,7 @@ jobs:
             --channel unlisted \
             --source-dir "$SRC" \
             --artifacts-dir out \
-            --ignore-files "test/**" package.json README.md \
+            --ignore-files "test/**" package.json package-lock.json tsconfig.json README.md \
             --approval-timeout 1800000 \
             --api-key "$AMO_JWT_ISSUER" \
             --api-secret "$AMO_JWT_SECRET"

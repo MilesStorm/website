@@ -124,8 +124,9 @@
   // The Gateway stamps each response `Server-Timing: gateway;dur=<ms>;desc="<epoch ms received>"`;
   // with the browser's requestStart/responseStart for the same request that gives
   //   offset = ((t2 - t1) + (t3 - t4)) / 2, error <= delay / 2, delay = (t4 - t1) - (t3 - t2).
-  // Only responses no cache can replay count: the page's own navigation and /bff/ server calls
-  // (POSTs, never cached by the browser or Cloudflare). A replayed stamp would be hours old. HTML
+  // Only responses no cache can replay count: the page's own navigation and /bff/ and /api/ server
+  // calls (no-store, never cached by the browser or Cloudflare; a GET the browser cache answers
+  // has transferSize 0 and is skipped). A replayed stamp would be hours old. HTML
   // must therefore stay uncached at Cloudflare (it is today: cf-cache-status DYNAMIC).
   // The lowest-delay of the last CLOCK_SAMPLES wins (NTP's clock filter). Each trace keeps the
   // estimate it had when its root started (`pin`), so all its spans move together; a trace started
@@ -145,7 +146,10 @@
     function usable(entry) {
       if (entry.entryType === 'navigation') return true;
       if (entry.initiatorType !== 'fetch') return false;
-      try { return new URL(entry.name).pathname.indexOf('/bff/') === 0; } catch (e) { return false; }
+      try {
+        var path = new URL(entry.name).pathname;
+        return path.indexOf('/bff/') === 0 || path.indexOf('/api/') === 0;
+      } catch (e) { return false; }
     }
 
     // An entry's times are on the monotonic clock; they're moved onto now()'s (the clock spans
