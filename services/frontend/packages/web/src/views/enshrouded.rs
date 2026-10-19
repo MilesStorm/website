@@ -8,7 +8,8 @@ use dioxus::prelude::*;
 use api::enshrouded_command;
 #[cfg(target_arch = "wasm32")]
 use api::enshrouded_status;
-use ui::data_dir::{EnshroudedAction, EnshroudedState, EnshroudedStatus, LoginStatus};
+use api_types::{EnshroudedAction, EnshroudedCommand, EnshroudedState, EnshroudedStatus};
+use ui::data_dir::LoginStatus;
 
 use crate::{LOGIN_STATUS, PERMISSIONS};
 
@@ -55,11 +56,11 @@ enum Command {
 }
 
 impl Command {
-    fn wire(self) -> &'static str {
+    fn wire(self) -> EnshroudedCommand {
         match self {
-            Command::Restart => "restart",
-            Command::Update => "update",
-            Command::UpdateNow => "update_now",
+            Command::Restart => EnshroudedCommand::Restart,
+            Command::Update => EnshroudedCommand::Update,
+            Command::UpdateNow => EnshroudedCommand::UpdateNow,
         }
     }
 }
@@ -98,7 +99,7 @@ fn Panel() -> Element {
     let send = move |cmd: Command| {
         spawn(async move {
             command.set(CommandUi::Sending(cmd));
-            match enshrouded_command(cmd.wire().to_string()).await {
+            match enshrouded_command(cmd.wire()).await {
                 Ok(()) => command.set(CommandUi::Sent(cmd)),
                 Err(e) => command.set(CommandUi::Failed(message(&e))),
             }
@@ -428,7 +429,7 @@ mod tests {
     fn status() -> EnshroudedStatus {
         EnshroudedStatus {
             state: EnshroudedState::Online,
-            players: Some(ui::data_dir::EnshroudedPlayers { online: 2, max: 16, sessions: vec![300, 7500] }),
+            players: Some(api_types::EnshroudedPlayers { online: 2, max: 16, sessions: vec![300, 7500] }),
             version: Some("1269579".into()),
             uptime_secs: Some(90_000),
             latest_build_at: Some(1_000),
@@ -497,7 +498,7 @@ mod tests {
         assert!(html.contains("Force update waits until everyone has left"), "{html}");
         assert!(html.contains("Update when empty") && html.contains("Update now anyway"), "{html}");
         let empty = EnshroudedStatus {
-            players: Some(ui::data_dir::EnshroudedPlayers { online: 0, max: 16, sessions: vec![] }),
+            players: Some(api_types::EnshroudedPlayers { online: 0, max: 16, sessions: vec![] }),
             ..status()
         };
         let html = render(empty, CommandUi::Confirming(Command::Update), 10_000);

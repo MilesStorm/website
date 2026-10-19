@@ -363,6 +363,22 @@
         }
       }
     },
+    "/api/arcane/me": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "`GET /api/arcane/me`: always answered, so the extension can tell \"logged out\" from\n\"server down\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArcaneMe"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/account": {
       "get": {
         "responses": {
@@ -651,6 +667,625 @@
           }
         }
       }
+    },
+    "/api/arcane/rolls": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Server-sent events: `replay` (the last roll of the past hour) first, then `roll`.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArcaneServerMsg"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ark/players": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "`GET /api/ark/players`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArkPlayers"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ark/command": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/ark/command`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArkCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArkResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/enshrouded": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The Enshrouded server as the panel (`/enshrouded`) shows it: auth's `StatusResp`, passed on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnshroudedStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/enshrouded/command": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/enshrouded/command`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnshroudedCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      }
+    },
+    "/api/admin/users": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "description": "From 0.",
+            "required": true,
+            "schema": {
+              "description": "From 0.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "description": "Part of a name; empty or absent for all.",
+            "schema": {
+              "description": "Part of a name; empty or absent for all.",
+              "type": "string"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "One page of a listing, and how many there are in all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/users/{user_id}/roles/{role_id}": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "style": "simple"
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      },
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "style": "simple"
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      }
+    },
+    "/api/admin/roles": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "description": "From 0.",
+            "required": true,
+            "schema": {
+              "description": "From 0.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "description": "Part of a name; empty or absent for all.",
+            "schema": {
+              "description": "Part of a name; empty or absent for all.",
+              "type": "string"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "One page of a listing, and how many there are in all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRolePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/roles/all": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminRole"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/roles/{role_id}/permissions/{permission_id}": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "permission_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "style": "simple"
+          },
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      },
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "permission_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "style": "simple"
+          },
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      }
+    },
+    "/api/admin/permissions": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminPermission"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/invites": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminInvite"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/admin/invites`: a link that gives `role_id`, working for `days` days and for up\nto `max_uses` people (`None`: any number).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewInvite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An invite link as the admin panel lists it (services/auth/src/auth/invites.rs).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInvite"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/invites/{invite_id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invite_id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      }
+    },
+    "/api/arcane/flag": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/arcane/flag`: the latest roll read wrong, with the user's corrections (one per\ndie, left to right; `null` for one left empty).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlagRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "A flagged roll was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flagged"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -713,6 +1348,251 @@
           "email_verified"
         ]
       },
+      "AdminInvite": {
+        "description": "An invite link as the admin panel lists it (services/auth/src/auth/invites.rs).",
+        "type": "object",
+        "properties": {
+          "created_at": {
+            "description": "RFC 3339 timestamps.",
+            "type": "string"
+          },
+          "created_by": {
+            "description": "Username of the admin who made it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "joined": {
+            "description": "Usernames of who joined through it, in order.",
+            "type": "array",
+            "default": [],
+            "items": {
+              "type": "string"
+            }
+          },
+          "link": {
+            "description": "The link itself: only right after making it.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "live": {
+            "description": "Whether it can still let someone new in.",
+            "type": "boolean"
+          },
+          "max_uses": {
+            "description": "`None` = any number of people.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "role": {
+            "type": "string"
+          },
+          "role_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "uses": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "id",
+          "role_id",
+          "role",
+          "note",
+          "created_by",
+          "created_at",
+          "expires_at",
+          "max_uses",
+          "uses",
+          "revoked",
+          "live",
+          "joined",
+          "link"
+        ]
+      },
+      "AdminPage": {
+        "description": "The query of `GET /api/admin/users` and `GET /api/admin/roles`.",
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "page": {
+            "description": "From 0.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "search": {
+            "description": "Part of a name; empty or absent for all.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "page",
+          "limit"
+        ]
+      },
+      "AdminPermission": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "description": "Also the ones the site doesn't know yet.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Permission"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "AdminRole": {
+        "description": "A role as the roles listing has it, with its permissions.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "description": "Empty in `GET /api/admin/roles/all`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminPermission"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "permissions"
+        ]
+      },
+      "AdminRolePage": {
+        "description": "One page of a listing, and how many there are in all.",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminRole"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ]
+      },
+      "AdminUser": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminUserRole"
+            }
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "email",
+          "roles"
+        ]
+      },
+      "AdminUserPage": {
+        "description": "One page of a listing, and how many there are in all.",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminUser"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ]
+      },
+      "AdminUserRole": {
+        "description": "A role as the user listing has it.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
       "ApiError": {
         "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
         "type": "object",
@@ -727,6 +1607,211 @@
         "required": [
           "error",
           "message"
+        ]
+      },
+      "ArcaneMe": {
+        "description": "`GET /api/arcane/me`: always answered, so the extension can tell \"logged out\" from\n\"server down\".",
+        "type": "object",
+        "properties": {
+          "has_arcane": {
+            "type": "boolean"
+          },
+          "logged_in": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "logged_in",
+          "username",
+          "has_arcane"
+        ]
+      },
+      "ArcaneServerMsg": {
+        "description": "A message from `/ws/arcane`, or an event's data on `/api/arcane/rolls` (always a roll).",
+        "oneOf": [
+          {
+            "description": "What was seen in one camera frame.",
+            "type": "object",
+            "properties": {
+              "detections": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Detection"
+                }
+              },
+              "frame_ms": {
+                "description": "How long reading the frame took.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "frame_seq": {
+                "description": "The number of the camera frame this answers (1, 2, … per connection).",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "frame"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "detections",
+              "frame_ms",
+              "frame_seq"
+            ]
+          },
+          {
+            "description": "The dice in view have settled into a new roll (or one re-read).",
+            "type": "object",
+            "properties": {
+              "complete": {
+                "type": "boolean"
+              },
+              "dice": {
+                "description": "Left to right.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RolledDie"
+                }
+              },
+              "frame_seq": {
+                "description": "The camera frame it settled on.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "model": {
+                "description": "The model that read it.",
+                "type": "string"
+              },
+              "roll_id": {
+                "description": "Kept when the same dice are read again.",
+                "type": "string"
+              },
+              "total": {
+                "description": "The sum (a d10's \"0\" counts 10); `None` unless every die was read.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "ts": {
+                "description": "Unix milliseconds.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "const": "roll"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "roll_id",
+              "dice",
+              "total",
+              "complete",
+              "ts",
+              "model",
+              "frame_seq"
+            ]
+          },
+          {
+            "description": "A frame couldn't be read.",
+            "type": "object",
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "error"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "error"
+            ]
+          }
+        ]
+      },
+      "ArkCommand": {
+        "description": "What the Ark server can be told to do: the commands auth accepts.",
+        "type": "string",
+        "enum": [
+          "start",
+          "stop",
+          "restart"
+        ]
+      },
+      "ArkCommandRequest": {
+        "description": "`POST /api/ark/command`.",
+        "type": "object",
+        "properties": {
+          "cmd": {
+            "$ref": "#/components/schemas/ArkCommand"
+          }
+        },
+        "required": [
+          "cmd"
+        ]
+      },
+      "ArkOutcome": {
+        "description": "What an Ark command did.",
+        "type": "string",
+        "enum": [
+          "stopped",
+          "already_stopped",
+          "failed_to_stop",
+          "started",
+          "already_running",
+          "failed_to_start",
+          "timeout",
+          "restarting"
+        ]
+      },
+      "ArkPlayers": {
+        "description": "`GET /api/ark/players`.",
+        "type": "object",
+        "properties": {
+          "count": {
+            "description": "`None` when the game server doesn't say (it is offline).",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "count"
+        ]
+      },
+      "ArkResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/ArkOutcome"
+          }
+        },
+        "required": [
+          "outcome"
         ]
       },
       "Bootstrap": {
@@ -799,6 +1884,68 @@
           "username"
         ]
       },
+      "Detection": {
+        "description": "One die found in a frame.",
+        "type": "object",
+        "properties": {
+          "confident": {
+            "description": "When false, `value` isn't a reading.",
+            "type": "boolean"
+          },
+          "dice_class": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "dice_conf": {
+            "type": "number",
+            "format": "float"
+          },
+          "value": {
+            "description": "The face it shows (\"0\" is the d10 zero).",
+            "type": "string"
+          },
+          "x1": {
+            "description": "The box, as fractions of the frame.",
+            "type": "number",
+            "format": "float"
+          },
+          "x2": {
+            "type": "number",
+            "format": "float"
+          },
+          "y1": {
+            "type": "number",
+            "format": "float"
+          },
+          "y2": {
+            "type": "number",
+            "format": "float"
+          },
+          "yolo_class": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "yolo_conf": {
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "x1",
+          "y1",
+          "x2",
+          "y2",
+          "yolo_conf",
+          "yolo_class",
+          "dice_class",
+          "dice_conf",
+          "value",
+          "confident"
+        ]
+      },
       "DirectDeletion": {
         "description": "`POST /api/account/deletion/direct`: `confirm` must be the username.",
         "type": "object",
@@ -851,6 +1998,193 @@
           "email"
         ]
       },
+      "EnshroudedAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "description": "`restart`, `update` or `update_now`, as auth stored it.",
+            "type": "string"
+          },
+          "at": {
+            "description": "Unix seconds.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "description": "`None` when the account was deleted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "action",
+          "at"
+        ]
+      },
+      "EnshroudedCommand": {
+        "description": "Restart, or force an update: `update` waits until nobody is online, `update_now`\ndisconnects the players.",
+        "type": "string",
+        "enum": [
+          "restart",
+          "update",
+          "update_now"
+        ]
+      },
+      "EnshroudedCommandRequest": {
+        "description": "`POST /api/enshrouded/command`.",
+        "type": "object",
+        "properties": {
+          "cmd": {
+            "$ref": "#/components/schemas/EnshroudedCommand"
+          }
+        },
+        "required": [
+          "cmd"
+        ]
+      },
+      "EnshroudedPlayers": {
+        "type": "object",
+        "properties": {
+          "max": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "online": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "sessions": {
+            "description": "How long each player has been connected, in seconds (the game sends no names).",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "online",
+          "max",
+          "sessions"
+        ]
+      },
+      "EnshroudedState": {
+        "description": "Auth's names, unchanged.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Online",
+              "Restarting",
+              "Updating",
+              "Stopping",
+              "Stopped",
+              "Crashed"
+            ]
+          },
+          {
+            "description": "The process runs but the world isn't loaded yet.",
+            "type": "string",
+            "const": "Starting"
+          },
+          {
+            "description": "Neither the server nor its control port answers.",
+            "type": "string",
+            "const": "Unreachable"
+          }
+        ]
+      },
+      "EnshroudedStatus": {
+        "description": "The Enshrouded server as the panel (`/enshrouded`) shows it: auth's `StatusResp`, passed on.",
+        "type": "object",
+        "properties": {
+          "can_control": {
+            "description": "Whether Restart / Force update can be sent right now.",
+            "type": "boolean"
+          },
+          "latest_build_at": {
+            "description": "When Steam last published a build (unix seconds).",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "next_command_at": {
+            "description": "When the next command may be sent (unix seconds), while that is in the future.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "players": {
+            "description": "`None` when the server doesn't answer the query.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnshroudedPlayers"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recent": {
+            "description": "Latest commands, newest first.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnshroudedAction"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/EnshroudedState"
+          },
+          "update_pending": {
+            "description": "Steam has a build the server doesn't run.",
+            "type": "boolean"
+          },
+          "update_queued": {
+            "description": "Someone asked for an update that waits for the server to be empty.",
+            "type": "boolean",
+            "default": false
+          },
+          "uptime_secs": {
+            "description": "Seconds the server process has been running.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "version": {
+            "description": "The game's build number.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "players",
+          "version",
+          "uptime_secs",
+          "latest_build_at",
+          "update_pending",
+          "update_queued",
+          "can_control",
+          "recent",
+          "next_command_at"
+        ]
+      },
       "ErrorCode": {
         "description": "What kind of failure an [`ApiError`] is: for the code paths that branch on it. The rest is\nin the message. Clients send the user to the login page on `logged_out` only, never on a\n401 alone: a wrong password is a 401 too (`invalid`).",
         "type": "string",
@@ -867,6 +2201,39 @@
           "internal"
         ]
       },
+      "FlagRequest": {
+        "description": "`POST /api/arcane/flag`: the latest roll read wrong, with the user's corrections (one per\ndie, left to right; `null` for one left empty).",
+        "type": "object",
+        "properties": {
+          "roll_id": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "required": [
+          "roll_id"
+        ]
+      },
+      "Flagged": {
+        "description": "A flagged roll was saved.",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
       "ForgotPassword": {
         "description": "`POST /api/password/forgot`: a username or an email address.",
         "type": "object",
@@ -877,6 +2244,48 @@
         },
         "required": [
           "login"
+        ]
+      },
+      "Frame": {
+        "type": "object",
+        "properties": {
+          "detections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Detection"
+            }
+          },
+          "frame_ms": {
+            "description": "How long reading the frame took.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "frame_seq": {
+            "description": "The number of the camera frame this answers (1, 2, … per connection).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "detections",
+          "frame_ms",
+          "frame_seq"
+        ]
+      },
+      "InvitePath": {
+        "description": "`/api/admin/invites/{invite_id}`.",
+        "type": "object",
+        "properties": {
+          "invite_id": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "invite_id"
         ]
       },
       "KnownPermission": {
@@ -915,6 +2324,39 @@
         "required": [
           "username",
           "password"
+        ]
+      },
+      "NewInvite": {
+        "description": "`POST /api/admin/invites`: a link that gives `role_id`, working for `days` days and for up\nto `max_uses` people (`None`: any number).",
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "max_uses": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role_id": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "role_id",
+          "days",
+          "max_uses",
+          "note"
         ]
       },
       "Opened": {
@@ -980,6 +2422,17 @@
           "password"
         ]
       },
+      "Permission": {
+        "description": "A permission name from auth, which may have permissions the site doesn't know yet: those\ndeserialize as `Other` instead of failing. Only for showing names; checks use\n[`KnownPermission`].",
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/KnownPermission"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
       "PictureVersion": {
         "description": "A profile picture just stored.",
         "type": "object",
@@ -1013,6 +2466,110 @@
           "password"
         ]
       },
+      "RolePermissionPath": {
+        "description": "`/api/admin/roles/{role_id}/permissions/{permission_id}`.",
+        "type": "object",
+        "properties": {
+          "permission_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "role_id": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "role_id",
+          "permission_id"
+        ]
+      },
+      "Roll": {
+        "type": "object",
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "dice": {
+            "description": "Left to right.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RolledDie"
+            }
+          },
+          "frame_seq": {
+            "description": "The camera frame it settled on.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "model": {
+            "description": "The model that read it.",
+            "type": "string"
+          },
+          "roll_id": {
+            "description": "Kept when the same dice are read again.",
+            "type": "string"
+          },
+          "total": {
+            "description": "The sum (a d10's \"0\" counts 10); `None` unless every die was read.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "ts": {
+            "description": "Unix milliseconds.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "roll_id",
+          "dice",
+          "total",
+          "complete",
+          "ts",
+          "model",
+          "frame_seq"
+        ]
+      },
+      "RolledDie": {
+        "type": "object",
+        "properties": {
+          "box": {
+            "description": "As fractions of the frame: [x1, y1, x2, y2].",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "maxItems": 4,
+            "minItems": 4
+          },
+          "conf": {
+            "type": "number",
+            "format": "float"
+          },
+          "value": {
+            "description": "\"1\"..\"20\" (\"0\" is the d10 zero); `None` when it couldn't be read confidently.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "conf",
+          "box"
+        ]
+      },
       "Sharing": {
         "description": "`PUT /api/account/sharing`.",
         "type": "object",
@@ -1039,6 +2596,24 @@
         "required": [
           "available",
           "share"
+        ]
+      },
+      "UserRolePath": {
+        "description": "`/api/admin/users/{user_id}/roles/{role_id}`.",
+        "type": "object",
+        "properties": {
+          "role_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "user_id",
+          "role_id"
         ]
       },
       "Viewer": {

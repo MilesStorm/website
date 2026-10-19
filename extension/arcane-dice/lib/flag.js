@@ -2,6 +2,8 @@
 // minutes (services/frontend capture.rs); flagging within that time saves it for
 // training, with the user's optional corrections per die.
 
+/** @import { components } from "../../../services/frontend/web/src/api/schema.js" */
+
 export const FLAG_WINDOW_MS = 10 * 60 * 1000;
 
 /**
@@ -21,9 +23,11 @@ export function isFace(text) {
 /**
  * Request body for POST /api/arcane/flag, or null when a box holds something that
  * isn't a die face. One value per die, left to right; empty boxes become null.
+ * @returns {components["schemas"]["FlagRequest"] | null}
  */
 export function flagPayload(roll, typed) {
   if (typed.length !== roll.dice.length) return null;
+  /** @type {(string | null)[]} */
   const values = [];
   for (const raw of typed) {
     const t = raw.trim();

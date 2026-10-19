@@ -558,6 +558,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/arcane/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /**
+                 * @description `GET /api/arcane/me`: always answered, so the extension can tell "logged out" from
+                 *     "server down".
+                 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ArcaneMe"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/account": {
         parameters: {
             query?: never;
@@ -1010,6 +1048,810 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/arcane/rolls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Server-sent events: `replay` (the last roll of the past hour) first, then `roll`. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/event-stream": components["schemas"]["ArcaneServerMsg"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ark/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description `GET /api/ark/players`. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ArkPlayers"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ark/command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description `POST /api/ark/command`. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ArkCommandRequest"];
+                };
+            };
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ArkResult"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/enshrouded": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The Enshrouded server as the panel (`/enshrouded`) shows it: auth's `StatusResp`, passed on. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["EnshroudedStatus"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/enshrouded/command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description `POST /api/enshrouded/command`. */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["EnshroudedCommandRequest"];
+                };
+            };
+            responses: {
+                /** @description no content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    limit: number;
+                    /** @description From 0. */
+                    page: number;
+                    /** @description Part of a name; empty or absent for all. */
+                    search?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description One page of a listing, and how many there are in all. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUserPage"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{user_id}/roles/{role_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    role_id: number;
+                    user_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description no content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    role_id: number;
+                    user_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description no content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query: {
+                    limit: number;
+                    /** @description From 0. */
+                    page: number;
+                    /** @description Part of a name; empty or absent for all. */
+                    search?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description One page of a listing, and how many there are in all. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminRolePage"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/roles/all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminRole"][];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/roles/{role_id}/permissions/{permission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    permission_id: number;
+                    role_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description no content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    permission_id: number;
+                    role_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description no content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminPermission"][];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminInvite"][];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /**
+             * @description `POST /api/admin/invites`: a link that gives `role_id`, working for `days` days and for up
+             *     to `max_uses` people (`None`: any number).
+             */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NewInvite"];
+                };
+            };
+            responses: {
+                /** @description An invite link as the admin panel lists it (services/auth/src/auth/invites.rs). */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminInvite"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/invites/{invite_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    invite_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description no content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/arcane/flag": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /**
+             * @description `POST /api/arcane/flag`: the latest roll read wrong, with the user's corrections (one per
+             *     die, left to right; `null` for one left empty).
+             */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FlagRequest"];
+                };
+            };
+            responses: {
+                /** @description A flagged roll was saved. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Flagged"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1033,6 +1875,91 @@ export interface components {
             /** @description Login name; can't be changed. */
             username: string;
         };
+        /** @description An invite link as the admin panel lists it (services/auth/src/auth/invites.rs). */
+        AdminInvite: {
+            /** @description RFC 3339 timestamps. */
+            created_at: string;
+            /** @description Username of the admin who made it. */
+            created_by: string | null;
+            expires_at: string;
+            /** Format: int32 */
+            id: number;
+            /**
+             * @description Usernames of who joined through it, in order.
+             * @default []
+             */
+            joined: string[];
+            /**
+             * @description The link itself: only right after making it.
+             * @default null
+             */
+            link: string | null;
+            /** @description Whether it can still let someone new in. */
+            live: boolean;
+            /**
+             * Format: int32
+             * @description `None` = any number of people.
+             */
+            max_uses: number | null;
+            note: string | null;
+            revoked: boolean;
+            role: string;
+            /** Format: int32 */
+            role_id: number;
+            /** Format: int32 */
+            uses: number;
+        };
+        /** @description The query of `GET /api/admin/users` and `GET /api/admin/roles`. */
+        AdminPage: {
+            /** Format: uint32 */
+            limit: number;
+            /**
+             * Format: uint32
+             * @description From 0.
+             */
+            page: number;
+            /** @description Part of a name; empty or absent for all. */
+            search?: string;
+        };
+        AdminPermission: {
+            /** Format: int32 */
+            id: number;
+            /** @description Also the ones the site doesn't know yet. */
+            name: components["schemas"]["Permission"];
+        };
+        /** @description A role as the roles listing has it, with its permissions. */
+        AdminRole: {
+            /** Format: int32 */
+            id: number;
+            name: string;
+            /** @description Empty in `GET /api/admin/roles/all`. */
+            permissions: components["schemas"]["AdminPermission"][];
+        };
+        /** @description One page of a listing, and how many there are in all. */
+        AdminRolePage: {
+            items: components["schemas"]["AdminRole"][];
+            /** Format: int64 */
+            total: number;
+        };
+        AdminUser: {
+            email: string | null;
+            /** Format: int64 */
+            id: number;
+            roles: components["schemas"]["AdminUserRole"][];
+            username: string;
+        };
+        /** @description One page of a listing, and how many there are in all. */
+        AdminUserPage: {
+            items: components["schemas"]["AdminUser"][];
+            /** Format: int64 */
+            total: number;
+        };
+        /** @description A role as the user listing has it. */
+        AdminUserRole: {
+            /** Format: int32 */
+            id: number;
+            name: string;
+        };
         /**
          * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
          *     status. `message` is for the user. A 5xx message never carries the internal error, which
@@ -1041,6 +1968,85 @@ export interface components {
         ApiError: {
             error: components["schemas"]["ErrorCode"];
             message: string;
+        };
+        /**
+         * @description `GET /api/arcane/me`: always answered, so the extension can tell "logged out" from
+         *     "server down".
+         */
+        ArcaneMe: {
+            has_arcane: boolean;
+            logged_in: boolean;
+            username: string | null;
+        };
+        /** @description A message from `/ws/arcane`, or an event's data on `/api/arcane/rolls` (always a roll). */
+        ArcaneServerMsg: {
+            detections: components["schemas"]["Detection"][];
+            /**
+             * Format: uint64
+             * @description How long reading the frame took.
+             */
+            frame_ms: number;
+            /**
+             * Format: uint64
+             * @description The number of the camera frame this answers (1, 2, … per connection).
+             */
+            frame_seq: number;
+            /** @constant */
+            type: "frame";
+        } | {
+            complete: boolean;
+            /** @description Left to right. */
+            dice: components["schemas"]["RolledDie"][];
+            /**
+             * Format: uint64
+             * @description The camera frame it settled on.
+             */
+            frame_seq: number;
+            /** @description The model that read it. */
+            model: string;
+            /** @description Kept when the same dice are read again. */
+            roll_id: string;
+            /**
+             * Format: uint32
+             * @description The sum (a d10's "0" counts 10); `None` unless every die was read.
+             */
+            total: number | null;
+            /**
+             * Format: uint64
+             * @description Unix milliseconds.
+             */
+            ts: number;
+            /** @constant */
+            type: "roll";
+        } | {
+            error: string;
+            /** @constant */
+            type: "error";
+        };
+        /**
+         * @description What the Ark server can be told to do: the commands auth accepts.
+         * @enum {string}
+         */
+        ArkCommand: "start" | "stop" | "restart";
+        /** @description `POST /api/ark/command`. */
+        ArkCommandRequest: {
+            cmd: components["schemas"]["ArkCommand"];
+        };
+        /**
+         * @description What an Ark command did.
+         * @enum {string}
+         */
+        ArkOutcome: "stopped" | "already_stopped" | "failed_to_stop" | "started" | "already_running" | "failed_to_start" | "timeout" | "restarting";
+        /** @description `GET /api/ark/players`. */
+        ArkPlayers: {
+            /**
+             * Format: uint32
+             * @description `None` when the game server doesn't say (it is offline).
+             */
+            count: number | null;
+        };
+        ArkResult: {
+            outcome: components["schemas"]["ArkOutcome"];
         };
         /** @description Who is looking at the page: what `GET /api/session` answers. */
         Bootstrap: {
@@ -1064,6 +2070,32 @@ export interface components {
         Deletion: {
             username: string;
         };
+        /** @description One die found in a frame. */
+        Detection: {
+            /** @description When false, `value` isn't a reading. */
+            confident: boolean;
+            /** Format: uint32 */
+            dice_class: number;
+            /** Format: float */
+            dice_conf: number;
+            /** @description The face it shows ("0" is the d10 zero). */
+            value: string;
+            /**
+             * Format: float
+             * @description The box, as fractions of the frame.
+             */
+            x1: number;
+            /** Format: float */
+            x2: number;
+            /** Format: float */
+            y1: number;
+            /** Format: float */
+            y2: number;
+            /** Format: uint32 */
+            yolo_class: number;
+            /** Format: float */
+            yolo_conf: number;
+        };
         /** @description `POST /api/account/deletion/direct`: `confirm` must be the username. */
         DirectDeletion: {
             confirm: string;
@@ -1084,6 +2116,71 @@ export interface components {
         EmailSent: {
             email: string;
         };
+        EnshroudedAction: {
+            /** @description `restart`, `update` or `update_now`, as auth stored it. */
+            action: string;
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            at: number;
+            /** @description `None` when the account was deleted. */
+            name: string | null;
+        };
+        /**
+         * @description Restart, or force an update: `update` waits until nobody is online, `update_now`
+         *     disconnects the players.
+         * @enum {string}
+         */
+        EnshroudedCommand: "restart" | "update" | "update_now";
+        /** @description `POST /api/enshrouded/command`. */
+        EnshroudedCommandRequest: {
+            cmd: components["schemas"]["EnshroudedCommand"];
+        };
+        EnshroudedPlayers: {
+            /** Format: uint8 */
+            max: number;
+            /** Format: uint8 */
+            online: number;
+            /** @description How long each player has been connected, in seconds (the game sends no names). */
+            sessions: number[];
+        };
+        /** @description Auth's names, unchanged. */
+        EnshroudedState: ("Online" | "Restarting" | "Updating" | "Stopping" | "Stopped" | "Crashed") | "Starting" | "Unreachable";
+        /** @description The Enshrouded server as the panel (`/enshrouded`) shows it: auth's `StatusResp`, passed on. */
+        EnshroudedStatus: {
+            /** @description Whether Restart / Force update can be sent right now. */
+            can_control: boolean;
+            /**
+             * Format: int64
+             * @description When Steam last published a build (unix seconds).
+             */
+            latest_build_at: number | null;
+            /**
+             * Format: int64
+             * @description When the next command may be sent (unix seconds), while that is in the future.
+             */
+            next_command_at: number | null;
+            /** @description `None` when the server doesn't answer the query. */
+            players: components["schemas"]["EnshroudedPlayers"] | null;
+            /** @description Latest commands, newest first. */
+            recent: components["schemas"]["EnshroudedAction"][];
+            state: components["schemas"]["EnshroudedState"];
+            /** @description Steam has a build the server doesn't run. */
+            update_pending: boolean;
+            /**
+             * @description Someone asked for an update that waits for the server to be empty.
+             * @default false
+             */
+            update_queued: boolean;
+            /**
+             * Format: int64
+             * @description Seconds the server process has been running.
+             */
+            uptime_secs: number | null;
+            /** @description The game's build number. */
+            version: string | null;
+        };
         /**
          * @description What kind of failure an [`ApiError`] is: for the code paths that branch on it. The rest is
          *     in the message. Clients send the user to the login page on `logged_out` only, never on a
@@ -1091,9 +2188,39 @@ export interface components {
          * @enum {string}
          */
         ErrorCode: "logged_out" | "forbidden" | "invalid" | "conflict" | "not_found" | "gone" | "rate_limited" | "unavailable" | "upstream" | "internal";
+        /**
+         * @description `POST /api/arcane/flag`: the latest roll read wrong, with the user's corrections (one per
+         *     die, left to right; `null` for one left empty).
+         */
+        FlagRequest: {
+            roll_id: string;
+            values?: (string | null)[];
+        };
+        /** @description A flagged roll was saved. */
+        Flagged: {
+            ok: boolean;
+        };
         /** @description `POST /api/password/forgot`: a username or an email address. */
         ForgotPassword: {
             login: string;
+        };
+        Frame: {
+            detections: components["schemas"]["Detection"][];
+            /**
+             * Format: uint64
+             * @description How long reading the frame took.
+             */
+            frame_ms: number;
+            /**
+             * Format: uint64
+             * @description The number of the camera frame this answers (1, 2, … per connection).
+             */
+            frame_seq: number;
+        };
+        /** @description `/api/admin/invites/{invite_id}`. */
+        InvitePath: {
+            /** Format: int32 */
+            invite_id: number;
         };
         /**
          * @description The permissions the site knows. Every permission check uses this closed set, so TypeScript
@@ -1109,6 +2236,19 @@ export interface components {
         Login: {
             password: string;
             username: string;
+        };
+        /**
+         * @description `POST /api/admin/invites`: a link that gives `role_id`, working for `days` days and for up
+         *     to `max_uses` people (`None`: any number).
+         */
+        NewInvite: {
+            /** Format: int64 */
+            days: number;
+            /** Format: int32 */
+            max_uses: number | null;
+            note: string | null;
+            /** Format: int32 */
+            role_id: number;
         };
         /** @description What opening an invite link did. */
         Opened: {
@@ -1127,6 +2267,12 @@ export interface components {
             code: string;
             password: string;
         };
+        /**
+         * @description A permission name from auth, which may have permissions the site doesn't know yet: those
+         *     deserialize as `Other` instead of failing. Only for showing names; checks use
+         *     [`KnownPermission`].
+         */
+        Permission: components["schemas"]["KnownPermission"] | string;
         /** @description A profile picture just stored. */
         PictureVersion: {
             /** Format: int64 */
@@ -1138,6 +2284,45 @@ export interface components {
             password: string;
             username: string;
         };
+        /** @description `/api/admin/roles/{role_id}/permissions/{permission_id}`. */
+        RolePermissionPath: {
+            /** Format: int32 */
+            permission_id: number;
+            /** Format: int32 */
+            role_id: number;
+        };
+        Roll: {
+            complete: boolean;
+            /** @description Left to right. */
+            dice: components["schemas"]["RolledDie"][];
+            /**
+             * Format: uint64
+             * @description The camera frame it settled on.
+             */
+            frame_seq: number;
+            /** @description The model that read it. */
+            model: string;
+            /** @description Kept when the same dice are read again. */
+            roll_id: string;
+            /**
+             * Format: uint32
+             * @description The sum (a d10's "0" counts 10); `None` unless every die was read.
+             */
+            total: number | null;
+            /**
+             * Format: uint64
+             * @description Unix milliseconds.
+             */
+            ts: number;
+        };
+        RolledDie: {
+            /** @description As fractions of the frame: [x1, y1, x2, y2]. */
+            box: number[];
+            /** Format: float */
+            conf: number;
+            /** @description "1".."20" ("0" is the d10 zero); `None` when it couldn't be read confidently. */
+            value: string | null;
+        };
         /** @description `PUT /api/account/sharing`. */
         Sharing: {
             share: boolean;
@@ -1146,6 +2331,13 @@ export interface components {
             /** @description False when the training-data store isn't configured on this server. */
             available: boolean;
             share: boolean;
+        };
+        /** @description `/api/admin/users/{user_id}/roles/{role_id}`. */
+        UserRolePath: {
+            /** Format: int32 */
+            role_id: number;
+            /** Format: int64 */
+            user_id: number;
         };
         /** @description The logged-in user, as the page shows them. */
         Viewer: {

@@ -27,9 +27,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::Extension;
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use aide::NoApi;
+use api_types::{ApiError, ArcaneMe, ErrorCode, KnownPermission};
+use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use futures_util::stream;
 use api::trace::{Carried, RedisTracing};
 use opentelemetry::trace::SpanContext;
@@ -45,6 +48,8 @@ use tower_sessions_redis_store::fred::prelude::*;
 use tower_sessions_redis_store::RedisStore;
 use tracing::Instrument as _;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+use crate::json_api::{self, Viewer};
 
 const CHANNEL_PREFIX: &str = "arcane:rolls:";
 /// The channel as span attributes name it: the real one ends in a username.
@@ -557,20 +562,19 @@ fn no_store(mut resp: Response) -> Response {
     resp
 }
 
-/// `GET /api/arcane/me`: always 200, so the extension can tell "logged out" from
-/// "server down" without CORS or redirect handling.
-pub async fn arcane_me(session: tower_sessions::Session) -> Response {
-    let username: Option<String> = session.get("username").await.ok().flatten();
-    let body = match arcane_user(&session).await {
-        Ok(u) => serde_json::json!({"logged_in": true, "username": u, "has_arcane": true}),
-        Err(Denied::NoPermission) => {
-            serde_json::json!({"logged_in": true, "username": username, "has_arcane": false})
-        }
-        Err(Denied::LoggedOut) => {
-            serde_json::json!({"logged_in": false, "username": null, "has_arcane": false})
-        }
-    };
-    no_store(axum::Json(body).into_response())
+/// `GET /api/arcane/me`: always 200, so the extension can tell "logged out" from "server
+/// down" without CORS or redirect handling.
+pub async fn arcane_me(NoApi(viewer): NoApi<Result<Viewer, json_api::ApiError>>) -> Json<ArcaneMe> {
+    Json(match viewer.map(|v| v.0) {
+        Ok(api::Viewer::User { username, permissions, .. }) => ArcaneMe {
+            logged_in: true,
+            has_arcane: permissions.iter().any(|p| p.known() == Some(KnownPermission::Arcane)),
+            username: Some(username),
+        },
+        // Auth can't say: as today without the permission.
+        Ok(api::Viewer::Degraded { username }) => ArcaneMe { logged_in: true, username: Some(username), has_arcane: false },
+        Ok(api::Viewer::Anonymous) | Err(_) => ArcaneMe { logged_in: false, username: None, has_arcane: false },
+    })
 }
 
 struct RollStream {
@@ -689,20 +693,20 @@ impl RollHub {
 /// `GET /api/arcane/rolls`: server-sent events, one `roll` event per settled roll,
 /// starting with the user's last roll from the past hour (if any) as a `replay`
 /// event, so a viewer can show it without acting on it as a new roll (the extension
-/// must not post an old roll to a game chat). 401/403 when not allowed, 429 above
-/// `MAX_STREAMS_PER_USER` open streams.
+/// must not post an old roll to a game chat). The access layer has checked `arcane`;
+/// 429 above `MAX_STREAMS_PER_USER` open streams.
 pub async fn arcane_rolls(
-    Extension(hub): Extension<RollHub>,
-    session: tower_sessions::Session,
-) -> Response {
-    let user = match arcane_user(&session).await {
-        Ok(u) => u,
-        Err(Denied::LoggedOut) => return no_store(StatusCode::UNAUTHORIZED.into_response()),
-        Err(Denied::NoPermission) => return no_store(StatusCode::FORBIDDEN.into_response()),
+    viewer: Viewer,
+    NoApi(hub): json_api::Hub,
+    NoApi(session): NoApi<tower_sessions::Session>,
+) -> Result<Response, json_api::ApiError> {
+    let user = viewer.username()?.to_string();
+    let Some(Extension(hub)) = hub else {
+        tracing::error!("no roll hub on a roll stream request");
+        return Err(ApiError::new(ErrorCode::Unavailable, "Live rolls aren't available right now.").into());
     };
-
     let Some(events) = hub.events(user, session.id()).await else {
-        return no_store(StatusCode::TOO_MANY_REQUESTS.into_response());
+        return Err(ApiError::new(ErrorCode::RateLimited, "Too many roll streams are open. Close one and try again.").into());
     };
 
     let mut resp = Sse::new(events)
@@ -711,7 +715,7 @@ pub async fn arcane_rolls(
     // Tell nginx-style proxies not to buffer the stream.
     resp.headers_mut()
         .insert("x-accel-buffering", HeaderValue::from_static("no"));
-    no_store(resp)
+    Ok(no_store(resp))
 }
 
 #[cfg(test)]

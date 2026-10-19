@@ -1,11 +1,19 @@
 // Roll events as sent by ai_pipeline (src/roll.rs) through the website:
 //   {"type":"roll","roll_id":"..","dice":[{"value":"17"|null,"conf":0.93,"box":[x1,y1,x2,y2]}],
-//    "total":17|null,"complete":true,"ts":1727250000000}
+//    "total":17|null,"complete":true,"ts":1727250000000,...}
 // Dice are ordered left to right. `value` is null when the die could not be read
 // confidently; the server never guesses, and then `total` is null too.
+//
+// The types are the website's API document's (`ArcaneServerMsg`), so a field renamed there
+// fails `npm run types`. The checks stay: this extension is released on its own and may meet
+// an older or newer website.
+
+/** @import { components } from "../../../services/frontend/web/src/api/schema.js" */
+/** @typedef {components["schemas"]["ArcaneServerMsg"]} ArcaneServerMsg */
 
 /** Parse and validate one roll event's JSON; null if it isn't a usable roll. */
 export function parseRoll(text) {
+  /** @type {ArcaneServerMsg} */
   let v;
   try {
     v = JSON.parse(text);

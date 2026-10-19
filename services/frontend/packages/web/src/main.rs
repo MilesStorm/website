@@ -344,9 +344,6 @@ async fn router(
         .route("/oauth/start/{provider}", get(oauth_start))
         .route("/oauth/callback/{provider}", get(oauth_callback))
         .route("/ws/arcane", get(arcane_ws_proxy))
-        .route("/api/arcane/me", get(rolls::arcane_me))
-        .route("/api/arcane/rolls", get(rolls::arcane_rolls))
-        .route("/api/arcane/flag", axum::routing::post(capture::arcane_flag))
         .merge(json_api::router())
         .route(
             "/metrics",
