@@ -4,6 +4,7 @@ members = [
   "packages/ui",
   "packages/web",
   "packages/api",
+  "crates/api-types",
 ]
 
 [workspace.dependencies]
@@ -20,6 +21,10 @@ axum = { version = "0.8.9" }
 anyhow = "1.0.102"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+# The JSON API's OpenAPI document comes from the handlers' types (crates/api-types). aide is
+# an alpha, pinned exactly.
+schemars = "1.2.2"
+aide = { version = "=0.16.0-alpha.4", features = ["axum", "axum-json"] }
 
 # OpenTelemetry: bump these together, with reqwest-tracing's `opentelemetry_0_NN` feature
 # matching `opentelemetry`. A mismatch still compiles but silently stops trace propagation;
@@ -38,3 +43,4 @@ reqwest-tracing = { version = "0.7.1", features = ["opentelemetry_0_32"] }
 # workspace
 ui = { path = "packages/ui" }
 api = { path = "packages/api" }
+api-types = { path = "crates/api-types" }

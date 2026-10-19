@@ -1,0 +1,14 @@
+[package]
+name = "api-types"
+version = "0.1.0"
+edition = "2021"
+
+# The browser-facing contract: what the JSON API under /api/* takes and returns. Plain data
+# (serde + schemars, no axum), so the server, `server openapi` and later other clients share
+# it. The OpenAPI document and the TypeScript types are generated from these.
+[dependencies]
+serde = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

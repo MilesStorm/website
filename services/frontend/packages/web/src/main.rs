@@ -22,6 +22,8 @@ mod trace_tests;
 mod account;
 mod emails;
 mod invites;
+#[cfg(not(target_arch = "wasm32"))]
+mod json_api;
 
 pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
 pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
@@ -33,6 +35,11 @@ const FAVICON: Asset = asset!("/assets/favicon.ico");
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // `web openapi`: the JSON API's OpenAPI document, with no .env, Redis or network.
+        if std::env::args().nth(1).as_deref() == Some("openapi") {
+            print!("{}", json_api::openapi_json());
+            return;
+        }
         match dotenvy::dotenv() {
             Ok(_) => {}
             Err(_) if !cfg!(debug_assertions) => {}
@@ -340,13 +347,7 @@ async fn router(
         .route("/api/arcane/me", get(rolls::arcane_me))
         .route("/api/arcane/rolls", get(rolls::arcane_rolls))
         .route("/api/arcane/flag", axum::routing::post(capture::arcane_flag))
-        .route(
-            "/api/profile/picture",
-            get(account::get_picture).post(account::upload_picture).layer(
-                // Room for the largest accepted upload; bigger bodies get 413.
-                axum::extract::DefaultBodyLimit::max(account::PICTURE_MAX_UPLOAD),
-            ),
-        )
+        .merge(json_api::router())
         .route(
             "/metrics",
             get(move || async move { metric_handle.render() }),
@@ -431,15 +432,16 @@ async fn render_span(req: axum::extract::Request, next: axum::middleware::Next) 
     }
 }
 
-/// `Cache-Control` on server-function responses (`no-store`) and rendered pages (`private,
-/// no-cache`), unless the handler chose its own. Neither may be replayed by a shared cache: pages carry the request's
+/// `Cache-Control` on server-function and API responses (`no-store`) and rendered pages
+/// (`private, no-cache`), unless the handler chose its own. Neither may be replayed by a shared cache: pages carry the request's
 /// `<meta name="traceparent">`, and the browser's clock correction takes its samples from both
 /// (TRACING.md, "Browser clock"). Cloudflare caches neither today; this keeps a future rule from
 /// changing that.
 #[cfg(not(target_arch = "wasm32"))]
 async fn no_store(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
-    let bff = req.uri().path().starts_with("/bff/");
+    let path = req.uri().path();
+    let bff = path.starts_with("/bff/") || path.starts_with("/api/");
     let mut res = next.run(req).await;
     let html = res
         .headers()
@@ -908,8 +910,8 @@ fn WebNavbar() -> Element {
     rsx! {
         Navbar {
             user: LOGIN_STATUS(),
-            name: account.as_ref().map(|a| a.shown_name().to_string()),
-            picture: account.as_ref().and_then(|a| a.picture_url()),
+            name: account.as_ref().map(|a| a.shown_name.clone()),
+            picture: account.as_ref().and_then(|a| a.picture_url.clone()),
             on_logout: logout_handler,
             has_ark: perms.contains_key("llama"),
             has_enshrouded: perms.contains_key("enshrouded"),
@@ -997,6 +999,7 @@ mod tests {
 
         let app = axum::Router::new()
             .route("/bff/login_password123456", post(|| async { "{}" }))
+            .route("/api/session/login", post(|| async { "{}" }))
             .route("/login", get(|| async { Html("<html></html>") }))
             .route("/assets/app.css", get(|| async { ([(axum::http::header::CONTENT_TYPE, "text/css")], "") }))
             .route("/bff/picture123456", get(|| async { ([(CACHE_CONTROL, "private, max-age=60")], "").into_response() }))
@@ -1011,6 +1014,8 @@ mod tests {
         };
         let post = client.post(format!("{base}/bff/login_password123456")).send().await.unwrap();
         assert_eq!(cache_control(post).as_deref(), Some("no-store"));
+        let api = client.post(format!("{base}/api/session/login")).send().await.unwrap();
+        assert_eq!(cache_control(api).as_deref(), Some("no-store"));
         let page = client.get(format!("{base}/login")).send().await.unwrap();
         assert_eq!(cache_control(page).as_deref(), Some("private, no-cache"));
         let asset = client.get(format!("{base}/assets/app.css")).send().await.unwrap();

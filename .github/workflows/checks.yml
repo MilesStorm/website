@@ -33,9 +33,34 @@ jobs:
       # asset! needs the vendored Faro bundles and the Tailwind CSS at compile time.
       - run: npm ci && npm run vendor
       - run: node_modules/.bin/tailwindcss -i packages/ui/tailwind.css -o packages/ui/assets/styling/tailwind.css --minify
-      - run: cargo clippy -p api -p web --features web/server --all-targets -- -D warnings
-      - run: cargo test -p api -p web --features web/server
+      - run: cargo clippy -p api-types -p api -p web --features web/server --all-targets -- -D warnings
+      - run: cargo test -p api-types -p api -p web --features web/server
       - run: npm run test:trace
+      # The committed API contract is what the handlers say (web/src/api/openapi.json), and the
+      # TypeScript types are generated from it: regenerate both with `npm run api`.
+      - name: OpenAPI document is current
+        run: cargo run -q -p web --features web/server -- openapi | diff - web/src/api/openapi.json
+      - name: TypeScript API types are current
+        run: npm run api:types && git diff --exit-code -- web/src/api/schema.d.ts
+      # aide can't read a response type through `impl IntoApiResponse`: handlers name theirs.
+      - name: API handlers return concrete types
+        run: '! grep -rn "impl IntoApiResponse" packages/web/src'
+
+  # The browser extension's scripts, type-checked (tsconfig.json); a job of its own so it runs
+  # beside the frontend's.
+  extension-types:
+    name: extension-types
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension/arcane-dice
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run types
 
   auth:
     name: auth

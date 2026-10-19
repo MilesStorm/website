@@ -105,7 +105,7 @@ fn AccountCard(account: AccountInfo) -> Element {
                 // ---- Picture ----
                 div { class: "flex flex-col items-center gap-3 sm:items-start",
                     div { class: "w-24 h-24 rounded-full overflow-hidden ring ring-primary ring-offset-base-100 ring-offset-2",
-                        if let Some(src) = account.picture_url() {
+                        if let Some(src) = account.picture_url.clone() {
                             img { src: "{src}", alt: "Your profile picture", width: 96, height: 96 }
                         } else {
                             default_profile_picture { width: 96, height: 96 }
@@ -140,6 +140,7 @@ fn AccountCard(account: AccountInfo) -> Element {
                                                 Ok(version) => {
                                                     if let Some(a) = ACCOUNT.write().as_mut() {
                                                         a.picture_version = Some(version);
+                                                        a.picture_url = Some(api_types::picture_url(&a.username, version));
                                                     }
                                                     picture_msg.set(Some((false, "Picture updated.".into())));
                                                 }

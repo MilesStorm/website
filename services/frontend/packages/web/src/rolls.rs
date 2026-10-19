@@ -538,7 +538,7 @@ pub fn origin_allowed(headers: &HeaderMap) -> bool {
     origin_allowed_with(headers, &extra, cfg!(debug_assertions))
 }
 
-fn origin_allowed_with(headers: &HeaderMap, extra: &str, allow_http: bool) -> bool {
+pub(crate) fn origin_allowed_with(headers: &HeaderMap, extra: &str, allow_http: bool) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else { return true };
     let Ok(origin) = origin.to_str() else { return false };
     if extra.split(',').map(str::trim).any(|o| !o.is_empty() && o == origin) {

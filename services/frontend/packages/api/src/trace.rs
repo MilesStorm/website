@@ -302,18 +302,31 @@ mod server {
     /// "4xx is a client-span error" (TRACING.md, "Errors").
     pub const WRONG_TOKEN_OK: Expected = Expected(&[401, 404]);
 
-    /// Runs the body of a server function whose 4xx replies are answers to the user (a
-    /// wrong password, a used-up link: [`auth_error`](crate::auth_error)), and marks the
-    /// current span failed for any other error. Functions without such replies use
+    /// An error that may be an answer to the user (a 4xx) rather than a failure.
+    pub trait Rejection {
+        fn is_answer(&self) -> bool;
+    }
+
+    impl Rejection for dioxus::prelude::ServerFnError {
+        fn is_answer(&self) -> bool {
+            matches!(self, Self::ServerError { code: 400..=499, .. })
+        }
+    }
+
+    impl Rejection for api_types::ApiError {
+        fn is_answer(&self) -> bool {
+            (400..500).contains(&self.status())
+        }
+    }
+
+    /// Runs the body of a server function or API handler whose 4xx replies are answers to
+    /// the user (a wrong password, a used-up link: [`auth_error`](crate::auth_error)), and
+    /// marks the current span failed for any other error. Functions without such replies use
     /// `#[instrument(err)]` instead.
-    pub async fn rejectable<T>(
-        body: impl Future<Output = Result<T, dioxus::prelude::ServerFnError>>,
-    ) -> Result<T, dioxus::prelude::ServerFnError> {
-        use dioxus::prelude::ServerFnError;
+    pub async fn rejectable<T, E: Rejection>(body: impl Future<Output = Result<T, E>>) -> Result<T, E> {
         let result = body.await;
-        match &result {
-            Ok(_) | Err(ServerFnError::ServerError { code: 400..=499, .. }) => {}
-            Err(_) => failed("server_function"),
+        if result.as_ref().is_err_and(|e| !e.is_answer()) {
+            failed("server_function");
         }
         result
     }
@@ -1386,6 +1399,18 @@ mod server {
             exporter.reset();
             let _ = rejectable(503).await;
             assert!(matches!(span(&exporter, "rejectable").status, Status::Error { .. }));
+
+            // The same for the JSON API's errors, by their status.
+            #[tracing::instrument(name = "api rejectable", skip_all)]
+            async fn api_rejectable(error: api_types::ApiError) -> Result<(), api_types::ApiError> {
+                super::rejectable(async move { Err(error) }).await
+            }
+            exporter.reset();
+            let _ = api_rejectable(api_types::ApiError::logged_out()).await;
+            assert_eq!(span(&exporter, "api rejectable").status, Status::Unset);
+            exporter.reset();
+            let _ = api_rejectable(api_types::ApiError::internal()).await;
+            assert!(matches!(span(&exporter, "api rejectable").status, Status::Error { .. }));
         }
 
         /// A router as web's: `OtelAxumLayer` outside [`end_span_with_body`](super::end_span_with_body).

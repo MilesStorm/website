@@ -105,6 +105,7 @@ PUBLIC_AUTH_URL=http://localhost:7070
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 ARCANE_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
+DEV_ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 ```
 
 Set **exactly the same** `BFF_SERVICE_SECRET` in both files. The `.env` files are ignored by Git. Both debug-mode services expect a `.env` file; their local cookies support HTTP. Email delivery is optional: without `RESEND_API_KEY`, debug auth logs the generated emails and links instead of sending them.

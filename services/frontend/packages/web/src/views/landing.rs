@@ -131,8 +131,8 @@ fn Welcome() -> Element {
 #[component]
 fn Home(username: String) -> Element {
     let account = ACCOUNT();
-    let name = account.as_ref().map_or(username.clone(), |a| a.shown_name().to_string());
-    let picture = account.as_ref().and_then(|a| a.picture_url());
+    let name = account.as_ref().map_or(username.clone(), |a| a.shown_name.clone());
+    let picture = account.as_ref().and_then(|a| a.picture_url.clone());
     let perms = PERMISSIONS.read();
     let has = |f: &Feature| f.permission.is_none_or(|p| perms.contains_key(p));
 

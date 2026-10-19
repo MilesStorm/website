@@ -1,5 +1,8 @@
 //! BFF server functions — phantom token pattern delegating to auth service.
 
+use api_types::ApiError;
+#[cfg(feature = "server")]
+use api_types::{ErrorCode, Permission};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -20,13 +23,13 @@ pub fn auth_error(status: u16, message: impl Into<String>) -> ServerFnError {
 }
 
 #[cfg(feature = "server")]
-fn password_login_error(status: u16, body: &str) -> ServerFnError {
+fn password_login_error(status: u16, body: &str) -> ApiError {
     // Auth also uses 401 for a bad BFF service secret. That is an outage, not
     // a user's mistyped password, so only its credential rejection is a 4xx.
     if matches!(status, 401 | 403) && body == "Invalid credentials" {
-        auth_error(status, "Incorrect username or password.")
+        ApiError::new(ErrorCode::Invalid, "Incorrect username or password.").with_status(status)
     } else {
-        auth_error(502, "Login is unavailable right now. Try again later.")
+        login_unavailable()
     }
 }
 
@@ -180,17 +183,45 @@ pub struct DockerRequestResponse {
     pub command_result: Option<CommandResult>,
 }
 
-// ---- Server functions ----
+// ---- Session: shared by the server functions and the JSON API ----
 
-/// Log in with username + password.
-#[server(prefix = "/bff")]
+/// A JSON API error as a server function's: the same message and status.
+pub fn server_error(e: ApiError) -> ServerFnError {
+    ServerFnError::ServerError { code: e.status(), message: e.message, details: None }
+}
+
+#[cfg(feature = "server")]
+fn login_unavailable() -> ApiError {
+    ApiError::new(ErrorCode::Upstream, "Login is unavailable right now. Try again later.")
+}
+
+#[cfg(feature = "server")]
+fn registration_failed() -> ApiError {
+    ApiError::new(ErrorCode::Upstream, "Registration failed")
+}
+
+/// Stores a login in the session under a new session ID, then redeems a pending invite.
+#[cfg(feature = "server")]
+async fn store_login(sess: &tower_sessions::Session, token: &str, username: &str) -> Result<(), ApiError> {
+    fresh_session_id(sess).await.map_err(|_| ApiError::internal())?;
+    let stored = match sess.insert("opaque_token", token).await {
+        Ok(()) => sess.insert("username", username).await,
+        Err(e) => Err(e),
+    };
+    stored.map_err(|e| {
+        tracing::error!(error = %e, "storing the login in the session failed");
+        ApiError::internal()
+    })?;
+    redeem_pending_invite(sess, token).await;
+    Ok(())
+}
+
+/// Log in with username + password. The username logged in as.
+#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.login_password", skip_all, fields(username = %username))]
-pub async fn login_password(
-    username: String,
-    password: String,
-) -> Result<LoginStatus, ServerFnError> {
+pub async fn log_in(sess: &tower_sessions::Session, username: String, password: String) -> Result<String, ApiError> {
     trace::rejectable(async move {
-        use session::*;
+        use session::{auth_url, service_secret};
 
         #[derive(Serialize)]
         struct Req {
@@ -213,14 +244,14 @@ pub async fn login_password(
             .map_err(|e| {
                 tracing::error!(error = %e, "password login failed: reaching auth failed");
                 metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "error").increment(1);
-                auth_error(502, "Login is unavailable right now. Try again later.")
+                login_unavailable()
             })?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
             let error = password_login_error(status, &body);
-            let expected = http::StatusCode::from(error.clone()).is_client_error();
+            let expected = (400..500).contains(&error.status());
             if expected {
                 tracing::warn!(username = %username, "password login failed: invalid credentials");
             } else {
@@ -230,111 +261,43 @@ pub async fn login_password(
             return Err(error);
         }
 
-        let data: Resp = resp
-            .json()
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-        let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-        fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
-        sess.insert("opaque_token", &data.token)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        sess.insert("username", data.username.clone())
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        redeem_pending_invite(&sess, &data.token).await;
+        let data: Resp = resp.json().await.map_err(|e| {
+            tracing::error!(error = %e, "password login failed: auth's reply is unreadable");
+            login_unavailable()
+        })?;
+        store_login(sess, &data.token, &data.username).await?;
 
         tracing::info!(username = %data.username, "password login succeeded");
         metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "success").increment(1);
-        Ok(LoginStatus::LoggedIn(data.username))
+        Ok(data.username)
     })
     .await
 }
 
-/// Clear the current session.
-#[server(prefix = "/bff")]
+/// Clear the session.
+#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.logout", skip_all, err)]
-pub async fn logout() -> Result<(), ServerFnError> {
-    use session::*;
-
-    if let Some(sess) = get_session() {
-        let username: Option<String> = sess.get("username").await.ok().flatten();
-        sess.flush()
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        tracing::info!(username = ?username, "user logged out");
-    }
+pub async fn log_out(sess: &tower_sessions::Session) -> Result<(), ApiError> {
+    let username: Option<String> = sess.get("username").await.ok().flatten();
+    sess.flush().await.map_err(|e| {
+        tracing::error!(error = %e, "logging out failed: the session can't be cleared");
+        ApiError::internal()
+    })?;
+    tracing::info!(username = ?username, "user logged out");
     Ok(())
 }
 
-/// Check the current login status from the BFF session.
-#[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.check_login_status", skip_all, err)]
-pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
-    use session::*;
-
-    let sess = match get_session() {
-        Some(s) => s,
-        None => return Ok(LoginStatus::LoggedOut),
-    };
-
-    let username: Option<String> = sess
-        .get("username")
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let Some(username) = username else {
-        return Ok(LoginStatus::LoggedOut);
-    };
-
-    // Auth drops every token of an account when its password is reset or it is
-    // deleted: then this session is over too. Other failures leave it alone.
-    let token: Option<String> = sess.get("opaque_token").await.ok().flatten();
-    #[derive(Serialize)]
-    struct Req {
-        token: String,
-    }
-    let valid = match token {
-        None => false,
-        Some(token) => match http_client()
-            .post(format!("{}/internal/token/introspect", auth_url()))
-        .with_extension(trace::WRONG_TOKEN_OK)
-            .with_extension(trace::WRONG_TOKEN_OK)
-            .header("x-service-token", service_secret())
-            .json(&Req { token })
-            .send()
-            .await
-        {
-            // Only auth's "unknown token" reply; a 401 for a wrong service secret
-            // or any other failure must not log everyone out.
-            Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
-                r.text().await.map(|b| b != "Invalid or expired token").unwrap_or(true)
-            }
-            Ok(_) => true,
-            Err(e) => {
-                tracing::warn!(error = %e, "checking the session's token failed");
-                true
-            }
-        },
-    };
-    if !valid {
-        tracing::info!(username = %username, "session's token no longer valid; logging out");
-        let _ = sess.flush().await;
-        return Ok(LoginStatus::LoggedOut);
-    }
-    Ok(LoginStatus::LoggedIn(username))
-}
-
-/// Register a new account and auto-login on success.
-#[server(prefix = "/bff")]
+/// Register a new account and log in as it. The username logged in as.
+#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.register_password", skip_all, fields(username = %username))]
-pub async fn register_password(
+pub async fn register(
+    sess: &tower_sessions::Session,
     username: String,
     email: String,
     password: String,
-) -> Result<LoginStatus, ServerFnError> {
+) -> Result<String, ApiError> {
     trace::rejectable(async move {
-        use session::*;
+        use session::{auth_url, service_secret};
 
         #[derive(Serialize)]
         struct Req {
@@ -354,13 +317,16 @@ pub async fn register_password(
             .json(&Req { username: username.clone(), email, password })
             .send()
             .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(error = %e, "registration failed: reaching auth failed");
+                registration_failed()
+            })?;
 
         if resp.status() == reqwest::StatusCode::CONFLICT {
             let body = resp.text().await.unwrap_or_default();
             tracing::warn!(username = %username, reason = %body, "registration conflict");
             metrics::counter!("bff_register_attempts_total", "status" => "conflict").increment(1);
-            return Err(auth_error(409, body));
+            return Err(ApiError::new(ErrorCode::Conflict, body));
         }
 
         if resp.status() == reqwest::StatusCode::BAD_REQUEST {
@@ -369,86 +335,162 @@ pub async fn register_password(
             let body = resp.text().await.unwrap_or_default();
             metrics::counter!("bff_register_attempts_total", "status" => "invalid").increment(1);
             let known = body == "Invalid email address" || body.starts_with("Password must be at least");
-            return Err(auth_error(400, if known { body.as_str() } else { "Registration failed" }));
+            return Err(ApiError::new(ErrorCode::Invalid, if known { body.as_str() } else { "Registration failed" }));
         }
 
         if !resp.status().is_success() {
             tracing::error!(username = %username, status = %resp.status(), "registration failed");
             metrics::counter!("bff_register_attempts_total", "status" => "error").increment(1);
-            return Err(ServerFnError::new("Registration failed"));
+            return Err(registration_failed());
         }
 
-        let data: Resp = resp
-            .json()
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-        let sess = get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-        fresh_session_id(&sess).await.map_err(ServerFnError::new)?;
-        sess.insert("opaque_token", &data.token)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        sess.insert("username", data.username.clone())
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        redeem_pending_invite(&sess, &data.token).await;
+        let data: Resp = resp.json().await.map_err(|e| {
+            tracing::error!(error = %e, "registration failed: auth's reply is unreadable");
+            registration_failed()
+        })?;
+        store_login(sess, &data.token, &data.username).await?;
 
         tracing::info!(username = %data.username, "registration succeeded");
         metrics::counter!("bff_register_attempts_total", "status" => "success").increment(1);
-        Ok(LoginStatus::LoggedIn(data.username))
+        Ok(data.username)
     })
     .await
+}
+
+/// Who a request comes from, by its session.
+#[cfg(feature = "server")]
+#[derive(Debug, Clone)]
+pub enum Viewer {
+    Anonymous,
+    User { username: String, token: String, permissions: Vec<Permission> },
+    /// Logged in, but auth can't say with which permissions (it is unreachable or answered
+    /// something else): shown as logged in, with none.
+    Degraded { username: String },
+}
+
+/// The session's [`Viewer`], with one call to auth when it is logged in. A session whose
+/// token auth no longer knows is cleared. Err when the session can't be read.
+#[cfg(feature = "server")]
+pub async fn viewer(sess: &tower_sessions::Session) -> Result<Viewer, String> {
+    use session::{auth_url, service_secret};
+
+    let username: Option<String> = sess.get("username").await.map_err(|e| e.to_string())?;
+    let Some(username) = username else {
+        return Ok(Viewer::Anonymous);
+    };
+
+    // Auth drops every token of an account when its password is reset or it is
+    // deleted: then this session is over too. Other failures leave it alone.
+    let token: Option<String> = sess.get("opaque_token").await.ok().flatten();
+    let Some(token) = token else {
+        return Ok(token_gone(sess, &username).await);
+    };
+    #[derive(Serialize)]
+    struct Req<'a> {
+        token: &'a str,
+    }
+    #[derive(Deserialize)]
+    struct Resp {
+        permissions: Vec<Permission>,
+    }
+    let resp = http_client()
+        .post(format!("{}/internal/token/introspect", auth_url()))
+        .with_extension(trace::WRONG_TOKEN_OK)
+        .header("x-service-token", service_secret())
+        .json(&Req { token: &token })
+        .send()
+        .await;
+    Ok(match resp {
+        Ok(r) if r.status().is_success() => match r.json::<Resp>().await {
+            Ok(data) => Viewer::User { username, token, permissions: data.permissions },
+            Err(e) => {
+                tracing::warn!(error = %e, "auth's reply to the session's token check is unreadable");
+                Viewer::Degraded { username }
+            }
+        },
+        // Only auth's "unknown token" reply; a 401 for a wrong service secret
+        // or any other failure must not log everyone out.
+        Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
+            if r.text().await.is_ok_and(|b| b == "Invalid or expired token") {
+                token_gone(sess, &username).await
+            } else {
+                Viewer::Degraded { username }
+            }
+        }
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), "checking the session's token failed");
+            Viewer::Degraded { username }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "checking the session's token failed");
+            Viewer::Degraded { username }
+        }
+    })
+}
+
+#[cfg(feature = "server")]
+async fn token_gone(sess: &tower_sessions::Session, username: &str) -> Viewer {
+    tracing::info!(username = %username, "session's token no longer valid; logging out");
+    let _ = sess.flush().await;
+    Viewer::Anonymous
+}
+
+// ---- Server functions ----
+
+/// Log in with username + password.
+#[server(prefix = "/bff")]
+pub async fn login_password(
+    username: String,
+    password: String,
+) -> Result<LoginStatus, ServerFnError> {
+    let sess = session::get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
+    log_in(&sess, username, password).await.map(LoginStatus::LoggedIn).map_err(server_error)
+}
+
+/// Clear the current session.
+#[server(prefix = "/bff")]
+pub async fn logout() -> Result<(), ServerFnError> {
+    match session::get_session() {
+        Some(sess) => log_out(&sess).await.map_err(server_error),
+        None => Ok(()),
+    }
+}
+
+/// Check the current login status from the BFF session.
+#[server(prefix = "/bff")]
+#[tracing::instrument(name = "bff.check_login_status", skip_all, err)]
+pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
+    let Some(sess) = session::get_session() else {
+        return Ok(LoginStatus::LoggedOut);
+    };
+    Ok(match viewer(&sess).await.map_err(ServerFnError::new)? {
+        Viewer::Anonymous => LoginStatus::LoggedOut,
+        Viewer::User { username, .. } | Viewer::Degraded { username } => LoginStatus::LoggedIn(username),
+    })
+}
+
+/// Register a new account and auto-login on success.
+#[server(prefix = "/bff")]
+pub async fn register_password(
+    username: String,
+    email: String,
+    password: String,
+) -> Result<LoginStatus, ServerFnError> {
+    let sess = session::get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
+    register(&sess, username, email, password).await.map(LoginStatus::LoggedIn).map_err(server_error)
 }
 
 /// Returns the list of permission names held by the current session's user.
 #[server(prefix = "/bff")]
 #[tracing::instrument(name = "bff.get_my_permissions", skip_all, err)]
 pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
-    use session::*;
-
-    let sess = match get_session() {
-        Some(s) => s,
-        None => return Ok(vec![]),
-    };
-
-    let token: Option<String> = sess
-        .get("opaque_token")
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    let token = match token {
-        Some(t) => t,
-        None => return Ok(vec![]),
-    };
-
-    #[derive(Serialize)]
-    struct Req {
-        token: String,
-    }
-    #[derive(Deserialize)]
-    struct Resp {
-        permissions: Vec<String>,
-    }
-
-    let resp = http_client()
-        .post(format!("{}/internal/token/introspect", auth_url()))
-        .with_extension(trace::WRONG_TOKEN_OK)
-        .header("x-service-token", service_secret())
-        .json(&Req { token })
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
+    let Some(sess) = session::get_session() else {
         return Ok(vec![]);
-    }
-
-    let data: Resp = resp
-        .json()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    Ok(data.permissions)
+    };
+    Ok(match viewer(&sess).await.map_err(ServerFnError::new)? {
+        Viewer::User { permissions, .. } => permissions.iter().map(|p| p.name().to_string()).collect(),
+        Viewer::Anonymous | Viewer::Degraded { .. } => vec![],
+    })
 }
 
 /// Check whether a raw opaque token grants the `arcane` permission.
@@ -1232,6 +1274,7 @@ pub async fn admin_revoke_invite(invite_id: i32) -> Result<(), ServerFnError> {
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::PendingInvite;
+    use dioxus::prelude::ServerFnError;
 
     #[test]
     fn auth_rejections_keep_their_http_status() {
@@ -1247,18 +1290,26 @@ mod tests {
 
     #[test]
     fn password_rejections_distinguish_credentials_from_outages() {
-        use axum::response::IntoResponse;
         for status in [401, 403] {
-            assert_eq!(super::password_login_error(status, "Invalid credentials").into_response().status().as_u16(), status);
+            assert_eq!(super::password_login_error(status, "Invalid credentials").status(), status);
         }
         for (status, body) in [(401, "Invalid service token"), (500, "internal"), (503, ""), (400, "malformed")] {
-            assert_eq!(super::password_login_error(status, body).into_response().status().as_u16(), 502);
+            assert_eq!(super::password_login_error(status, body).status(), 502);
         }
+    }
+
+    #[test]
+    fn server_functions_answer_api_errors_with_their_status_and_message() {
+        use axum::response::IntoResponse;
+        let error = super::password_login_error(403, "Invalid credentials");
+        let ServerFnError::ServerError { code, message, .. } = super::server_error(error) else { unreachable!() };
+        assert_eq!((code, message.as_str()), (403, "Incorrect username or password."));
+        let unavailable = super::server_error(super::login_unavailable());
+        assert_eq!(unavailable.into_response().status().as_u16(), 502);
     }
 
     #[tokio::test]
     async fn password_login_preserves_rejections_over_http() {
-        use axum::response::IntoResponse;
         use opentelemetry::trace::TracerProvider as _;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tracing_subscriber::layer::SubscriberExt as _;
@@ -1279,13 +1330,14 @@ mod tests {
         std::env::set_var("AUTH_SERVICE_URL", format!("http://{address}"));
         std::env::set_var("BFF_SERVICE_SECRET", "test-only");
 
+        let sess = tower_sessions::Session::new(None, std::sync::Arc::new(tower_sessions::MemoryStore::default()), None);
         for (status, body, expected) in [
             (401, "Invalid credentials", 401),
             (403, "Invalid credentials", 403),
             (401, "Invalid service token", 502),
             (503, "unavailable", 502),
         ] {
-            let request = super::login_password("tester".into(), "wrong-password".into());
+            let request = super::log_in(&sess, "tester".into(), "wrong-password".into());
             let upstream = async {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buf = [0; 4096];
@@ -1295,7 +1347,7 @@ mod tests {
                 ).as_bytes()).await.unwrap();
             };
             let (result, ()) = tokio::join!(request, upstream);
-            assert_eq!(result.unwrap_err().into_response().status().as_u16(), expected);
+            assert_eq!(result.unwrap_err().status(), expected);
 
             // In the trace, a wrong password is an answer (the status code is recorded, no
             // span is an error); auth being unusable fails the server function's span.
@@ -1312,8 +1364,8 @@ mod tests {
             assert_eq!(failed("POST /internal/token/exchange"), status != 401, "{status} {body}");
         }
         drop(listener);
-        let result = super::login_password("tester".into(), "wrong-password".into()).await;
-        assert_eq!(result.unwrap_err().into_response().status().as_u16(), 502);
+        let result = super::log_in(&sess, "tester".into(), "wrong-password".into()).await;
+        assert_eq!(result.unwrap_err().status(), 502);
         for (name, old) in [("AUTH_SERVICE_URL", old_url), ("BFF_SERVICE_SECRET", old_secret)] {
             match old {
                 Some(value) => std::env::set_var(name, value),
