@@ -51,6 +51,23 @@
 | `DATASET_SAMPLE_EVERY` | `20` | For users who opted in, keep about one in N confident rolls (rolls the model is unsure about are always kept). |
 | `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins the Arcane and Dioxus routes accept requests from, comma-separated: `/ws/arcane`, `/api/arcane/flag` (the browser extension's one change; its own `moz-extension://`/`chrome-extension://` origin is always let in there) and the Dioxus pages' email, invite, sharing and profile server functions. Not the JSON API's other routes (`DEV_ALLOWED_ORIGINS`). Same-host origins are always allowed; plain-http ones only in debug builds. Needed for local `dx serve`, whose proxy changes the host the server sees: `http://localhost:8080,http://127.0.0.1:8080`. |
 | `DEV_ALLOWED_ORIGINS` | _(empty)_ | **Debug builds only; release builds ignore it.** Extra page origins the JSON API (`/api/session/*`, `/api/account/*`, including the picture at `/api/account/picture` and `/api/profile/picture`) accepts changes from, comma-separated. For local dev proxies that change the host the server sees: `dx serve` (`http://localhost:8080,http://127.0.0.1:8080`) and later `astro dev` (`http://localhost:4321`). |
+| `FRONTEND_UI` | `dioxus` | `astro` serves the Astro pages (`services/frontend/web`) at the paths in `PAGES` (`crates/api-types`) instead of Dioxus's; every other path stays Dioxus. The server then refuses to start unless `WEB_DIST` has exactly those pages and the status pages. Any other value refuses to start. On in staging (`crds/staging/frontend.yaml`), off in production until the cutover. |
+| `WEB_DIST` | `web/dist` | Where the Astro build is. Set to `/app/web` in the Dockerfile. Only read with `FRONTEND_UI=astro`. |
+
+### Astro dev server (`services/frontend/web`, `npm run dev`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `BFF_URL` | `http://localhost:8080` | The Rust server `astro dev` proxies `/api`, `/oauth` and `/ws` to. Its pages have no spliced data, so they ask `GET /api/session`. |
+
+### Staging test accounts (GitHub environment `staging`, secrets)
+
+The `staging-journeys` workflow logs in with these. Create the accounts on staging and set the secrets by hand.
+
+| Secret | Description |
+|---|---|
+| `STAGING_PLAIN_USERNAME` / `STAGING_PLAIN_PASSWORD` | A password login with no permissions. |
+| `STAGING_ALL_USERNAME` / `STAGING_ALL_PASSWORD` | A password login with every permission the site knows: `llama`, `enshrouded`, `arcane`, `manage_permissions`. |
 
 ## AI pipeline (`services/ai_pipeline`)
 

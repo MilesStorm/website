@@ -2,3 +2,7 @@ target/
 node_modules/
 static/
 **/dist
+web/src/vendor/
+web/.astro/
+web/test-results/
+web/playwright-report/
