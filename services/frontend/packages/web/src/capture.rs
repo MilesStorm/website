@@ -31,7 +31,7 @@ use tracing::Instrument as _;
 
 use crate::dataset::{auto_reason, clean_values, dataset, is_roll_id, shares, Capture};
 use crate::json_api::{self, Body, Viewer};
-use crate::rolls::{origin_allowed, RollHub};
+use crate::rolls::{origin_allowed_with, RollHub};
 
 /// How long the latest roll's picture is kept for flagging.
 pub const HOLD_SECS: i64 = 600;
@@ -269,12 +269,13 @@ impl RollHub {
 }
 
 /// The flag endpoint is called by the extension: its Origin is the extension's own
-/// (random per install) or absent. Web pages other than this site are refused;
-/// they also can't send a JSON body cross-site without CORS, which is never granted.
-pub(crate) fn flag_origin_allowed(headers: &HeaderMap) -> bool {
+/// (random per install) or absent. Web pages other than this site and `extra` (comma-separated,
+/// `ARCANE_ALLOWED_ORIGINS`) are refused; they also can't send a JSON body cross-site without
+/// CORS, which is never granted.
+pub(crate) fn flag_origin_allowed(headers: &HeaderMap, extra: &str) -> bool {
     match headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
         Some(o) if o.starts_with("moz-extension://") || o.starts_with("chrome-extension://") => true,
-        _ => origin_allowed(headers),
+        _ => origin_allowed_with(headers, extra, cfg!(debug_assertions)),
     }
 }
 
@@ -368,9 +369,10 @@ mod tests {
             h.insert(header::ORIGIN, origin.parse().unwrap());
             h
         };
-        assert!(flag_origin_allowed(&h("moz-extension://1b2c3d")));
-        assert!(flag_origin_allowed(&h("chrome-extension://abcdef")));
-        assert!(flag_origin_allowed(&h("https://milesstorm.com")));
-        assert!(!flag_origin_allowed(&h("https://evil.example")));
+        assert!(flag_origin_allowed(&h("moz-extension://1b2c3d"), ""));
+        assert!(flag_origin_allowed(&h("chrome-extension://abcdef"), ""));
+        assert!(flag_origin_allowed(&h("https://milesstorm.com"), ""));
+        assert!(!flag_origin_allowed(&h("https://evil.example"), ""));
+        assert!(flag_origin_allowed(&h("https://dev.example"), "https://dev.example, https://other.example"));
     }
 }

@@ -1506,7 +1506,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["AdminRole"][];
+                        "application/json": components["schemas"]["AdminRoleRef"][];
                     };
                 };
                 /**
@@ -1932,7 +1932,6 @@ export interface components {
             /** Format: int32 */
             id: number;
             name: string;
-            /** @description Empty in `GET /api/admin/roles/all`. */
             permissions: components["schemas"]["AdminPermission"][];
         };
         /** @description One page of a listing, and how many there are in all. */
@@ -1940,6 +1939,12 @@ export interface components {
             items: components["schemas"]["AdminRole"][];
             /** Format: int64 */
             total: number;
+        };
+        /** @description A role without its permissions: `GET /api/admin/roles/all`, for the pickers. */
+        AdminRoleRef: {
+            /** Format: int32 */
+            id: number;
+            name: string;
         };
         AdminUser: {
             email: string | null;
@@ -2117,8 +2122,7 @@ export interface components {
             email: string;
         };
         EnshroudedAction: {
-            /** @description `restart`, `update` or `update_now`, as auth stored it. */
-            action: string;
+            action: components["schemas"]["EnshroudedActionName"];
             /**
              * Format: int64
              * @description Unix seconds.
@@ -2127,6 +2131,11 @@ export interface components {
             /** @description `None` when the account was deleted. */
             name: string | null;
         };
+        /**
+         * @description A command as auth stored it: one this site sends, or a name it doesn't know (from an older
+         *     or newer auth), which still deserializes.
+         */
+        EnshroudedActionName: components["schemas"]["EnshroudedCommand"] | string;
         /**
          * @description Restart, or force an update: `update` waits until nobody is online, `update_now`
          *     disconnects the players.

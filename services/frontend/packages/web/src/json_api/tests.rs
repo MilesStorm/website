@@ -277,7 +277,12 @@ fn stand_in_panels(auth: Arc<Auth>) -> axum::Router {
     let all_roles = |_: &str, _: Option<&Value>| axum::Json(json!([{"id": 2, "name": "arcane_user"}])).into_response();
     let permissions =
         |_: &str, _: Option<&Value>| axum::Json(json!([{"id": 3, "name": "arcane"}, {"id": 9, "name": "brand_new"}])).into_response();
-    let done = |_: &str, _: Option<&Value>| StatusCode::NO_CONTENT.into_response();
+    // User 404 doesn't exist; user 400 is refused for a reason this site doesn't know.
+    let done = |path: &str, _: Option<&Value>| match path {
+        p if p.contains("/users/404/") => (StatusCode::NOT_FOUND, axum::Json(json!({"error": "no_user"}))).into_response(),
+        p if p.contains("/users/400/") => (StatusCode::BAD_REQUEST, axum::Json(json!({"error": "something_new"}))).into_response(),
+        _ => StatusCode::NO_CONTENT.into_response(),
+    };
     let invites = |_: &str, body: Option<&Value>| {
         let invite = json!({
             "id": 4, "role_id": 2, "role": "arcane_user", "note": null, "created_by": "user-all",
@@ -339,6 +344,11 @@ struct Reply {
 
 impl Site {
     async fn new() -> Self {
+        Self::serving(super::router()).await
+    }
+
+    /// The site with `app` instead of the API as the server mounts it.
+    async fn serving(app: axum::Router) -> Self {
         let env = AUTH_ENV.lock().await;
         let auth = Arc::new(Auth::default());
         let url = stand_in_auth(auth.clone()).await;
@@ -350,16 +360,19 @@ impl Site {
             session.insert("opaque_token", &token).await.unwrap();
             session.insert("username", format!("user-{token}")).await.unwrap();
         };
-        let app = super::router()
+        let app = app
             .route("/test/seed", post(seed))
             .layer(SessionManagerLayer::new(MemoryStore::default()).with_secure(false));
         Self { app, auth, cookie: None, _env: env }
     }
 
     async fn logged_in(token: &str) -> Self {
-        let mut site = Self::new().await;
-        assert_eq!(site.send(Method::POST, "/test/seed", Some(SITE), Some(("text/plain", token.into()))).await.status, StatusCode::OK);
-        site
+        Self::new().await.log_in(token).await
+    }
+
+    async fn log_in(mut self, token: &str) -> Self {
+        assert_eq!(self.send(Method::POST, "/test/seed", Some(SITE), Some(("text/plain", token.into()))).await.status, StatusCode::OK);
+        self
     }
 
     async fn send(&mut self, method: Method, path: &str, origin: Option<&str>, body: Option<(&str, Vec<u8>)>) -> Reply {
@@ -572,6 +585,14 @@ async fn changes_from_another_site_are_refused() {
 }
 
 #[test]
+fn unreadable_addresses_are_ours_when_the_route_is_wrong() {
+    let ours = super::rejected_address(StatusCode::INTERNAL_SERVER_ERROR).0;
+    assert_eq!((ours.status(), ours.error), (500, api_types::ErrorCode::Internal));
+    let theirs = super::rejected_address(StatusCode::BAD_REQUEST).0;
+    assert_eq!((theirs.status(), theirs.error), (400, api_types::ErrorCode::Invalid));
+}
+
+#[test]
 fn errors_answer_their_status_with_the_envelope() {
     use axum::response::IntoResponse;
     let error = api_types::ApiError::new(api_types::ErrorCode::Invalid, "too big").with_status(413);
@@ -579,34 +600,84 @@ fn errors_answer_their_status_with_the_envelope() {
     assert_eq!(super::ApiError(api_types::ApiError::internal()).into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+/// Dioxus routes each file of its public dir (as the image has it: dx's bundle). Nothing else
+/// reads DIOXUS_PUBLIC_PATH; it is put back, and the directory removed, either way. Tests that
+/// make one hold [`PUBLIC_ENV`].
+struct Public(std::path::PathBuf, Option<std::ffi::OsString>, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+static PUBLIC_ENV: Mutex<()> = Mutex::new(());
+
+impl Public {
+    fn new(name: &str) -> Self {
+        let guard = PUBLIC_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let public = Public(
+            std::env::temp_dir().join(format!("web-public-{name}-{}", std::process::id())),
+            std::env::var_os("DIOXUS_PUBLIC_PATH"),
+            guard,
+        );
+        std::fs::create_dir_all(public.0.join("assets")).unwrap();
+        std::fs::write(public.0.join("assets/web.js"), "").unwrap();
+        std::fs::write(public.0.join("favicon.ico"), "").unwrap();
+        std::env::set_var("DIOXUS_PUBLIC_PATH", &public.0);
+        public
+    }
+}
+
+impl Drop for Public {
+    fn drop(&mut self) {
+        match self.1.take() {
+            Some(old) => std::env::set_var("DIOXUS_PUBLIC_PATH", old),
+            None => std::env::remove_var("DIOXUS_PUBLIC_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn the_api_mounts_beside_the_dioxus_app() {
     use dioxus::prelude::*;
-    // Dioxus routes each file of its public dir (as the image has it: dx's bundle). Nothing
-    // else reads DIOXUS_PUBLIC_PATH; it is put back, and the directory removed, either way.
-    struct Public(std::path::PathBuf, Option<std::ffi::OsString>);
-    impl Drop for Public {
-        fn drop(&mut self) {
-            match self.1.take() {
-                Some(old) => std::env::set_var("DIOXUS_PUBLIC_PATH", old),
-                None => std::env::remove_var("DIOXUS_PUBLIC_PATH"),
-            }
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let public = Public(
-        std::env::temp_dir().join(format!("web-public-{}", std::process::id())),
-        std::env::var_os("DIOXUS_PUBLIC_PATH"),
-    );
-    std::fs::create_dir_all(public.0.join("assets")).unwrap();
-    std::fs::write(public.0.join("assets/web.js"), "").unwrap();
-    std::fs::write(public.0.join("favicon.ico"), "").unwrap();
-    std::env::set_var("DIOXUS_PUBLIC_PATH", &public.0);
+    let _public = Public::new("mount");
     // axum panics on overlapping routes when the router is built.
     let _ = axum::Router::new()
         .serve_dioxus_application(ServeConfig::default(), crate::App)
         .route("/ws/arcane", axum::routing::get(|| async {}))
         .merge(super::router());
+}
+
+/// The Dioxus pages' calls over HTTP, as the browser makes them: the command enums go over the
+/// wire as auth's names and come back.
+#[tokio::test]
+async fn panel_server_functions_over_http() {
+    use dioxus::prelude::*;
+    let public = Public::new("bff");
+    let app = axum::Router::new().serve_dioxus_application(ServeConfig::default(), crate::App);
+    drop(public);
+    let mut site = Site::serving(app).await.log_in("all").await;
+    let path = |name: &str| {
+        let fns = ServerFunction::collect();
+        let found = fns.iter().find(|f| f.path().strip_prefix("/bff/").and_then(|p| p.strip_prefix(name)).is_some_and(|hash| hash.bytes().all(|b| b.is_ascii_digit())));
+        found.map(|f| f.path()).unwrap_or_else(|| panic!("no server function {name}"))
+    };
+
+    let reply = site.json(Method::POST, path("ark_command"), json!({"cmd": "start"})).await;
+    assert_eq!((reply.status, &reply.body), (StatusCode::OK, &json!("started")));
+    let reply = site.json(Method::POST, path("enshrouded_command"), json!({"cmd": "update_now"})).await;
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+    let reply = site.json(Method::POST, path("enshrouded_command"), json!({"cmd": "restart"})).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(
+        site.calls(),
+        [
+            "POST /internal/ark/command \"start\"",
+            "POST /internal/enshrouded/command \"update_now\"",
+            "POST /internal/enshrouded/command \"restart\"",
+        ]
+    );
+    // A name that isn't a command doesn't reach auth (Dioxus answers arguments it can't read
+    // with a 500).
+    let reply = site.json(Method::POST, path("ark_command"), json!({"cmd": "explode"})).await;
+    assert!(!reply.status.is_success(), "{}", reply.status);
+    assert_eq!(site.calls().len(), 3);
 }
 
 #[test]
@@ -774,14 +845,8 @@ async fn pictures_need_auth_to_answer() {
 
 #[tokio::test]
 async fn origins_let_in_for_arcane_are_not_let_into_the_api() {
-    let mut site = Site::logged_in("all").await;
-    let old = std::env::var_os("ARCANE_ALLOWED_ORIGINS");
-    std::env::set_var("ARCANE_ALLOWED_ORIGINS", "https://dev.example");
+    let mut site = Site::serving(super::router_with("https://dev.example")).await.log_in("all").await;
     let reply = site.send(Method::DELETE, "/api/session", Some("https://dev.example"), None).await;
-    match old {
-        Some(old) => std::env::set_var("ARCANE_ALLOWED_ORIGINS", old),
-        None => std::env::remove_var("ARCANE_ALLOWED_ORIGINS"),
-    }
     envelope(&reply, 403, "forbidden");
 }
 
@@ -1247,7 +1312,7 @@ async fn admin_lists_and_changes() {
     let reply = site.get("/api/admin/roles?page=0&limit=25").await;
     // A permission the site doesn't know yet is still listed.
     assert_eq!(reply.body["items"][0]["permissions"], json!([{"id": 3, "name": "arcane"}, {"id": 9, "name": "brand_new"}]));
-    assert_eq!(site.get("/api/admin/roles/all").await.body, json!([{"id": 2, "name": "arcane_user", "permissions": []}]));
+    assert_eq!(site.get("/api/admin/roles/all").await.body, json!([{"id": 2, "name": "arcane_user"}]));
     assert_eq!(site.get("/api/admin/permissions").await.body[1], json!({"id": 9, "name": "brand_new"}));
     assert_eq!(site.get("/api/admin/invites").await.body[0]["id"], 4);
 
@@ -1297,6 +1362,9 @@ async fn admin_refusals_and_failures_have_messages() {
     assert!(reply.body["message"].as_str().unwrap().starts_with("Check the fields"));
     envelope(&site.json(Method::POST, "/api/admin/invites", new(999, 7)).await, 404, "not_found");
     envelope(&site.send(Method::DELETE, "/api/admin/invites/999", Some(SITE), None).await, 404, "not_found");
+    // Refusals without a message of their own: 404 is not_found, any other 4xx invalid.
+    envelope(&site.send(Method::PUT, "/api/admin/users/404/roles/2", Some(SITE), None).await, 404, "not_found");
+    envelope(&site.send(Method::DELETE, "/api/admin/users/400/roles/2", Some(SITE), None).await, 400, "invalid");
 
     // Bad ids and paging never reach auth.
     let before = site.calls().len();
@@ -1346,18 +1414,17 @@ async fn panel_changes_from_another_site_are_refused() {
 
 #[tokio::test]
 async fn arcane_dev_origins_count_on_the_flag_only() {
-    let mut site = Site::logged_in("all").await;
-    let old = std::env::var_os("ARCANE_ALLOWED_ORIGINS");
-    std::env::set_var("ARCANE_ALLOWED_ORIGINS", "https://dev.example");
+    let mut site = Site::serving(super::router_with("https://dev.example")).await.log_in("all").await;
     let dev = Some("https://dev.example");
     let flag = site.send(Method::POST, "/api/arcane/flag", dev, Some(("application/json", br#"{"roll_id":"x"}"#.to_vec()))).await;
-    let ark = site.send(Method::POST, "/api/ark/command", dev, Some(("application/json", br#"{"cmd":"start"}"#.to_vec()))).await;
-    match old {
-        Some(old) => std::env::set_var("ARCANE_ALLOWED_ORIGINS", old),
-        None => std::env::remove_var("ARCANE_ALLOWED_ORIGINS"),
-    }
+    // Past the origin check: no roll hub in this test.
     envelope(&flag, 503, "unavailable");
+    let ark = site.send(Method::POST, "/api/ark/command", dev, Some(("application/json", br#"{"cmd":"start"}"#.to_vec()))).await;
     envelope(&ark, 403, "forbidden");
+    // Not on the flag of a site without it.
+    let mut site = { drop(site); Site::logged_in("all").await };
+    let flag = site.send(Method::POST, "/api/arcane/flag", dev, Some(("application/json", br#"{"roll_id":"x"}"#.to_vec()))).await;
+    envelope(&flag, 403, "forbidden");
 }
 
 #[tokio::test]

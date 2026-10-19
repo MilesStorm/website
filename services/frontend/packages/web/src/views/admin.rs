@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use api::{
     admin_assign_role_permission, admin_assign_user_role, admin_create_invite, admin_list_all_roles,
     admin_list_invites, admin_list_permissions, admin_list_roles, admin_list_users, admin_revoke_invite,
-    admin_revoke_role_permission, admin_revoke_user_role, AdminInvite, AdminPermission, AdminRole, AdminUser,
+    admin_revoke_role_permission, admin_revoke_user_role, AdminInvite, AdminPermission, AdminRole, AdminRoleRef, AdminUser,
 };
 use ui::data_dir::LoginStatus;
 
@@ -108,7 +108,7 @@ fn AdminPanelInner() -> Element {
 // ── Users tab ─────────────────────────────────────────────────────────────────
 
 #[component]
-fn UsersTab(all_roles: Vec<AdminRole>) -> Element {
+fn UsersTab(all_roles: Vec<AdminRoleRef>) -> Element {
     let mut search = use_signal(String::new);
     let mut page = use_signal(|| 0u32);
     let mut refresh = use_signal(|| 0u32);
@@ -193,8 +193,8 @@ fn UsersTab(all_roles: Vec<AdminRole>) -> Element {
 }
 
 #[component]
-fn UserRow(user: AdminUser, all_roles: Vec<AdminRole>, on_change: EventHandler<()>) -> Element {
-    let unassigned: Vec<AdminRole> = all_roles
+fn UserRow(user: AdminUser, all_roles: Vec<AdminRoleRef>, on_change: EventHandler<()>) -> Element {
+    let unassigned: Vec<AdminRoleRef> = all_roles
         .iter()
         .filter(|r| !user.roles.iter().any(|ur| ur.id == r.id))
         .cloned()
@@ -433,7 +433,7 @@ fn RoleRow(
 const DEFAULT_INVITE_ROLE: &str = "arcane_user";
 
 #[component]
-fn InvitesTab(all_roles: Vec<AdminRole>) -> Element {
+fn InvitesTab(all_roles: Vec<AdminRoleRef>) -> Element {
     // No fallback to another role: that could quietly make an invite for `admin`.
     let default_role = all_roles.iter().find(|r| r.name == DEFAULT_INVITE_ROLE).map(|r| r.id).unwrap_or(0);
     let mut role_id = use_signal(|| default_role);

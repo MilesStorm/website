@@ -1037,7 +1037,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/AdminRole"
+                    "$ref": "#/components/schemas/AdminRoleRef"
                   }
                 }
               }
@@ -1493,7 +1493,6 @@
             "type": "string"
           },
           "permissions": {
-            "description": "Empty in `GET /api/admin/roles/all`.",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AdminPermission"
@@ -1524,6 +1523,23 @@
         "required": [
           "items",
           "total"
+        ]
+      },
+      "AdminRoleRef": {
+        "description": "A role without its permissions: `GET /api/admin/roles/all`, for the pickers.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
         ]
       },
       "AdminUser": {
@@ -2002,8 +2018,7 @@
         "type": "object",
         "properties": {
           "action": {
-            "description": "`restart`, `update` or `update_now`, as auth stored it.",
-            "type": "string"
+            "$ref": "#/components/schemas/EnshroudedActionName"
           },
           "at": {
             "description": "Unix seconds.",
@@ -2022,6 +2037,17 @@
           "name",
           "action",
           "at"
+        ]
+      },
+      "EnshroudedActionName": {
+        "description": "A command as auth stored it: one this site sends, or a name it doesn't know (from an older\nor newer auth), which still deserializes.",
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/EnshroudedCommand"
+          },
+          {
+            "type": "string"
+          }
         ]
       },
       "EnshroudedCommand": {

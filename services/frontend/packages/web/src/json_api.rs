@@ -20,7 +20,7 @@ use aide::openapi::{Info, OpenApi};
 use aide::NoApi;
 use aide::{OperationInput, OperationOutput};
 use api_types::{
-    Access, AccountInfo, AdminInvite, AdminPage, AdminPermission, AdminRole, AdminUser, ArcaneServerMsg,
+    Access, AccountInfo, AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, ArcaneServerMsg,
     ArkCommandRequest, ArkPlayers, ArkResult, Bootstrap, Code, Confirmed, Deleted, Deletion, DirectDeletion,
     DisplayName, Done, EmailSent, EnshroudedCommandRequest, EnshroudedStatus, ErrorCode, ForgotPassword, InvitePath,
     KnownPermission, LoggedIn, Login, NewInvite, Opened, PagedResult, PasswordReset, Registration,
@@ -34,6 +34,7 @@ use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, NoContent, Response};
 use axum::Json;
 use serde::de::DeserializeOwned;
+use std::sync::Arc;
 use tower_sessions::Session;
 
 use crate::rolls::RollHub;
@@ -94,8 +95,13 @@ fn rejected(status: StatusCode) -> ApiError {
     api_types::ApiError::new(ErrorCode::Invalid, "The request body isn't valid.").with_status(status.as_u16()).into()
 }
 
-/// A rejected path or query: `invalid`, 400.
+/// A rejected path or query: `invalid`, 400. A rejection that is a server error (a route whose
+/// path doesn't fit its handler) is ours: `internal`.
 fn rejected_address(status: StatusCode) -> ApiError {
+    if status.is_server_error() {
+        tracing::error!(status = status.as_u16(), "API request address can't be read: the route doesn't fit its handler");
+        return api_types::ApiError::internal().into();
+    }
     tracing::info!(status = status.as_u16(), "API request address rejected");
     api_types::ApiError::new(ErrorCode::Invalid, "The request's address isn't valid.").into()
 }
@@ -313,9 +319,10 @@ async fn same_origin(req: Request, next: Next) -> Response {
 }
 
 /// [`same_origin`] for flagging a roll, which the browser extension sends: from its own origin
-/// (`moz-extension://…`, `chrome-extension://…`) or one in `ARCANE_ALLOWED_ORIGINS` too.
-async fn extension_origin(req: Request, next: Next) -> Response {
-    if capture::flag_origin_allowed(req.headers()) {
+/// (`moz-extension://…`, `chrome-extension://…`) or one of `arcane_origins`
+/// (`ARCANE_ALLOWED_ORIGINS`, read once by [`router`]) too.
+async fn extension_origin(State(arcane_origins): State<Arc<str>>, req: Request, next: Next) -> Response {
+    if capture::flag_origin_allowed(req.headers(), &arcane_origins) {
         return next.run(req).await;
     }
     foreign(&req)
@@ -509,7 +516,7 @@ async fn admin_roles(Query(p): Query<AdminPage>) -> Result<Json<PagedResult<Admi
 }
 
 /// `GET /api/admin/roles/all`: every role, without its permissions.
-async fn admin_all_roles() -> Result<Json<Vec<AdminRole>>, ApiError> {
+async fn admin_all_roles() -> Result<Json<Vec<AdminRoleRef>>, ApiError> {
     Ok(Json(api::admin::all_roles().await?))
 }
 
@@ -585,8 +592,9 @@ impl OperationOutput for RollEvents {
     }
 }
 
-/// The routes, with their documentation. Builds without Redis, env or network.
-fn api_router() -> ApiRouter {
+/// The routes, with their documentation. Builds without Redis, env or network: the flag
+/// takes `arcane_origins` too ([`extension_origin`]).
+fn api_router(arcane_origins: &str) -> ApiRouter {
     let picture_limit = || axum::extract::DefaultBodyLimit::max(account::PICTURE_MAX_UPLOAD);
     let account = ApiRouter::new()
         .api_route("/api/account", get(get_account))
@@ -647,7 +655,7 @@ fn api_router() -> ApiRouter {
     let flag = ApiRouter::new()
         .api_route("/api/arcane/flag", post(capture::arcane_flag))
         .route_layer(from_fn_with_state(Access::Perm(KnownPermission::Arcane), access))
-        .route_layer(from_fn(extension_origin));
+        .route_layer(from_fn_with_state(Arc::<str>::from(arcane_origins), extension_origin));
     // Public: the handlers take what they need (a code, the session's username).
     let public = ApiRouter::new()
         .api_route("/api/session", get(session).delete(logout))
@@ -675,7 +683,7 @@ fn api_router() -> ApiRouter {
 }
 
 /// The API's routes, and its OpenAPI document.
-fn finish() -> (axum::Router, OpenApi) {
+fn finish(arcane_origins: &str) -> (axum::Router, OpenApi) {
     let mut doc = OpenApi {
         info: Info {
             title: "milesstorm.com".into(),
@@ -697,18 +705,23 @@ fn finish() -> (axum::Router, OpenApi) {
         ctx.schema.subschema_for::<api_types::Frame>();
         ctx.schema.subschema_for::<api_types::Roll>();
     });
-    let router = api_router().finish_api(&mut doc);
+    let router = api_router(arcane_origins).finish_api(&mut doc);
     (router, doc)
 }
 
 /// The API's routes, and the envelope for every other `/api/*` path and for a method a route
-/// doesn't have.
+/// doesn't have. The extension's flag also takes the origins in `ARCANE_ALLOWED_ORIGINS`.
 pub fn router() -> axum::Router {
+    router_with(&std::env::var("ARCANE_ALLOWED_ORIGINS").unwrap_or_default())
+}
+
+/// [`router`] with the flag's extra origins (comma-separated).
+pub(crate) fn router_with(arcane_origins: &str) -> axum::Router {
     let not_found = || async { ApiError::from(api_types::ApiError::new(ErrorCode::NotFound, "There is no such API.")) };
     let not_allowed = || async {
         ApiError::from(api_types::ApiError::new(ErrorCode::Invalid, "That method isn't allowed here.").with_status(405))
     };
-    finish()
+    finish(arcane_origins)
         .0
         .method_not_allowed_fallback(not_allowed)
         .route("/api/{*rest}", axum::routing::any(not_found))
@@ -716,7 +729,7 @@ pub fn router() -> axum::Router {
 
 /// The OpenAPI document as `web openapi` prints it (and web/src/api/openapi.json holds it).
 pub fn openapi_json() -> String {
-    let mut json = serde_json::to_string_pretty(&finish().1).expect("the OpenAPI document serializes");
+    let mut json = serde_json::to_string_pretty(&finish("").1).expect("the OpenAPI document serializes");
     json.push('\n');
     json
 }

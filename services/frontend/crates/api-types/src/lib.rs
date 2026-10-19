@@ -448,10 +448,18 @@ pub struct EnshroudedPlayers {
 pub struct EnshroudedAction {
     /// `None` when the account was deleted.
     pub name: Option<String>,
-    /// `restart`, `update` or `update_now`, as auth stored it.
-    pub action: String,
+    pub action: EnshroudedActionName,
     /// Unix seconds.
     pub at: i64,
+}
+
+/// A command as auth stored it: one this site sends, or a name it doesn't know (from an older
+/// or newer auth), which still deserializes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum EnshroudedActionName {
+    Known(EnshroudedCommand),
+    Other(String),
 }
 
 /// Restart, or force an update: `update` waits until nobody is online, `update_now`
@@ -495,8 +503,14 @@ pub struct AdminPermission {
 pub struct AdminRole {
     pub id: i32,
     pub name: String,
-    /// Empty in `GET /api/admin/roles/all`.
     pub permissions: Vec<AdminPermission>,
+}
+
+/// A role without its permissions: `GET /api/admin/roles/all`, for the pickers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct AdminRoleRef {
+    pub id: i32,
+    pub name: String,
 }
 
 /// A role as the user listing has it.
@@ -785,6 +799,18 @@ mod tests {
             assert_eq!(serde_json::to_value(c).unwrap(), json!(c.as_str()));
         }
         assert!(serde_json::from_value::<ArkCommandRequest>(json!({"cmd": "explode"})).is_err());
+    }
+
+    #[test]
+    fn enshrouded_actions_keep_auths_names() {
+        let actions = json!([
+            {"name": null, "action": "update_now", "at": 1},
+            {"name": "ann", "action": "reinstall", "at": 2},
+        ]);
+        let read: Vec<EnshroudedAction> = serde_json::from_value(actions.clone()).unwrap();
+        assert_eq!(read[0].action, EnshroudedActionName::Known(EnshroudedCommand::UpdateNow));
+        assert_eq!(read[1].action, EnshroudedActionName::Other("reinstall".into()));
+        assert_eq!(serde_json::to_value(&read).unwrap(), actions);
     }
 
     #[test]

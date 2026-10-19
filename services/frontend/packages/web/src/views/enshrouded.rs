@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use api::enshrouded_command;
 #[cfg(target_arch = "wasm32")]
 use api::enshrouded_status;
-use api_types::{EnshroudedAction, EnshroudedCommand, EnshroudedState, EnshroudedStatus};
+use api_types::{EnshroudedAction, EnshroudedActionName, EnshroudedCommand, EnshroudedState, EnshroudedStatus};
 use ui::data_dir::LoginStatus;
 
 use crate::{LOGIN_STATUS, PERMISSIONS};
@@ -374,9 +374,11 @@ fn Activity(recent: Vec<EnshroudedAction>, now: i64) -> Element {
                     li { class: "flex justify-between gap-4",
                         span {
                             span { class: "font-semibold", "{a.name.as_deref().unwrap_or(\"A deleted account\")}" }
-                            match a.action.as_str() {
-                                "update" => " asked for an update",
-                                "update_now" => " force-updated the server, disconnecting players",
+                            match a.action {
+                                EnshroudedActionName::Known(EnshroudedCommand::Update) => " asked for an update",
+                                EnshroudedActionName::Known(EnshroudedCommand::UpdateNow) => {
+                                    " force-updated the server, disconnecting players"
+                                }
                                 _ => " restarted the server",
                             }
                         }
@@ -437,8 +439,8 @@ mod tests {
             update_queued: false,
             can_control: true,
             recent: vec![
-                EnshroudedAction { name: Some("Ada".into()), action: "update_now".into(), at: 9_000 },
-                EnshroudedAction { name: None, action: "restart".into(), at: 2_000 },
+                EnshroudedAction { name: Some("Ada".into()), action: EnshroudedActionName::Known(EnshroudedCommand::UpdateNow), at: 9_000 },
+                EnshroudedAction { name: None, action: EnshroudedActionName::Known(EnshroudedCommand::Restart), at: 2_000 },
             ],
             next_command_at: None,
         }

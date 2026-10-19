@@ -3,10 +3,10 @@
 //! callers must (the API's access layer, the server functions' `admin_token`).
 
 use api_types::{
-    AdminInvite, AdminPage, AdminPermission, AdminRole, AdminUser, ApiError, ErrorCode, NewInvite, PagedResult,
+    AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, ApiError, ErrorCode, NewInvite,
+    PagedResult,
 };
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::session::auth_url;
@@ -19,7 +19,8 @@ fn failed(what: &str) -> ApiError {
     ApiError::new(ErrorCode::Upstream, format!("{what} Try again later."))
 }
 
-/// Sends `req` to auth: the reply on 2xx, else `failed(what)` (or `refusal` for a 4xx it knows).
+/// Sends `req` to auth: the reply on 2xx. A 4xx is `refusal`'s error when it knows the code,
+/// else `not_found` for a 404 and `invalid` for the rest; anything else is `failed(what)`.
 async fn send(
     req: reqwest_middleware::RequestBuilder,
     what: &str,
@@ -33,11 +34,18 @@ async fn send(
         return Ok(reply);
     }
     let code = reply.get("error").and_then(Value::as_str).unwrap_or("");
-    if let Some(e) = (400..500).contains(&status).then(|| refusal(status, code)).flatten() {
+    if !(400..500).contains(&status) {
+        tracing::error!(status, code, "an admin request failed");
+        return Err(failed(what));
+    }
+    if let Some(e) = refusal(status, code) {
         return Err(e);
     }
-    tracing::error!(status, code, "an admin request failed");
-    Err(failed(what))
+    tracing::warn!(status, code, "auth refused an admin request");
+    Err(match status {
+        404 => ApiError::new(ErrorCode::NotFound, "That no longer exists. Reload the page."),
+        _ => ApiError::new(ErrorCode::Invalid, "That wasn't accepted. Reload the page and try again."),
+    })
 }
 
 fn read<T: DeserializeOwned>(reply: Value, what: &str) -> Result<T, ApiError> {
@@ -81,16 +89,10 @@ pub async fn roles(p: &AdminPage) -> Result<PagedResult<AdminRole>, ApiError> {
 
 /// Every role, without its permissions (for the pickers).
 #[tracing::instrument(name = "bff.admin_list_all_roles", skip_all)]
-pub async fn all_roles() -> Result<Vec<AdminRole>, ApiError> {
-    #[derive(Deserialize)]
-    struct Role {
-        id: i32,
-        name: String,
-    }
+pub async fn all_roles() -> Result<Vec<AdminRoleRef>, ApiError> {
     trace::rejectable(async {
         let req = http_client().get(format!("{}/internal/admin/roles/all", auth_url()));
-        let roles: Vec<Role> = read(send(req, ROLES, |_, _| None).await?, ROLES)?;
-        Ok(roles.into_iter().map(|r| AdminRole { id: r.id, name: r.name, permissions: vec![] }).collect())
+        read(send(req, ROLES, |_, _| None).await?, ROLES)
     })
     .await
 }

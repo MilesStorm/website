@@ -10,10 +10,11 @@ fn offline() -> ApiError {
     ApiError::new(ErrorCode::Upstream, "The website can't reach the server right now.")
 }
 
-/// What auth's `{"error": code}` means for the user. A refusal keeps auth's status.
+/// What auth's `{"error": code}` means for the user, with that code's status.
 fn refused(status: u16, reply: &Value) -> ApiError {
     let code = reply.get("error").and_then(Value::as_str).unwrap_or("");
     let (error, message) = match code {
+        _ if status == 401 => return ApiError::logged_out(),
         "forbidden" => (ErrorCode::Forbidden, "You don't have access to the Enshrouded server."),
         "too_soon" => (ErrorCode::RateLimited, "Someone just sent a command. Wait a moment and try again."),
         "busy" => (ErrorCode::Conflict, "A restart or update is already under way."),
@@ -28,12 +29,7 @@ fn refused(status: u16, reply: &Value) -> ApiError {
             (ErrorCode::Upstream, "Something went wrong. Try again later.")
         }
     };
-    let error = ApiError::new(error, message);
-    if (400..500).contains(&status) {
-        error.with_status(status)
-    } else {
-        error
-    }
+    ApiError::new(error, message)
 }
 
 /// The server's state, players, and the latest commands.
@@ -79,7 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refusals_keep_auths_status_and_failures_are_gateway_errors() {
+    fn refusals_have_their_codes_status_and_failures_are_gateway_errors() {
         let error = |status, code: &str| {
             let e = refused(status, &json!({ "error": code }));
             (e.status(), e.error)
@@ -90,6 +86,9 @@ mod tests {
         assert_eq!(error(503, "not_configured"), (503, ErrorCode::Unavailable));
         assert_eq!(error(502, "unreachable"), (502, ErrorCode::Upstream));
         assert_eq!(error(400, "invalid_command"), (400, ErrorCode::Invalid));
+        // A refusal this site doesn't know: its status is its code's.
+        assert_eq!(error(422, "something_new"), (400, ErrorCode::Invalid));
+        assert_eq!(error(401, ""), (401, ErrorCode::LoggedOut));
         assert_eq!(error(500, "boom"), (502, ErrorCode::Upstream));
         assert_eq!(refused(500, &Value::Null).status(), 502);
     }

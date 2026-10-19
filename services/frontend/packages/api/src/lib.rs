@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub use api_types::{
-    AdminInvite, AdminPage, AdminPermission, AdminRole, AdminUser, AdminUserRole, ArkCommand, ArkOutcome,
+    AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, AdminUserRole, ArkCommand, ArkOutcome,
     EnshroudedCommand, EnshroudedStatus, NewInvite, PagedResult,
 };
 pub use ui::data_dir::{CommandResult, LoginStatus};
@@ -853,7 +853,7 @@ pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<P
 
 /// Every role, without its permissions (for the pickers).
 #[server(prefix = "/bff")]
-pub async fn admin_list_all_roles() -> Result<Vec<AdminRole>, ServerFnError> {
+pub async fn admin_list_all_roles() -> Result<Vec<AdminRoleRef>, ServerFnError> {
     admin_token().await?;
     admin::all_roles().await.map_err(server_error)
 }
