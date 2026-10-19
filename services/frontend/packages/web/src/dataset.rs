@@ -52,7 +52,8 @@ pub fn dataset() -> Option<&'static Dataset> {
 }
 
 /// In tests, the store instead of [`STORE`]: replaceable, so what a test sees doesn't depend on
-/// which test ran before it. Tests that set it hold `json_api::tests::AUTH_ENV`.
+/// which test ran before it. It is process-global: any test that reaches [`dataset`] (or sets
+/// it) must hold `json_api::tests::AUTH_ENV`, as `json_api::tests::Site` does.
 #[cfg(test)]
 static TEST_STORE: std::sync::Mutex<Option<&'static Dataset>> = std::sync::Mutex::new(None);
 

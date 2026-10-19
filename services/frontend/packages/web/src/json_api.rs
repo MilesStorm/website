@@ -179,6 +179,11 @@ impl OperationInput for Viewer {
     }
 }
 
+/// [`same_origin`]'s rule: `dev` origins count only in a debug build.
+fn origin_allowed(headers: &axum::http::HeaderMap, dev: &str, debug: bool) -> bool {
+    crate::rolls::origin_allowed_with(headers, if debug { dev } else { "" }, debug)
+}
+
 /// Whether `viewer` may use a route of `access`: 401 `logged_out`, 403 `forbidden`, or 503
 /// while auth can't say who is logged in.
 fn allowed(access: Access, viewer: &Viewer) -> Result<(), ApiError> {
@@ -212,11 +217,13 @@ async fn access(State(access): State<Access>, req: Request, next: Next) -> Respo
 
 /// Every request that changes something must come from the site's own pages (the session
 /// cookie is sent from any site's forms): the `Origin` must be this host, over HTTPS (or
-/// HTTP in a debug build). Requests without an `Origin` aren't from a browser and pass. Unlike
-/// the Arcane routes, no extra origins (`ARCANE_ALLOWED_ORIGINS`) are let in.
+/// HTTP in a debug build). Requests without an `Origin` aren't from a browser and pass.
+/// `ARCANE_ALLOWED_ORIGINS` (the extension's) doesn't apply here; a debug build also takes the
+/// local dev proxies' origins from `DEV_ALLOWED_ORIGINS` (ENV.md).
 async fn same_origin(req: Request, next: Next) -> Response {
     let read = req.method() == Method::GET || req.method() == Method::HEAD;
-    if read || crate::rolls::origin_allowed_with(req.headers(), "", cfg!(debug_assertions)) {
+    let dev = std::env::var("DEV_ALLOWED_ORIGINS").unwrap_or_default();
+    if read || origin_allowed(req.headers(), &dev, cfg!(debug_assertions)) {
         return next.run(req).await;
     }
     tracing::warn!(origin = ?req.headers().get(axum::http::header::ORIGIN), "API request rejected: foreign origin");

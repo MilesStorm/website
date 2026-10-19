@@ -489,6 +489,26 @@ async fn origins_let_in_for_arcane_are_not_let_into_the_api() {
     envelope(&reply, 403, "forbidden");
 }
 
+#[test]
+fn dev_proxy_origins_count_in_debug_builds_only() {
+    let headers = |origin: &str| {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(header::HOST, HOST.parse().unwrap());
+        h.insert(header::ORIGIN, origin.parse().unwrap());
+        h
+    };
+    let dev = "http://localhost:4321, http://localhost:8080";
+    // Release: only this host, over HTTPS; the dev list is ignored.
+    assert!(super::origin_allowed(&headers(SITE), dev, false));
+    assert!(!super::origin_allowed(&headers("http://localhost:4321"), dev, false));
+    assert!(!super::origin_allowed(&headers("http://milesstorm.test"), dev, false));
+    // Debug: the dev proxies too, and plain HTTP for this host.
+    assert!(super::origin_allowed(&headers("http://localhost:4321"), dev, true));
+    assert!(super::origin_allowed(&headers("http://localhost:8080"), dev, true));
+    assert!(super::origin_allowed(&headers("http://milesstorm.test"), dev, true));
+    assert!(!super::origin_allowed(&headers("https://evil.example"), dev, true));
+}
+
 #[tokio::test]
 async fn unknown_api_paths_and_methods_get_the_envelope_and_plain_routes_still_match() {
     let mut site = Site::new().await;
