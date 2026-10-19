@@ -10,6 +10,7 @@ spec:
   # A pod analyses one frame at a time, so camera sessions on the same pod wait on each
   # other. The cards are shared (GPU operator time-slicing), so pods are not one per card.
   replicas: 3
+  revisionHistoryLimit: 2  # old ReplicaSets kept for rollback
   strategy:
     type: RollingUpdate
     rollingUpdate:

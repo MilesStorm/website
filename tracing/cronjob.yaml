@@ -12,6 +12,8 @@ spec:
     spec:
       backoffLimit: 0
       activeDeadlineSeconds: 900
+      # A failed run (e.g. Tempo restarting) would otherwise sit in Error until three more fail.
+      ttlSecondsAfterFinished: 86400
       template:
         spec:
           restartPolicy: Never
