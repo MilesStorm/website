@@ -1,0 +1,494 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "milesstorm.com",
+    "version": "0"
+  },
+  "paths": {
+    "/api/session": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Who is looking at the page: what `GET /api/session` answers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bootstrap"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "no content"
+          }
+        }
+      }
+    },
+    "/api/session/login": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/session/login`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Login"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "A login or registration that succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoggedIn"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/session/register": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/session/register`: a new account, logged in at once.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Registration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "A login or registration that succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoggedIn"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The logged-in user's account settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/display-name": {
+      "put": {
+        "requestBody": {
+          "description": "`PUT /api/account/display-name`. Blank clears it.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplayName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The logged-in user's account settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/picture": {
+      "get": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The picture: a 256x256 JPEG.",
+            "content": {
+              "application/octet-stream": {}
+            }
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "A profile picture just stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PictureVersion"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The logged-in user's account settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountInfo": {
+        "description": "The logged-in user's account settings.",
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "description": "`None` for accounts without one (GitHub logins).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "picture_version": {
+            "description": "Version of the profile picture (the `?v=` of `picture_url`), `None` when there is none.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "pictures_available": {
+            "description": "False when the picture store isn't reachable or configured.",
+            "type": "boolean"
+          },
+          "shown_name": {
+            "description": "The display name, or the username when there is none.",
+            "type": "string"
+          },
+          "username": {
+            "description": "Login name; can't be changed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "display_name",
+          "shown_name",
+          "picture_version",
+          "picture_url",
+          "pictures_available",
+          "email",
+          "email_verified"
+        ]
+      },
+      "ApiError": {
+        "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ]
+      },
+      "Bootstrap": {
+        "description": "Who is looking at the page: what `GET /api/session` answers.",
+        "type": "object",
+        "properties": {
+          "viewer": {
+            "description": "`None` when logged out.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Viewer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "viewer"
+        ]
+      },
+      "DisplayName": {
+        "description": "`PUT /api/account/display-name`. Blank clears it.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "ErrorCode": {
+        "description": "What kind of failure an [`ApiError`] is: for the code paths that branch on it (`logged_out`\nsends the browser to the login page). The rest is in the message.",
+        "type": "string",
+        "enum": [
+          "logged_out",
+          "forbidden",
+          "invalid",
+          "conflict",
+          "not_found",
+          "gone",
+          "rate_limited",
+          "unavailable",
+          "upstream",
+          "internal"
+        ]
+      },
+      "KnownPermission": {
+        "description": "The permissions the site knows. Every permission check uses this closed set, so TypeScript\ngets a literal union.",
+        "type": "string",
+        "enum": [
+          "llama",
+          "enshrouded",
+          "arcane",
+          "manage_permissions"
+        ]
+      },
+      "LoggedIn": {
+        "description": "A login or registration that succeeded.",
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
+      "Login": {
+        "description": "`POST /api/session/login`.",
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ]
+      },
+      "PictureVersion": {
+        "description": "A profile picture just stored.",
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "version"
+        ]
+      },
+      "Registration": {
+        "description": "`POST /api/session/register`: a new account, logged in at once.",
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "email",
+          "password"
+        ]
+      },
+      "Viewer": {
+        "description": "The logged-in user, as the page shows them.",
+        "type": "object",
+        "properties": {
+          "permissions": {
+            "description": "Only the ones the site knows; empty when auth can't be reached.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnownPermission"
+            }
+          },
+          "picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shown_name": {
+            "description": "The display name, or the username when there is none.",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "shown_name",
+          "picture_url",
+          "permissions"
+        ]
+      }
+    }
+  }
+}

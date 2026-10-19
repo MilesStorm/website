@@ -285,6 +285,7 @@ async fn a_camera_session_traces_each_roll_and_keeps_the_trace_field_to_itself()
     from_ai["_trace"] = json!({"traceparent": format!("00-{SETTLE_TRACE}-{SETTLE_SPAN}-01")});
     let ai_url = ai_pipeline(from_ai.to_string(), seen.clone()).await;
     let backend = auth_and_surrealdb(seen.clone()).await;
+    let _env = crate::json_api::tests::AUTH_ENV.lock().await;
     std::env::set_var("AUTH_SERVICE_URL", &backend);
     std::env::set_var("BFF_SERVICE_SECRET", "test-only");
     crate::dataset::install_for_tests(crate::dataset::Dataset::for_tests(backend, "pw"));

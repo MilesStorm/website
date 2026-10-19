@@ -110,10 +110,11 @@ there is no standard one for browser traces):
 - The public Gateway stamps every response `Server-Timing: gateway;dur=<ms>;desc="<epoch ms>"`:
   when it received the request and how long until the backend answered (homelab repo,
   `istio/manifests/gateway-server-timing.yaml`).
-- Only responses no cache can replay are used: the page's own navigation and `/bff/` server calls
-  (POSTs). A sample whose round trip comes out negative, or whose offset is over an hour, is
-  dropped as not belonging to that request. The frontend sends `Cache-Control: no-store` on
-  `/bff/` responses and `private, no-cache` on rendered pages (`no_store` in
+- Only responses no cache can replay are used: the page's own navigation, `/bff/` server calls
+  and `/api/` calls (a GET answered from the browser's cache has no transfer and is skipped). A
+  sample whose round trip comes out negative, or whose offset is over an hour, is dropped as not
+  belonging to that request. The frontend sends `Cache-Control: no-store` on `/bff/` and `/api/`
+  responses that don't set their own, and `private, no-cache` on rendered pages (`no_store` in
   `packages/web/src/main.rs`), so a future Cloudflare cache rule can't replay a stamp either.
   Pages don't get `no-store`: it would turn off the browser's back/forward cache.
 - For each such request the browser has its own `requestStart` and `responseStart` (Resource

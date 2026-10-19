@@ -9,9 +9,13 @@
   },
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
-    "test:trace": "node --test packages/web/assets/trace.test.mjs"
+    "test:trace": "node --test packages/web/assets/trace.test.mjs",
+    "api": "cargo run -q -p web --features web/server -- openapi > web/src/api/openapi.json && npm run api:types",
+    "api:types": "openapi-typescript web/src/api/openapi.json -o web/src/api/schema.d.ts"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
   }
 }

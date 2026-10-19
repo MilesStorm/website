@@ -554,6 +554,14 @@ test('clock sync only trusts responses no cache can replay', () => {
   assert.equal(c.best().offset, 60.5);
 });
 
+test('clock sync samples the JSON API as it does server functions', () => {
+  const c = clockAt();
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/apix/session' }));
+  assert.equal(c.best(), null);
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/api/session' }));
+  assert.equal(c.best().offset, 60.5);
+});
+
 test('beforeSend shifts browser spans by the offset and records it, leaving other items alone', () => {
   const c = clockAt();
   const untouched = payloadOf({ traceId: 't0', startTimeUnixNano: '5' });

@@ -37,8 +37,10 @@
 
   /** Types `text` into Roll20's chat and sends it, keeping the player's draft. */
   function sendToChat(text) {
-    const box = document.querySelector("#textchat-input textarea");
-    const button = document.querySelector("#chatSendBtn") ?? document.querySelector("#textchat-input button");
+    const box = /** @type {HTMLTextAreaElement | null} */ (document.querySelector("#textchat-input textarea"));
+    const button = /** @type {HTMLButtonElement | null} */ (
+      document.querySelector("#chatSendBtn") ?? document.querySelector("#textchat-input button")
+    );
     if (!box || !button) return false;
     const draft = box.value;
     box.value = text;
