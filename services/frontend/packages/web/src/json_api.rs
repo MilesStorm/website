@@ -337,7 +337,12 @@ fn foreign(req: &Request) -> Response {
 
 /// `GET /api/session`: who is logged in, with their name, picture and permissions.
 async fn session(viewer: Viewer) -> Json<Bootstrap> {
-    let viewer = match viewer.0 {
+    Json(bootstrap(viewer.0).await)
+}
+
+/// What a page and `GET /api/session` say about `viewer`: the same value either way.
+pub(crate) async fn bootstrap(viewer: api::Viewer) -> Bootstrap {
+    let viewer = match viewer {
         api::Viewer::Anonymous => None,
         api::Viewer::Degraded { username } => {
             Some(api_types::Viewer { shown_name: username.clone(), username, picture_url: None, permissions: vec![] })
@@ -352,7 +357,7 @@ async fn session(viewer: Viewer) -> Json<Bootstrap> {
             Some(api_types::Viewer { username, shown_name, picture_url, permissions })
         }
     };
-    Json(Bootstrap { viewer })
+    Bootstrap { viewer }
 }
 
 /// `POST /api/session/login`.
@@ -704,7 +709,11 @@ fn finish(arcane_origins: &str) -> (axum::Router, OpenApi) {
         // Not a route's: the variants of `ArcaneServerMsg` (inlined there, for its tag) by name.
         ctx.schema.subschema_for::<api_types::Frame>();
         ctx.schema.subschema_for::<api_types::Roll>();
+        // Links and `next` are typed by it; no route takes one yet.
+        ctx.schema.subschema_for::<api_types::PagePath>();
     });
+    // The pages and who may see them, for the end-to-end tests' permission matrix.
+    doc.extensions.insert("x-pages".into(), serde_json::to_value(api_types::PAGES).expect("the pages serialize"));
     let router = api_router(arcane_origins).finish_api(&mut doc);
     (router, doc)
 }

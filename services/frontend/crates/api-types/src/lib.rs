@@ -156,13 +156,63 @@ impl std::fmt::Display for Permission {
     }
 }
 
-/// Who may use a route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Who may use a route. Serialized for the `x-pages` list of the OpenAPI document: `"public"`,
+/// `"logged_in"` or `{"perm": "arcane"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Access {
     Public,
     LoggedIn,
     Perm(KnownPermission),
 }
+
+// ---- Pages ----
+
+/// A page of the site: its path, the file of the Astro build (`web/dist/`) it is, and who may
+/// see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Page {
+    pub path: PagePath,
+    pub file: &'static str,
+    pub access: Access,
+}
+
+/// Declares the pages once: the [`PagePath`] enum (a string enum in the OpenAPI document, so
+/// TypeScript gets a literal union) and the [`PAGES`] table the server routes and guards.
+macro_rules! pages {
+    ($($variant:ident => $path:literal, $file:literal, $access:expr;)*) => {
+        /// A page's path. Deserializing anything else (another site, an API path, a page that
+        /// doesn't exist) fails.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+        pub enum PagePath {
+            $(#[serde(rename = $path)] $variant,)*
+        }
+
+        impl PagePath {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $path,)*
+                }
+            }
+        }
+
+        /// Every page the server answers with Astro's HTML. A file in the build that is
+        /// neither here nor in [`STATUS_PAGES`] stops the server from starting.
+        pub const PAGES: &[Page] = &[$(Page { path: PagePath::$variant, file: $file, access: $access },)*];
+    };
+}
+
+// One enum and one table, so a page's path, file and access can't disagree. (No doc comments
+// on the variants: schemars would split the string enum into one schema per documented value.)
+pages! {
+    Home => "/", "index.html", Access::Public;
+    Asshole => "/asshole", "asshole.html", Access::Public;
+    AccountDeleted => "/account-deleted", "account-deleted.html", Access::Public;
+}
+
+/// Pages without a path of their own, answered with a status: an unknown path (404), a page the
+/// viewer may not see (403), and auth being down (503). They are spliced like every page.
+pub const STATUS_PAGES: &[&str] = &["404.html", "403.html", "503.html"];
 
 // ---- Session ----
 
@@ -817,6 +867,32 @@ mod tests {
     fn a_flag_without_values_has_none() {
         let flag: FlagRequest = serde_json::from_value(json!({"roll_id": "r"})).unwrap();
         assert!(flag.values.is_empty());
+    }
+
+    #[test]
+    fn page_paths_are_only_the_sites_pages() {
+        for page in PAGES {
+            assert_eq!(serde_json::to_value(page.path).unwrap(), json!(page.path.as_str()));
+            assert_eq!(serde_json::from_value::<PagePath>(json!(page.path.as_str())).unwrap(), page.path);
+        }
+        for bad in ["//evil.com", "/\\evil.com", "https://milesstorm.com/", "/api/session", "/nope", "", "/asshole/"] {
+            assert!(serde_json::from_value::<PagePath>(json!(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn pages_are_listed_once_with_html_files() {
+        let mut paths: Vec<_> = PAGES.iter().map(|p| p.path.as_str()).collect();
+        let mut files: Vec<_> = PAGES.iter().map(|p| p.file).chain(STATUS_PAGES.iter().copied()).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        files.sort_unstable();
+        files.dedup();
+        assert_eq!(paths.len(), PAGES.len());
+        assert_eq!(files.len(), PAGES.len() + STATUS_PAGES.len());
+        assert!(files.iter().all(|f| f.ends_with(".html") && !f.contains('/')));
+        assert_eq!(serde_json::to_value(Access::Perm(KnownPermission::Arcane)).unwrap(), json!({"perm": "arcane"}));
+        assert_eq!(serde_json::to_value(Access::LoggedIn).unwrap(), json!("logged_in"));
     }
 
     #[test]
