@@ -8,6 +8,7 @@ metadata:
     app: auth
 spec:
   replicas: 2  # Number of replicas
+  revisionHistoryLimit: 2  # old ReplicaSets kept for rollback
   strategy:
     type: RollingUpdate
     rollingUpdate:
