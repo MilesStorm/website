@@ -1,0 +1,12 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Panel from '@/components/Panel.astro';
+import { buttonVariants } from '@/components/ui/button';
+---
+
+<Layout title="Not found">
+  <Panel title="404: not found">
+    <p>Oops! The page you're looking for isn't here.</p>
+    <a href="/" class={buttonVariants()}>Go home</a>
+  </Panel>
+</Layout>

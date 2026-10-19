@@ -1,0 +1,12 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Panel from '@/components/Panel.astro';
+import { buttonVariants } from '@/components/ui/button';
+---
+
+<Layout title="Unavailable">
+  <Panel title="Can't check your access right now">
+    <p>The login service isn't answering. Try again in a moment.</p>
+    <a href="/" class={buttonVariants({ variant: 'outline' })}>Go home</a>
+  </Panel>
+</Layout>

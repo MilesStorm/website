@@ -1,0 +1,79 @@
+---
+// Every page's frame. The <head> order is a contract with the server and the tracing
+// (TRACING.md, "Browser"): the charset first (within the first 1024 bytes however large the
+// spliced data is), then the `bff-inject` marker the server replaces with the trace context and
+// the viewer, then the theme (before anything paints), then the tracing script (classic and
+// synchronous, so fetch is wrapped before any module runs), then the CSS and the modules, which
+// Astro puts at the end of <head>.
+import '@/styles/global.css';
+import tracingUrl from '@/vendor/tracing.js?url';
+import faviconUrl from '@/assets/favicon.ico?url';
+import Navbar from '@/components/Navbar.astro';
+import { CookieConsent } from '@/islands/CookieConsent';
+import { GATE_CSS } from '@/lib/gates';
+import { OLD_KEYS, THEME_KEY } from '@/lib/theme';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+const { title, description = 'Tools for game nights with friends.' } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="bff-inject" />
+    <script is:inline define:vars={{ themeKey: THEME_KEY, oldKeys: OLD_KEYS }}>
+      // Dark unless the saved theme, or the system's when there is none, is light. The first
+      // visit also drops the Dioxus app's saved theme and cookie choice (a one-time reset).
+      var saved = null;
+      try {
+        if (localStorage.getItem(themeKey) === null) {
+          oldKeys.forEach(function (k) { localStorage.removeItem(k); });
+          localStorage.setItem(themeKey, 'system');
+        }
+        saved = localStorage.getItem(themeKey);
+      } catch (e) {}
+      var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+      function apply() {
+        var dark = saved === 'dark' || (saved !== 'light' && (!media || media.matches));
+        document.documentElement.classList.toggle('dark', dark);
+      }
+      apply();
+      if (media && media.addEventListener) media.addEventListener('change', apply);
+      window.addEventListener('storage', function (e) {
+        if (e.key === themeKey) { saved = e.newValue; apply(); }
+      });
+    </script>
+    <script is:inline src={tracingUrl}></script>
+    <style is:inline set:html={GATE_CSS}></style>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <link rel="icon" href={faviconUrl} />
+    <title>{title}</title>
+  </head>
+  <body class="min-h-screen antialiased">
+    <Navbar />
+    <slot />
+    <CookieConsent client:only="react" />
+    <script>
+      import { applySession, fetchBootstrap, readBootstrap, sameViewer } from '@/api/session';
+
+      const root = document.documentElement;
+      // A page the server didn't splice (`astro dev`, a bundled app): ask who is looking.
+      if (!root.hasAttribute('data-session')) {
+        void readBootstrap().then((b) => applySession(b));
+      }
+      // Back after logging out (or in) elsewhere may show this page from the back/forward
+      // cache, as it was: load it again when the viewer has changed.
+      window.addEventListener('pageshow', (e) => {
+        if (!e.persisted) return;
+        void Promise.all([readBootstrap(), fetchBootstrap()]).then(([shown, now]) => {
+          if (!sameViewer(shown, now)) location.reload();
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,67 @@
+---
+// The same markup for everyone: Gate shows the right parts from the attributes the server put on
+// <html>, before any script runs. Links to the pages Dioxus still serves are full page loads.
+import { Menu } from 'lucide-react';
+import Gate from './Gate.astro';
+import Logo from './Logo.astro';
+import { buttonVariants } from '@/components/ui/button';
+import { ModeToggle } from '@/islands/ModeToggle';
+import { UserMenu } from '@/islands/UserMenu';
+import type { KnownPermission } from '@/api/session';
+import type { Href } from '@/lib/pages';
+
+const LINKS: { href: Href; label: string; requires: KnownPermission }[] = [
+  { href: '/ark', label: 'Ark', requires: 'llama' },
+  { href: '/enshrouded', label: 'Enshrouded', requires: 'enshrouded' },
+  { href: '/arcane', label: 'Arcane', requires: 'arcane' },
+  { href: '/admin', label: 'Admin', requires: 'manage_permissions' },
+];
+const link = buttonVariants({ variant: 'ghost', size: 'sm' });
+---
+
+<header class="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+  <nav aria-label="Main" class="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4">
+    <a href="/" class="mr-2 flex items-center gap-2 font-semibold">
+      <Logo class="size-8" />
+      <span>MilesStorm</span>
+    </a>
+    <ul class="hidden items-center gap-1 md:flex">
+      <li><a href="/" class={link}>Home</a></li>
+      {
+        LINKS.map((l) => (
+          <Gate as="li" requires={l.requires}>
+            <a href={l.href} class={link}>{l.label}</a>
+          </Gate>
+        ))
+      }
+    </ul>
+    <div class="ml-auto flex items-center gap-2">
+      <ModeToggle client:load />
+      <Gate session="out" class="flex items-center gap-2">
+        <a href="/login" class={link}>Log in</a>
+        <a href="/register" class={buttonVariants({ size: 'sm' })}>Register</a>
+      </Gate>
+      <Gate session="in">
+        <UserMenu client:only="react">
+          <span slot="fallback" class="block size-9" aria-hidden="true"></span>
+        </UserMenu>
+      </Gate>
+      <details class="relative md:hidden">
+        <summary class={buttonVariants({ variant: 'ghost', size: 'icon' }) + ' list-none [&::-webkit-details-marker]:hidden'} aria-label="Menu">
+          <Menu aria-hidden="true" />
+        </summary>
+        <ul class="absolute right-0 mt-2 flex w-48 flex-col gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+          <li><a href="/" class={link + ' w-full justify-start'}>Home</a></li>
+          {
+            LINKS.map((l) => (
+              <Gate as="li" requires={l.requires}>
+                <a href={l.href} class={link + ' w-full justify-start'}>{l.label}</a>
+              </Gate>
+            ))
+          }
+          <Gate as="li" session="in"><a href="/profile" class={link + ' w-full justify-start'}>Profile</a></Gate>
+        </ul>
+      </details>
+    </div>
+  </nav>
+</header>

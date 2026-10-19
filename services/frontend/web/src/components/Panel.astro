@@ -1,0 +1,20 @@
+---
+// A short page's message: a title, a few lines and a way on.
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+
+interface Props {
+  title: string;
+}
+const { title } = Astro.props;
+---
+
+<main class="mx-auto flex max-w-md flex-col px-4 pt-16 pb-16">
+  <Card>
+    <CardHeader>
+      <CardTitle><h1 class="text-xl">{title}</h1></CardTitle>
+    </CardHeader>
+    <CardContent className="flex flex-col items-start gap-4">
+      <slot />
+    </CardContent>
+  </Card>
+</main>
