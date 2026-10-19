@@ -53,11 +53,11 @@ const { title, description = 'Tools for game nights with friends.' } = Astro.pro
       // the new pod during a rolling update) reloads the page, once per page and release, so a
       // file that is missing for good can't loop. Astro has already retried the import once.
       (function () {
-        function reloadOnce(tag) {
+        function reloadOnce() {
           try {
             var key = 'ms.skew:' + location.pathname;
             var meta = document.querySelector('meta[name="service-version"]');
-            var value = (meta && meta.content) || tag;
+            var value = (meta && meta.content) || 'unversioned';
             if (sessionStorage.getItem(key) === value) return;
             sessionStorage.setItem(key, value);
           } catch (e) {
@@ -70,12 +70,12 @@ const { title, description = 'Tools for game nights with friends.' } = Astro.pro
         document.addEventListener('astro:hydration-error', function (e) {
           var d = e.detail || {};
           if (d.error instanceof TypeError && /module/i.test(d.error.message) && d.componentUrl) {
-            reloadOnce(d.componentUrl);
+            reloadOnce();
           }
         });
         window.addEventListener('vite:preloadError', function (e) {
           e.preventDefault();
-          reloadOnce('preload');
+          reloadOnce();
         });
       })();
     </script>
