@@ -175,3 +175,14 @@ reason = "childless only for a request without a session: no session load or int
 service = "frontend"
 name = "GET /account-deleted"
 reason = "childless only for a request without a session: no session load or introspect"
+
+# A page's path with a trailing slash: a redirect to the page, one entry per page as above.
+[[leaf]]
+service = "frontend"
+name = "GET /asshole/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /account-deleted/"
+reason = "a redirect to the page without the slash: nothing of ours inside"

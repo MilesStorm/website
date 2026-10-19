@@ -19,7 +19,7 @@ fn page(body: &str) -> String {
 }
 
 /// A build in a directory of its own, removed when dropped: every page and status page (their
-/// file name as the body) and one asset.
+/// file name as the body) and one asset, with a brotli copy.
 struct Dist(PathBuf);
 
 impl Dist {
@@ -31,6 +31,7 @@ impl Dist {
             std::fs::write(dir.join(file), page(file)).unwrap();
         }
         std::fs::write(dir.join("_astro/app.Ab12.js"), "console.log(1)").unwrap();
+        std::fs::write(dir.join("_astro/app.Ab12.js.br"), "brotli").unwrap();
         Self(dir)
     }
 
@@ -148,18 +149,25 @@ fn the_build_must_have_exactly_the_pages() {
     assert!(Built::load(&dist.0.join("nowhere")).is_err());
 }
 
-#[test]
-fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
+#[tokio::test]
+async fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
     use dioxus::prelude::*;
     let _public = Public::new("pages");
     let dist = Dist::new("mount");
     for built in [None, Some(dist.built())] {
+        let astro = built.is_some();
         // axum panics on overlapping routes when the router is built.
         let router = axum::Router::new()
             .serve_dioxus_application(ServeConfig::default(), crate::App)
             .route("/ws/arcane", axum::routing::get(|| async {}))
             .merge(crate::json_api::router());
-        let _ = super::mount(router, built).unwrap();
+        let app = super::mount(router, built).unwrap();
+        if astro {
+            // A page's path with a slash goes to the page, never to Dioxus's fallback.
+            let res = app.oneshot(Request::get("/asshole/?a=1").body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
+            assert_eq!(res.headers()[header::LOCATION], "/asshole?a=1");
+        }
     }
 }
 
@@ -179,7 +187,7 @@ async fn pages_and_astro_files_are_served_and_nothing_else() {
     let asshole = site.get("/asshole").await;
     assert!(String::from_utf8(asshole.bytes).unwrap().contains("<body>asshole.html</body>"));
 
-    for path in ["/index.html", "/asshole.html", "/404.html", "/_astro/../index.html", "/_astro/missing.js", "/asshole/"] {
+    for path in ["/index.html", "/asshole.html", "/404.html", "/_astro/../index.html", "/_astro/missing.js", "/_astro/"] {
         assert_eq!(site.get(path).await.status, StatusCode::NOT_FOUND, "{path}");
     }
     let asset = site.get("/_astro/app.Ab12.js").await;
@@ -203,6 +211,32 @@ async fn cache_headers_keep_pages_private_and_files_forever() {
     assert_eq!(asset.headers()[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
     let missing = get("/_astro/missing.js").await;
     assert!(missing.headers().get(header::CACHE_CONTROL).is_none());
+
+    // A revalidation keeps the file cacheable.
+    let modified = asset.headers()[header::LAST_MODIFIED].clone();
+    let req = Request::get("/_astro/app.Ab12.js").header(header::IF_MODIFIED_SINCE, modified).body(Body::empty()).unwrap();
+    let not_modified = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(not_modified.headers()[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
+}
+
+#[tokio::test]
+async fn astro_files_go_compressed_when_the_browser_takes_it() {
+    let dist = Dist::new("compressed");
+    let app = super::mount(axum::Router::new(), Some(dist.built())).unwrap();
+    let req = Request::get("/_astro/app.Ab12.js").header(header::ACCEPT_ENCODING, "gzip, br").body(Body::empty()).unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.headers()[header::CONTENT_ENCODING], "br");
+    assert_eq!(res.headers()[header::VARY], "accept-encoding");
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&body[..], b"brotli");
+
+    // Without brotli (and no gzip copy here): the file as it is.
+    let req = Request::get("/_astro/app.Ab12.js").header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert!(res.headers().get(header::CONTENT_ENCODING).is_none());
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&body[..], b"console.log(1)");
 }
 
 #[tokio::test]
@@ -240,6 +274,9 @@ fn every_public_page_is_a_leaf_span() {
     for page in api_types::PAGES.iter().filter(|p| p.access == api_types::Access::Public) {
         let name = format!("GET {}", page.path.as_str());
         assert!(leaf(&name), "tracing/leaf_spans.toml has no [[leaf]] {name:?}: an anonymous request for it has no children");
+        if page.path.as_str() != "/" {
+            assert!(leaf(&format!("{name}/")), "tracing/leaf_spans.toml has no [[leaf]] \"{name}/\": its redirect has no children");
+        }
     }
     assert!(leaf("GET /_astro/*"), "no [[leaf]] for Astro's files");
 }

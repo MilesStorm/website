@@ -24,7 +24,7 @@ RUN cp src/api/schema.d.ts /tmp/schema.d.ts && \
     cmp src/api/schema.d.ts /tmp/schema.d.ts && \
     npm run vendor && \
     npx astro check && \
-    npx astro build
+    npm run build
 
 # ---- bff: the server (and, for now, the Dioxus pages) ----
 FROM rust:1-trixie AS bff

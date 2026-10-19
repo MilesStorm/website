@@ -2,7 +2,8 @@ name: checks
 
 # Clippy and the tests of every service, on every push and pull request (TRACING.md, "Checks").
 # No path filters, so the jobs can be required checks. ai_pipeline builds without CUDA (burn
-# loads it at run time) and no test needs a GPU, so all three run on GitHub's runners.
+# loads it at run time) and no test needs a GPU, so it runs on GitHub's runners; e2e builds the
+# image on eta (below).
 
 on:
   push:
@@ -64,15 +65,27 @@ jobs:
   # The built image, as it runs, in a browser: every page for every kind of viewer, the navbar
   # without JavaScript, theme and cookie notice, and axe (no serious or critical violations).
   # Auth and SurrealDB are stand-ins (web/e2e/fake-upstreams.mjs).
+  #
+  # Built on eta, like the release images: its Docker keeps unchanged layers and the cargo cache
+  # mounts between runs, where a GitHub runner would build Rust and the wasm from nothing. Only
+  # for pushes (only people who can write to this repository push), never for a pull request's
+  # event, so no one else's code runs on eta; a pull request's commits are checked by their push.
+  # The browser runs in Playwright's image, so eta needs no browser packages.
   e2e:
     name: e2e
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, eta]
+    concurrency:
+      group: e2e-eta
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: services/frontend/web
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
       - name: Build the image
         uses: docker/build-push-action@v5
         with:
@@ -80,17 +93,18 @@ jobs:
           load: true
           tags: frontend:e2e
           build-args: GIT_SHA=${{ github.sha }}
-          cache-from: type=gha,scope=frontend-e2e
-          cache-to: type=gha,mode=max,scope=frontend-e2e
       - name: No Node in the image
         run: docker run --rm --entrypoint sh frontend:e2e -c '! command -v node && test -z "$(find / -xdev -name node -type f 2>/dev/null)"'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - run: e2e/serve.sh
-      - run: npx playwright test
+      - name: Playwright
+        run: |
+          version=$(node -p 'require("./package-lock.json").packages["node_modules/@playwright/test"].version')
+          docker run --rm --network host --ipc host --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=1 \
+            -v "$PWD:/work" -w /work "mcr.microsoft.com/playwright:v$version-noble" \
+            sh -c 'npm ci --no-audit --no-fund && npx playwright test'
       - name: Server and stand-in logs
         if: failure()
         run: docker logs frontend-e2e; cat e2e/fake.log
@@ -100,7 +114,7 @@ jobs:
           name: playwright-report
           path: services/frontend/web/playwright-report
       - if: always()
-        run: e2e/serve.sh stop
+        run: e2e/serve.sh stop; docker image rm frontend:e2e >/dev/null 2>&1 || true
 
   # The browser extension's scripts, type-checked (tsconfig.json); a job of its own so it runs
   # beside the frontend's.

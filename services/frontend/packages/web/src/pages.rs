@@ -200,17 +200,38 @@ pub fn mount<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Option<
             anyhow::bail!("page {} needs a guard: only public pages are served", page.path.as_str());
         }
         router = router.route(page.path.as_str(), axum::routing::get(serve).with_state((built.clone(), page.file)));
+        // `/asshole/` is the same page: sent to its one address, rather than to Dioxus's
+        // fallback, which would render the Dioxus page under the flag.
+        if page.path.as_str() != "/" {
+            router = router.route(&format!("{}/", page.path.as_str()), axum::routing::get(canonical));
+        }
     }
+    let files = tower_http::services::ServeDir::new(&built.dir).precompressed_br().precompressed_gzip();
     let assets = Router::new()
-        .route_service("/_astro/{*path}", tower_http::services::ServeDir::new(&built.dir))
+        .route_service("/_astro/{*path}", files)
         .layer(axum::middleware::map_response(immutable));
     Ok(router.merge(assets))
 }
 
-/// Astro's file names carry a hash of their content, so a file never changes.
+/// A page's path with a trailing slash: a permanent redirect to the path without it, keeping
+/// the query.
+async fn canonical(uri: axum::http::Uri) -> axum::response::Redirect {
+    let path = uri.path().trim_end_matches('/');
+    let to = match uri.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_owned(),
+    };
+    axum::response::Redirect::permanent(&to)
+}
+
+/// Astro's file names carry a hash of their content, so a file never changes: cached for good,
+/// a 304 included (a revalidation answered without the header would leave it uncacheable). The
+/// body may be brotli or gzip, chosen by the request's `Accept-Encoding`.
 async fn immutable(mut res: Response) -> Response {
-    if res.status().is_success() {
-        res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+    if res.status().is_success() || res.status() == axum::http::StatusCode::NOT_MODIFIED {
+        let headers = res.headers_mut();
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+        headers.insert(axum::http::header::VARY, HeaderValue::from_static("accept-encoding"));
     }
     res
 }

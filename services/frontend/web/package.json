@@ -8,7 +8,7 @@
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node scripts/precompress.mjs",
     "check": "astro check",
     "test": "vitest run",
     "e2e": "playwright test",
