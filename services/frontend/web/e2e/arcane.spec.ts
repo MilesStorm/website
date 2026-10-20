@@ -22,8 +22,7 @@ if (!STAGING) {
     for (const colorScheme of ['light', 'dark'] as const) {
       await page.emulateMedia({ colorScheme });
       await reading(page);
-      await expect(page.getByText('Last roll:')).toBeVisible();
-      await expect(page.getByText(/^16$/)).toBeVisible();
+      await expect(page.locator('p', { hasText: 'Last roll:' })).toHaveText('Last roll: 16');
       // The overlay has the detection's box on it.
       const drawn = await page.locator('canvas[aria-hidden]').evaluate((c: HTMLCanvasElement) => {
         const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
@@ -53,7 +52,7 @@ if (!STAGING) {
     );
     await reading(page);
     const roll = await rolled;
-    expect(roll.roll_id).toMatch(/^e2e-\d+-\d+$/);
+    expect(roll.roll_id).toMatch(/^[0-9a-f]+-[0-9a-f]{8}$/);
     expect(roll.total).toBe(16);
     const me = await watcher.evaluate(async () => (await fetch('/api/arcane/me')).json());
     expect(me).toMatchObject({ logged_in: true, has_arcane: true });

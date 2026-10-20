@@ -332,7 +332,9 @@ ai.on('upgrade', (req, socket) => {
       frames += 1;
       socket.write(textFrame(JSON.stringify({ ...FRAME, frame_seq: frames })));
       if (frames % 5 === 0) {
-        socket.write(textFrame(JSON.stringify({ ...ROLL, roll_id: `e2e-${conn}-${frames}`, frame_seq: frames, ts: Date.now() })));
+        // ai_pipeline's roll id: milliseconds and 8 more digits, in hex.
+        const rollId = `${Date.now().toString(16)}-${(conn * 100000 + frames).toString(16).padStart(8, '0')}`;
+        socket.write(textFrame(JSON.stringify({ ...ROLL, roll_id: rollId, frame_seq: frames, ts: Date.now() })));
       }
     }
   });

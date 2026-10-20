@@ -208,7 +208,7 @@ export function ArcaneCamera() {
         </CardContent>
       </Card>
       {debug && (
-        <div className="flex w-full max-w-2xl flex-col gap-2 rounded-xl bg-muted p-3 font-mono text-xs">
+        <div className="flex w-full max-w-2xl flex-col gap-2 rounded-xl border bg-card p-3 font-mono text-xs">
           <div className="flex flex-wrap items-center gap-4">
             <span className="text-muted-foreground">frame_ms</span>
             <span className="font-bold tabular-nums">{frameMs}ms</span>
