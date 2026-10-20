@@ -11,6 +11,11 @@ const PERMISSIONS: Record<KnownPermission, true> = {
   manage_permissions: true,
 };
 
+/** Whether auth's permission `name` is one this site knows (and checks somewhere). */
+export function isKnownPermission(name: string): name is KnownPermission {
+  return Object.hasOwn(PERMISSIONS, name);
+}
+
 export const GATE_CSS = [
   'html:not([data-session="in"]) [data-gate="in"]{display:none!important}',
   'html[data-session="in"] [data-gate="out"]{display:none!important}',
