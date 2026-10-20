@@ -4,16 +4,23 @@
 //! IntoApiResponse`, which aide can't see through. The Dioxus server functions call the same
 //! functions, so both keep the `bff.<fn>` spans.
 //!
-//! Access is per route group, as layers ([`access`]): `/api/account/*` needs a login; the
-//! session routes are public. Every non-GET request must come from the site itself
-//! ([`same_origin`]). Unknown `/api/*` paths and methods get the error envelope too.
+//! Access is per route group, as layers ([`access`]): `/api/account/*` needs a login, and its
+//! sharing settings the `arcane` permission; the session, password, email, deletion and invite
+//! routes are public (a code in the body authorizes them). The one exception under
+//! `/api/account/` is deleting shared pictures, which needs only the session's username. Every
+//! non-GET request must come from the site itself ([`same_origin`]). Unknown `/api/*` paths and
+//! methods get the error envelope too.
 
-use aide::axum::routing::{get, get_with, post, put};
+use aide::axum::routing::{delete, get, get_with, post, put};
 use aide::axum::ApiRouter;
 use aide::openapi::{Info, OpenApi};
 use aide::NoApi;
 use aide::{OperationInput, OperationOutput};
-use api_types::{Access, AccountInfo, Bootstrap, DisplayName, ErrorCode, LoggedIn, Login, Registration};
+use api_types::{
+    Access, AccountInfo, Bootstrap, Code, Confirmed, Deleted, Deletion, DirectDeletion, DisplayName, Done, EmailSent,
+    ErrorCode, ForgotPassword, LoggedIn, Login, Opened, PasswordReset, Registration, Sharing, SharingState,
+};
+use axum::Extension;
 use axum::extract::{FromRequest, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::{Method, StatusCode};
@@ -23,7 +30,8 @@ use axum::Json;
 use serde::de::DeserializeOwned;
 use tower_sessions::Session;
 
-use crate::account;
+use crate::rolls::RollHub;
+use crate::{account, emails, invites, sharing};
 
 /// An [`api_types::ApiError`] as a response: its status and the `{error, message}` body.
 #[derive(Debug)]
@@ -74,9 +82,9 @@ fn rejections(
 }
 
 /// A rejected request body as an `invalid` error with the rejection's status (400, 413, 415,
-/// 422). The rejection's text (serde's, naming fields and types) goes only to the log.
-fn rejected(status: StatusCode, text: String) -> ApiError {
-    tracing::info!(status = status.as_u16(), reason = %text, "API request body rejected");
+/// 422). Only the status is logged: the rejection's text can quote what was sent.
+fn rejected(status: StatusCode) -> ApiError {
+    tracing::info!(status = status.as_u16(), "API request body rejected");
     api_types::ApiError::new(ErrorCode::Invalid, "The request body isn't valid.").with_status(status.as_u16()).into()
 }
 
@@ -89,7 +97,7 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
     async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
         match Json::<T>::from_request(req, state).await {
             Ok(Json(body)) => Ok(Self(body)),
-            Err(e) => Err(rejected(e.status(), e.body_text())),
+            Err(e) => Err(rejected(e.status())),
         }
     }
 }
@@ -116,7 +124,7 @@ impl<S: Send + Sync> FromRequest<S> for Bytes {
     async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
         match axum::body::Bytes::from_request(req, state).await {
             Ok(bytes) => Ok(Self(bytes)),
-            Err(e) => Err(rejected(e.status(), e.body_text())),
+            Err(e) => Err(rejected(e.status())),
         }
     }
 }
@@ -146,6 +154,14 @@ impl Viewer {
             api::Viewer::User { token, .. } => Ok(token),
             api::Viewer::Anonymous => Err(api_types::ApiError::logged_out().into()),
             api::Viewer::Degraded { .. } => Err(api_types::ApiError::login_unavailable().into()),
+        }
+    }
+
+    /// The session's username, also while auth can't be asked; `logged_out` without one.
+    pub fn username(&self) -> Result<&str, ApiError> {
+        match &self.0 {
+            api::Viewer::User { username, .. } | api::Viewer::Degraded { username } => Ok(username),
+            api::Viewer::Anonymous => Err(api_types::ApiError::logged_out().into()),
         }
     }
 }
@@ -287,6 +303,91 @@ async fn remove_picture(viewer: Viewer) -> Result<Json<AccountInfo>, ApiError> {
     Ok(Json(account::remove_picture(viewer.token()?).await?))
 }
 
+// ---- Account emails ----
+//
+// The codes from emailed links come in the body, never the URL. The calls a code alone
+// authorizes are public, so a link works on a logged-out device too.
+
+/// The roll hub, for forgetting a deleted account's held rolls (absent in tests).
+type Hub = NoApi<Option<Extension<RollHub>>>;
+
+/// `POST /api/account/email/send-confirmation`.
+async fn send_confirmation(viewer: Viewer) -> Result<Json<EmailSent>, ApiError> {
+    Ok(Json(EmailSent { email: emails::server::send_confirmation(viewer.token()?).await? }))
+}
+
+/// `POST /api/email/confirm`.
+async fn confirm_email(Body(code): Body<Code>) -> Result<Json<Confirmed>, ApiError> {
+    Ok(Json(Confirmed { username: emails::server::confirm(&code.code).await? }))
+}
+
+/// `POST /api/password/forgot`: answered the same whether or not the account exists.
+async fn forgot_password(Body(f): Body<ForgotPassword>) -> Result<NoContent, ApiError> {
+    emails::server::forgot(&f.login).await?;
+    Ok(NoContent)
+}
+
+/// `POST /api/password/reset`.
+async fn reset_password(NoApi(session): NoApi<Session>, Body(r): Body<PasswordReset>) -> Result<Json<Done>, ApiError> {
+    Ok(Json(emails::server::reset(Some(&session), &r.code, &r.password).await?))
+}
+
+/// `POST /api/account/deletion/request`.
+async fn request_deletion(viewer: Viewer) -> Result<Json<EmailSent>, ApiError> {
+    Ok(Json(EmailSent { email: emails::server::request_deletion(viewer.token()?).await? }))
+}
+
+/// `POST /api/deletion/check`.
+async fn check_deletion(Body(code): Body<Code>) -> Result<Json<Deletion>, ApiError> {
+    Ok(Json(emails::server::deletion(&code.code).await?))
+}
+
+/// `POST /api/deletion/confirm`.
+async fn confirm_deletion(NoApi(session): NoApi<Session>, NoApi(hub): Hub, Body(code): Body<Code>) -> Result<Json<Done>, ApiError> {
+    let hub = hub.map(|Extension(h)| h);
+    Ok(Json(emails::server::delete(Some(&session), hub.as_ref(), &code.code).await?))
+}
+
+/// `POST /api/account/deletion/direct`.
+async fn delete_direct(
+    viewer: Viewer,
+    NoApi(session): NoApi<Session>,
+    NoApi(hub): Hub,
+    Body(d): Body<DirectDeletion>,
+) -> Result<Json<Done>, ApiError> {
+    let hub = hub.map(|Extension(h)| h);
+    Ok(Json(emails::server::delete_direct(Some(&session), hub.as_ref(), viewer.token()?, &d.confirm).await?))
+}
+
+// ---- Invites ----
+
+/// `POST /api/invites/open`: joins when logged in, else keeps the invite for after logging in.
+async fn open_invite(NoApi(session): NoApi<Session>, Body(code): Body<Code>) -> Result<Json<Opened>, ApiError> {
+    Ok(Json(invites::server::open(&session, &code.code).await?))
+}
+
+// ---- Sharing roll pictures ----
+
+/// `GET /api/account/sharing`.
+async fn get_sharing(viewer: Viewer) -> Result<Json<SharingState>, ApiError> {
+    Ok(Json(sharing::server::sharing(viewer.token()?).await?))
+}
+
+/// `PUT /api/account/sharing`.
+async fn set_sharing(viewer: Viewer, Body(s): Body<Sharing>) -> Result<Json<SharingState>, ApiError> {
+    Ok(Json(sharing::server::set_sharing(viewer.token()?, s.share).await?))
+}
+
+/// `DELETE /api/account/sharing/data`: needs only the session's username, so it works without
+/// the `arcane` permission and while auth is down.
+async fn delete_shared(viewer: Viewer, NoApi(hub): Hub) -> Result<Json<Deleted>, ApiError> {
+    let user = viewer.username()?.to_string();
+    let token = viewer.token().ok().map(str::to_string);
+    let hub = hub.map(|Extension(h)| h);
+    let n = sharing::server::delete_shared(user, token.as_deref(), hub).await?;
+    Ok(Json(Deleted { deleted: n as u64 }))
+}
+
 /// The routes, with their documentation. Builds without Redis, env or network.
 fn api_router() -> ApiRouter {
     let picture_limit = || axum::extract::DefaultBodyLimit::max(account::PICTURE_MAX_UPLOAD);
@@ -309,13 +410,28 @@ fn api_router() -> ApiRouter {
             "/api/profile/picture",
             axum::routing::get(account::get_picture).post(account::upload_picture).layer(picture_limit()),
         )
+        .api_route("/api/account/email/send-confirmation", post(send_confirmation))
+        .api_route("/api/account/deletion/request", post(request_deletion))
+        .api_route("/api/account/deletion/direct", post(delete_direct))
         .route_layer(from_fn_with_state(Access::LoggedIn, access));
-    let session = ApiRouter::new()
+    let arcane = ApiRouter::new()
+        .api_route("/api/account/sharing", get(get_sharing).put(set_sharing))
+        .route_layer(from_fn_with_state(Access::Perm(api_types::KnownPermission::Arcane), access));
+    // Public: the handlers take what they need (a code, the session's username).
+    let public = ApiRouter::new()
         .api_route("/api/session", get(session).delete(logout))
         .api_route("/api/session/login", post(login))
         .api_route("/api/session/register", post(register))
+        .api_route("/api/email/confirm", post(confirm_email))
+        .api_route("/api/password/forgot", post(forgot_password))
+        .api_route("/api/password/reset", post(reset_password))
+        .api_route("/api/deletion/check", post(check_deletion))
+        .api_route("/api/deletion/confirm", post(confirm_deletion))
+        .api_route("/api/invites/open", post(open_invite))
+        // Deleting what one shared must not depend on auth (see the handler).
+        .api_route("/api/account/sharing/data", delete(delete_shared))
         .route_layer(from_fn_with_state(Access::Public, access));
-    session.merge(account).route_layer(from_fn(same_origin))
+    public.merge(account).merge(arcane).route_layer(from_fn(same_origin))
 }
 
 /// The API's routes, and its OpenAPI document.
