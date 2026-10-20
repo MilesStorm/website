@@ -157,11 +157,14 @@ impl std::fmt::Display for Permission {
 }
 
 /// Who may use a route. Serialized for the `x-pages` list of the OpenAPI document: `"public"`,
-/// `"logged_in"` or `{"perm": "arcane"}`.
+/// `"guest_only"`, `"logged_in"` or `{"perm": "arcane"}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Access {
     Public,
+    /// A page for the logged out (logging in, signing up): anyone may use it, and a page sends
+    /// the logged in to `/` instead.
+    GuestOnly,
     LoggedIn,
     Perm(KnownPermission),
 }
@@ -192,6 +195,18 @@ macro_rules! pages {
             pub fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $path,)*
+                }
+            }
+        }
+
+        /// The page at exactly `s`, as deserializing reads it: anything else is `Err`.
+        impl std::str::FromStr for PagePath {
+            type Err = ();
+
+            fn from_str(s: &str) -> Result<Self, ()> {
+                match s {
+                    $($path => Ok(Self::$variant),)*
+                    _ => Err(()),
                 }
             }
         }
@@ -874,9 +889,26 @@ mod tests {
         for page in PAGES {
             assert_eq!(serde_json::to_value(page.path).unwrap(), json!(page.path.as_str()));
             assert_eq!(serde_json::from_value::<PagePath>(json!(page.path.as_str())).unwrap(), page.path);
+            assert_eq!(page.path.as_str().parse::<PagePath>(), Ok(page.path));
         }
-        for bad in ["//evil.com", "/\\evil.com", "https://milesstorm.com/", "/api/session", "/nope", "", "/asshole/"] {
+        for bad in [
+            "//evil.com",
+            "/\\evil.com",
+            "https://milesstorm.com/",
+            "/api/session",
+            "/nope",
+            "",
+            "/asshole/",
+            " /asshole",
+            "/ASSHOLE",
+            "/asshole?x=1",
+            "/asshole#x",
+            "%2Fasshole",
+            "/./asshole",
+            "javascript:alert(1)",
+        ] {
             assert!(serde_json::from_value::<PagePath>(json!(bad)).is_err(), "{bad}");
+            assert!(bad.parse::<PagePath>().is_err(), "{bad}");
         }
     }
 
@@ -891,8 +923,15 @@ mod tests {
         assert_eq!(paths.len(), PAGES.len());
         assert_eq!(files.len(), PAGES.len() + STATUS_PAGES.len());
         assert!(files.iter().all(|f| f.ends_with(".html") && !f.contains('/')));
+        // A path goes into `/login?next=` as it is: nothing in it needs escaping in a query.
+        for page in PAGES {
+            let path = page.path.as_str();
+            assert!(path.starts_with('/') && !path.starts_with("//"), "{path}");
+            assert!(path.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'/' || b == b'-'), "{path}");
+        }
         assert_eq!(serde_json::to_value(Access::Perm(KnownPermission::Arcane)).unwrap(), json!({"perm": "arcane"}));
         assert_eq!(serde_json::to_value(Access::LoggedIn).unwrap(), json!("logged_in"));
+        assert_eq!(serde_json::to_value(Access::GuestOnly).unwrap(), json!("guest_only"));
     }
 
     #[test]

@@ -8054,6 +8054,7 @@ dependencies = [
  "anyhow",
  "api",
  "api-types",
+ "async-trait",
  "axum",
  "axum-prometheus",
  "axum-tracing-opentelemetry",

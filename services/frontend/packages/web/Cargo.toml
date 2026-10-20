@@ -67,6 +67,8 @@ testcontainers-modules = { version = "0.15", features = ["redis"] }
 tower = { version = "0.5", features = ["util"] }
 # Reads tracing/leaf_spans.toml (src/pages/tests.rs).
 toml = "0.8"
+# A session store that can't be read (src/pages/tests.rs): SessionStore is an #[async_trait] trait.
+async-trait = "0.1.89"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

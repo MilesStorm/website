@@ -52,7 +52,7 @@ fn main() -> std::process::ExitCode {
         // verify stage; the server checks the same at startup with FRONTEND_UI=astro).
         Some("check-pages") => {
             let dir = std::path::PathBuf::from(args.next().unwrap_or_else(|| "web/dist".into()));
-            return match pages::Built::load(&dir) {
+            return match pages::Built::load(&dir, api_types::PAGES) {
                 Ok(_) => {
                     println!("{}: every page in PAGES and no other", dir.display());
                     std::process::ExitCode::SUCCESS
@@ -371,7 +371,7 @@ async fn router(
             "/metrics",
             get(move || async move { metric_handle.render() }),
         );
-    let router = pages::mount(routes, astro)?
+    let router = pages::mount(routes, astro)
         .layer(axum::middleware::from_fn(render_span))
         .layer(axum::Extension(roll_hub))
         .layer(axum::middleware::from_fn(no_store))
@@ -727,19 +727,33 @@ fn reply_info(text: &str) -> (bool, Option<u64>) {
 const OAUTH_CSRF_KEY: &str = "oauth_csrf_state";
 #[cfg(not(target_arch = "wasm32"))]
 const OAUTH_PROVIDER_KEY: &str = "oauth_provider";
+/// The page to land on after the login: a [`api_types::PagePath`], never the browser's string.
+#[cfg(not(target_arch = "wasm32"))]
+const OAUTH_NEXT_KEY: &str = "oauth_next";
 
 /// Begin the OAuth flow for `provider`. Asks auth (cluster-internal) for the provider's
 /// authorization URL, stashes the CSRF state in the BFF session, and redirects the browser.
+/// `?next=` is kept in the session for the callback when it is one of the site's pages; anything
+/// else is dropped (logged), and the login goes on.
 #[cfg(not(target_arch = "wasm32"))]
 async fn oauth_start(
     axum::extract::Path(provider): axum::extract::Path<String>,
     session: tower_sessions::Session,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> axum::response::Response {
     use axum::response::{IntoResponse, Redirect};
 
     if provider != "github" && provider != "google" {
         return Redirect::to("/login?error=unknown_provider").into_response();
     }
+    let next = params.get("next").and_then(|next| match next.parse::<api_types::PagePath>() {
+        Ok(page) => Some(page),
+        Err(()) => {
+            let shown: String = next.chars().take(64).collect();
+            tracing::warn!(next = ?shown, %provider, "oauth_start: next isn't a page of the site; dropped");
+            None
+        }
+    });
 
     match api::start_oauth(&provider).await {
         Ok((auth_url, state)) => {
@@ -749,6 +763,15 @@ async fn oauth_start(
             }
             if let Err(e) = session.insert(OAUTH_PROVIDER_KEY, &provider).await {
                 tracing::error!(error = %e, %provider, "oauth_start: failed to write provider");
+                return Redirect::to("/login?error=session_failed").into_response();
+            }
+            // An earlier start's page goes either way.
+            let stored = match next {
+                Some(page) => session.insert(OAUTH_NEXT_KEY, page).await,
+                None => session.remove::<api_types::PagePath>(OAUTH_NEXT_KEY).await.map(|_| ()),
+            };
+            if let Err(e) = stored {
+                tracing::error!(error = %e, %provider, "oauth_start: failed to write next");
                 return Redirect::to("/login?error=session_failed").into_response();
             }
             Redirect::to(&auth_url).into_response()
@@ -761,7 +784,8 @@ async fn oauth_start(
 }
 
 /// Provider callback. Validates CSRF state, asks auth to exchange the code, and
-/// stores the resulting opaque token + username on the BFF session.
+/// stores the resulting opaque token + username on the BFF session. Lands on
+/// [`json_api::next_page`]: the invite page, else the start's `next`, else `/`.
 #[cfg(not(target_arch = "wasm32"))]
 async fn oauth_callback(
     axum::extract::Path(provider): axum::extract::Path<String>,
@@ -781,6 +805,8 @@ async fn oauth_callback(
     let expected_provider: Option<String> = session.get(OAUTH_PROVIDER_KEY).await.ok().flatten();
     let _ = session.remove::<String>(OAUTH_CSRF_KEY).await;
     let _ = session.remove::<String>(OAUTH_PROVIDER_KEY).await;
+    // A page that no longer exists (stored before a deploy) reads as none.
+    let next: Option<api_types::PagePath> = session.remove(OAUTH_NEXT_KEY).await.ok().flatten();
 
     if expected_state.as_deref() != Some(&state) || expected_provider.as_deref() != Some(&provider)
     {
@@ -800,14 +826,11 @@ async fn oauth_callback(
                 tracing::error!(error = %e, %provider, "oauth_callback: failed to write username");
                 return Redirect::to("/login?error=session_failed").into_response();
             }
-            // Came from an invite link: back to it (the invite was just redeemed).
-            match api::redeem_pending_invite(&session, &token).await {
-                Some(page) => {
-                    let _ = session.remove::<String>(api::INVITE_RETURN_KEY).await;
-                    Redirect::to(&page).into_response()
-                }
-                None => Redirect::to("/").into_response(),
-            }
+            // Came from an invite link: back to it (the invite was just redeemed). Only this
+            // login's: an earlier login's invite page, never taken, is dropped first.
+            let _ = session.remove::<String>(api::INVITE_RETURN_KEY).await;
+            api::redeem_pending_invite(&session, &token).await;
+            Redirect::to(&json_api::next_page(&session, next).await).into_response()
         }
         Err(e) if e.contains("email_exists") || e.contains("Email already in use") => {
             Redirect::to("/login?error=email_exists").into_response()
@@ -1076,5 +1099,78 @@ mod tests {
         let tc = record.record.trace_context().expect("no trace context");
         assert_eq!(tc.trace_id, sc.trace_id());
         assert_eq!(tc.span_id, sc.span_id());
+    }
+
+    /// OAuth leaves the site, so `?next=` waits in the session: the callback lands on it, on the
+    /// invite page when an invite waits, and on `/` when it wasn't one of the site's pages.
+    #[tokio::test]
+    async fn an_oauth_login_lands_on_the_next_page_it_started_with() {
+        use crate::json_api::tests::Site;
+        use axum::http::{Method, StatusCode};
+        let app = || {
+            axum::Router::new()
+                .route("/oauth/start/{provider}", axum::routing::get(super::oauth_start))
+                .route("/oauth/callback/{provider}", axum::routing::get(super::oauth_callback))
+                .merge(crate::json_api::router())
+        };
+        /// Starts with `query`, comes back from the provider, and says where the login landed.
+        async fn round_trip(site: &mut Site, query: &str) -> String {
+            let start = format!("/oauth/start/github{query}");
+            let reply = site.get(&start).await;
+            assert_eq!(reply.status, StatusCode::SEE_OTHER, "{start}");
+            // The provider's URL is auth's, untouched: `next` never goes to the provider.
+            assert_eq!(reply.headers[axum::http::header::LOCATION], "https://github.test/authorize?state=st");
+            let reply = site.get("/oauth/callback/github?code=good&state=st").await;
+            assert_eq!(reply.status, StatusCode::SEE_OTHER, "{start}");
+            reply.headers[axum::http::header::LOCATION].to_str().unwrap().to_string()
+        }
+
+        let mut site = Site::serving(app()).await;
+        assert_eq!(round_trip(&mut site, "?next=/asshole").await, "/asshole");
+        assert_eq!(round_trip(&mut site, "?next=%2Faccount-deleted").await, "/account-deleted");
+        // Logged in now, by the callback.
+        assert_eq!(site.get("/api/session").await.body["viewer"]["username"], "user-all");
+        // Each start replaces the last one's page.
+        assert_eq!(round_trip(&mut site, "").await, "/");
+        for hostile in [
+            "//evil.com",
+            "https://evil.com/",
+            "/\\evil.com",
+            "%2F%2Fevil.com",
+            "/asshole/",
+            "/api/session",
+            "/login",
+            "javascript:alert(1)",
+            "/asshole%0d%0aLocation:%20https://evil.com",
+        ] {
+            assert_eq!(round_trip(&mut site, &format!("?next={hostile}")).await, "/", "{hostile}");
+        }
+        drop(site);
+
+        // An invite opened while logged out wins over `next`.
+        let mut site = Site::serving(app()).await;
+        let opened = site.json(Method::POST, "/api/invites/open", serde_json::json!({"code": "join"})).await;
+        assert_eq!(opened.body["kind"], "needs_account");
+        assert_eq!(round_trip(&mut site, "?next=/asshole").await, "/invite#join");
+        // Once.
+        assert_eq!(round_trip(&mut site, "?next=/asshole").await, "/asshole");
+
+        // A callback that fails its state check forgets the page too.
+        assert_eq!(site.get("/oauth/start/github?next=/asshole").await.status, StatusCode::SEE_OTHER);
+        assert_eq!(site.session_data().await["oauth_next"], "/asshole");
+        let forged = site.get("/oauth/callback/github?code=good&state=forged").await;
+        assert_eq!(forged.headers[axum::http::header::LOCATION], "/login?error=csrf_mismatch");
+        let data = site.session_data().await;
+        assert!(!data.contains_key("oauth_next") && !data.contains_key("oauth_csrf_state"), "{data:?}");
+        drop(site);
+
+        // A password login redeemed an invite whose page was never taken (no after-login call):
+        // an OAuth login later lands on its own `next`, not on that old invite page.
+        let mut site = Site::serving(app()).await;
+        site.json(Method::POST, "/api/invites/open", serde_json::json!({"code": "join"})).await;
+        let login = site.json(Method::POST, "/api/session/login", serde_json::json!({"username": "tester", "password": "right"})).await;
+        assert_eq!(login.status, StatusCode::OK);
+        assert_eq!(site.session_data().await[api::INVITE_RETURN_KEY], "/invite#join");
+        assert_eq!(round_trip(&mut site, "?next=/asshole").await, "/asshole");
     }
 }

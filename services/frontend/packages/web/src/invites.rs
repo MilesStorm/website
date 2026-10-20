@@ -120,11 +120,10 @@ pub async fn open_invite(code: String) -> Result<Opened, ServerFnError> {
 #[tracing::instrument(name = "bff.after_login_path", skip_all, err)]
 pub async fn after_login_path() -> Result<String, ServerFnError> {
     let (session, _) = crate::emails::server::request()?;
-    let page: Option<String> = match session {
-        Some(s) => s.remove(api::INVITE_RETURN_KEY).await.ok().flatten(),
-        None => None,
-    };
-    Ok(page.unwrap_or_else(|| "/".into()))
+    Ok(match session {
+        Some(s) => crate::json_api::next_page(&s, None).await,
+        None => "/".into(),
+    })
 }
 
 #[cfg(test)]
