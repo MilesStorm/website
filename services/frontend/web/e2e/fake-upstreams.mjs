@@ -18,6 +18,8 @@ import { createServer } from 'node:http';
 
 const port = Number(process.env.FAKE_PORT ?? 4010);
 const site = process.env.SITE_URL ?? 'https://localhost:8443';
+/** The Enshrouded commands sent, newest first. */
+const enshroudedRecent = [];
 /** Display names set, and the roll-sharing choice, by token. */
 const names = {};
 const sharing = {};
@@ -69,6 +71,32 @@ const routes = {
   },
   'POST /internal/ark/num_players': ({ token }) =>
     kind(token) === 'all' ? [200, { restart_result: '', command_result: { NumPlayers: 3 } }] : [403, {}],
+  // Enshrouded: online, one player, a newer build on Steam. Commands go into the recent list,
+  // newest first; an account whose suffix starts with `busy` is told one is already under way.
+  'POST /internal/enshrouded/status': ({ token }) =>
+    kind(token) === 'all'
+      ? [
+          200,
+          {
+            state: 'Online',
+            players: { online: 1, max: 16, sessions: [600] },
+            version: '1269579',
+            uptime_secs: 90_000,
+            latest_build_at: Math.floor(Date.now() / 1000) - 9_000,
+            update_pending: true,
+            update_queued: false,
+            can_control: true,
+            recent: enshroudedRecent.slice(0, 10),
+            next_command_at: null,
+          },
+        ]
+      : [403, { error: 'forbidden' }],
+  'POST /internal/enshrouded/command': ({ token, cmd }) => {
+    if (kind(token) !== 'all') return [403, { error: 'forbidden' }];
+    if (String(token).startsWith('all-busy')) return [409, { error: 'busy' }];
+    enshroudedRecent.unshift({ name: `tester-${token}`, action: cmd, at: Math.floor(Date.now() / 1000) });
+    return [200, {}];
+  },
   'POST /internal/ark/command': ({ token }) =>
     kind(token) === 'all' ? [200, { restart_result: '', command_result: 'Started' }] : [403, {}],
   'POST /internal/register': ({ username }) =>
