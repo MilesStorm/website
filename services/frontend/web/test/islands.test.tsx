@@ -41,6 +41,8 @@ describe('the theme toggle', () => {
 
 describe('the cookie notice', () => {
   it('stays away once accepted', async () => {
+    // jsdom has no ResizeObserver; the notice's room is the next test's.
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     const { CookieConsent } = await import('@/islands/CookieConsent');
     const { unmount } = render(<CookieConsent />);
     await userEvent.click(await screen.findByRole('button', { name: 'Accept' }));
@@ -49,6 +51,29 @@ describe('the cookie notice', () => {
     unmount();
     render(<CookieConsent />);
     expect(screen.queryByRole('region', { name: 'Cookies' })).toBeNull();
+  });
+});
+
+describe("the cookie notice's room", () => {
+  it('pads the page by its height while open, and stops once it is gone', async () => {
+    let measured: ResizeObserverCallback | undefined;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          measured = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const { CookieConsent, CONSENT_HEIGHT } = await import('@/islands/CookieConsent');
+    render(<CookieConsent />);
+    const notice = await screen.findByRole('region', { name: 'Cookies' });
+    measured!([{ target: notice, borderBoxSize: [{ blockSize: 99.5, inlineSize: 300 }] } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    expect(document.documentElement.style.getPropertyValue(CONSENT_HEIGHT)).toBe('116px');
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(document.documentElement.style.getPropertyValue(CONSENT_HEIGHT)).toBe('');
   });
 });
 

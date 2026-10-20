@@ -7,7 +7,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from '@/components/ui/skeleton';
 import { FormAlert } from '@/components/FormAlert';
 import { client, type Schemas } from '@/api/client';
-import { attempt, type Outcome } from '@/lib/errors';
+import { attempt } from '@/lib/errors';
 import { CONFIRM, SENT, STATES, actionText, ago, busy, duration, playersOnline, type Command } from '@/lib/enshrouded';
 
 type Status = Schemas['EnshroudedStatus'];
@@ -29,11 +29,18 @@ const unixNow = () => Math.floor(Date.now() / 1000);
  * and the latest commands. Asked again every 10 seconds while the tab is visible, when it is
  * shown again, and after a command; the countdowns tick every second. */
 export function EnshroudedPanel() {
-  const [status, setStatus] = useState<Outcome<Status> | null>(null);
+  // The last status the server gave, and why the latest ask failed (shown above it): a failed
+  // poll keeps the panel, and an open confirmation, where they were.
+  const [status, setStatus] = useState<Status | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const [now, setNow] = useState(unixNow);
   const [command, setCommand] = useState<CommandUi>({ kind: 'idle' });
 
-  const refresh = useCallback(async () => setStatus(await attempt(client.GET('/api/enshrouded'))), []);
+  const refresh = useCallback(async () => {
+    const asked = await attempt(client.GET('/api/enshrouded'));
+    if (asked.ok) setStatus(asked.data);
+    setFailed(asked.ok ? null : asked.message);
+  }, []);
   useEffect(() => {
     void refresh();
     const tick = setInterval(() => setNow(unixNow()), 1000);
@@ -58,11 +65,14 @@ export function EnshroudedPanel() {
     await refresh();
   };
 
-  if (!status) return <Skeleton className="h-96 w-full rounded-xl" role="status" aria-label="Loading the server's status" />;
-  if (!status.ok) return <FormAlert message={status.message} />;
-  const s = status.data;
+  if (!status) {
+    if (failed) return <FormAlert message={failed} />;
+    return <Skeleton className="h-96 w-full rounded-xl" role="status" aria-label="Loading the server's status" />;
+  }
+  const s = status;
   return (
     <div className="flex flex-col gap-6">
+      <FormAlert message={failed} />
       <Header status={s} />
       <UpdateNotice status={s} now={now} />
       <Players status={s} />

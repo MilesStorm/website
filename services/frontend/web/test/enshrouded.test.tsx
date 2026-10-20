@@ -115,6 +115,25 @@ describe('the Enshrouded panel', () => {
     expect(await screen.findByText('A restart or update is already under way.')).toBeTruthy();
   });
 
+  it('keeps the last status, and an open confirmation, when a poll fails', async () => {
+    let up = true;
+    open({
+      'GET /api/enshrouded': () =>
+        up ? json(status()) : json({ error: 'upstream', message: "The website can't reach the server right now." }, 502),
+    });
+    const { EnshroudedPanel, POLL_MS } = await import('@/islands/EnshroudedPanel');
+    render(<EnshroudedPanel />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart' }));
+    up = false;
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(await screen.findByText("The website can't reach the server right now.")).toBeTruthy();
+    expect(screen.getByText('Chronicle')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Yes, restart' })).toBeTruthy();
+    up = true;
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    await waitFor(() => expect(screen.queryByText("The website can't reach the server right now.")).toBeNull());
+  });
+
   it('waits its turn after a command, and while one is under way', async () => {
     open({ 'GET /api/enshrouded': () => json(status({ next_command_at: NOW + 45 })) });
     const { EnshroudedPanel } = await import('@/islands/EnshroudedPanel');

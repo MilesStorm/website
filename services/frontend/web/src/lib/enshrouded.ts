@@ -7,7 +7,10 @@ export type State = Schemas['EnshroudedState'];
 export type Command = Schemas['EnshroudedCommand'];
 
 /** How a state looks (badge), its name, an explanation, and whether it is under way. */
-export const STATES: Record<State, { badge: 'default' | 'secondary' | 'destructive'; label: string; hint: string; moving: boolean }> = {
+export const STATES: Record<
+  State,
+  { badge: 'default' | 'secondary' | 'outline' | 'destructive'; label: string; hint: string; moving: boolean }
+> = {
   Online: { badge: 'default', label: 'Online', hint: '', moving: false },
   Starting: { badge: 'secondary', label: 'Starting', hint: 'Loading the world. Players can join in a minute or two.', moving: true },
   Restarting: { badge: 'secondary', label: 'Restarting', hint: 'Saving the world and starting again.', moving: true },
@@ -18,7 +21,8 @@ export const STATES: Record<State, { badge: 'default' | 'secondary' | 'destructi
     moving: true,
   },
   Stopping: { badge: 'secondary', label: 'Stopping', hint: 'Saving the world.', moving: true },
-  Stopped: { badge: 'destructive', label: 'Stopped', hint: 'Restart starts it again.', moving: false },
+  // Stopped is a normal state, not a failure.
+  Stopped: { badge: 'outline', label: 'Stopped', hint: 'Restart starts it again.', moving: false },
   Crashed: { badge: 'destructive', label: 'Crashed', hint: 'The server kept failing to start. Try Restart or Force update.', moving: false },
   Unreachable: {
     badge: 'destructive',
