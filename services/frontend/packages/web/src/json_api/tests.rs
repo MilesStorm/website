@@ -751,6 +751,7 @@ fn the_document_has_every_route_and_leaves_the_old_picture_path_out() {
             "POST /api/invites/open",
             "POST /api/password/forgot",
             "POST /api/password/reset",
+            "POST /api/session/after-login",
             "POST /api/session/login",
             "POST /api/session/register",
             "PUT /api/account/display-name",
@@ -1111,19 +1112,40 @@ async fn invites_join_or_wait_for_a_login() {
 
 #[tokio::test]
 async fn a_login_lands_on_the_invite_page_else_the_page_asked_for_else_home() {
-    use api_types::PagePath;
+    use api_types::{NextPage, PagePath};
     let session = session_of(None).await;
-    session.insert(api::INVITE_RETURN_KEY, "/invite#join").await.unwrap();
+    session.insert(api::INVITE_RETURN_KEY, "join").await.unwrap();
     // The invite wins, once.
-    assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await, "/invite#join");
-    assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await, "/asshole");
-    assert_eq!(super::next_page(&session, None).await, "/");
+    let invite = NextPage { path: PagePath::Invite, fragment: Some("join".into()) };
+    assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await, invite);
+    assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await.href(), "/asshole");
+    assert_eq!(super::next_page(&session, None).await.href(), "/");
 
     // The Dioxus login's server function is the same, without a page asked for.
     let _site = Site::new().await;
-    session.insert(api::INVITE_RETURN_KEY, "/invite#join").await.unwrap();
+    session.insert(api::INVITE_RETURN_KEY, "join").await.unwrap();
     assert_eq!(in_request(&session, crate::invites::after_login_path()).await.unwrap(), "/invite#join");
     assert_eq!(in_request(&session, crate::invites::after_login_path()).await.unwrap(), "/");
+}
+
+/// The login pages' call: an invite opened before logging in wins over `next`; a `next` that
+/// isn't a page of the site is refused, as is a request from another site.
+#[tokio::test]
+async fn after_login_lands_on_the_invite_else_next() {
+    let mut site = Site::new().await;
+    site.json(Method::POST, "/api/invites/open", json!({"code": "join"})).await;
+    let login = site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+    assert_eq!(login.status, StatusCode::OK);
+    let next = json!({"next": "/asshole"});
+    let reply = site.json(Method::POST, "/api/session/after-login", next.clone()).await;
+    assert_eq!(reply.body, json!({"path": "/invite", "fragment": "join"}));
+    assert_eq!(site.json(Method::POST, "/api/session/after-login", next).await.body, json!({"path": "/asshole", "fragment": null}));
+    assert_eq!(site.json(Method::POST, "/api/session/after-login", json!({"next": null})).await.body, json!({"path": "/", "fragment": null}));
+    for bad in ["//evil.com", "https://evil.com/", "/api/session", "/nope"] {
+        envelope(&site.json(Method::POST, "/api/session/after-login", json!({"next": bad})).await, 422, "invalid");
+    }
+    let body = Some(("application/json", json!({"next": null}).to_string().into_bytes()));
+    envelope(&site.send(Method::POST, "/api/session/after-login", Some("https://evil.com"), body).await, 403, "forbidden");
 }
 
 #[tokio::test]

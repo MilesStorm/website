@@ -1,0 +1,14 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import Panel from '@/components/Panel.astro';
+import { FormSkeleton } from '@/islands/FormSkeleton';
+import { LoginForm } from '@/islands/LoginForm';
+---
+
+<Layout title="Log in">
+  <Panel title="Log in">
+    <LoginForm client:only="react">
+      <FormSkeleton slot="fallback" />
+    </LoginForm>
+  </Panel>
+</Layout>

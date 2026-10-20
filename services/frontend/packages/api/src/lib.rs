@@ -642,7 +642,8 @@ async fn auth_send(req: reqwest_middleware::RequestBuilder) -> Result<(u16, serd
 /// Session key: an invite opened while logged out, redeemed on logging in.
 #[cfg(feature = "server")]
 pub const PENDING_INVITE_KEY: &str = "pending_invite";
-/// Session key: the invite page to open right after logging in.
+/// Session key: the code of the invite a login just redeemed; its page (`/invite#<code>`) opens
+/// right after logging in.
 #[cfg(feature = "server")]
 pub const INVITE_RETURN_KEY: &str = "invite_return";
 
@@ -677,15 +678,17 @@ impl PendingInvite {
     }
 }
 
-/// Redeems the session's pending invite for the account just logged in as `token`.
-/// Returns the invite page to show next (it also says if the link no longer works).
+/// Redeems the session's pending invite for the account just logged in as `token`, and keeps
+/// its code for the invite page to show next (it also says if the link no longer works).
+/// Only this login's: an earlier login's code, never taken, is dropped first.
 #[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.redeem_pending_invite", skip_all)]
-pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) -> Option<String> {
-    let pending: PendingInvite = sess.remove(PENDING_INVITE_KEY).await.ok().flatten()?;
+pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) {
+    let _ = sess.remove::<String>(INVITE_RETURN_KEY).await;
+    let Ok(Some(pending)) = sess.remove::<PendingInvite>(PENDING_INVITE_KEY).await else { return };
     let Some(code) = pending.fresh_code(unix_now()) else {
         tracing::info!("pending invite ignored: opened too long ago");
-        return None;
+        return;
     };
     match auth_json("/internal/invite/redeem", &serde_json::json!({ "code": code, "token": token })).await {
         Ok((200..=299, reply)) => tracing::info!(role = ?reply.get("role"), "pending invite redeemed"),
@@ -699,11 +702,9 @@ pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) 
             trace::failed("auth_unreachable");
         }
     }
-    let page = format!("/invite#{code}");
-    if let Err(e) = sess.insert(INVITE_RETURN_KEY, &page).await {
+    if let Err(e) = sess.insert(INVITE_RETURN_KEY, &code).await {
         tracing::warn!(error = %e, "saving the invite page to return to failed");
     }
-    Some(page)
 }
 
 /// Why a profile request failed.

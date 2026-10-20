@@ -4,10 +4,16 @@
 //
 // Accounts: `tester-none`, `tester-all` and `tester-down`, password `right`. Their tokens are
 // `none` (no permissions), `all` (every permission the site knows, plus one it doesn't) and
-// `down`, whose check fails as if auth were down: logged in, with no permissions known.
+// `down`, whose check fails as if auth were down: logged in, with no permissions known. A new
+// account gets token `none`.
+//
+// Emailed codes: `good` works, anything else has expired. Invite code `join` is for
+// `arcane_user`. OAuth: the provider's page is skipped, auth sends the browser straight back to
+// the site's callback (SITE_URL) with code `good`, which logs in as `tester-all`.
 import { createServer } from 'node:http';
 
 const port = Number(process.env.FAKE_PORT ?? 4010);
+const site = process.env.SITE_URL ?? 'https://localhost:8443';
 const PERMISSIONS = { all: ['llama', 'enshrouded', 'arcane', 'manage_permissions', 'brand_new'], none: [] };
 
 const routes = {
@@ -29,6 +35,23 @@ const routes = {
     token === 'all' ? [200, { restart_result: '', command_result: { NumPlayers: 3 } }] : [403, {}],
   'POST /internal/ark/command': ({ token }) =>
     token === 'all' ? [200, { restart_result: '', command_result: 'Started' }] : [403, {}],
+  'POST /internal/register': ({ username }) =>
+    username === 'taken' ? [409, 'User already exists'] : [200, { token: 'none', username }],
+  'POST /internal/oauth/start': ({ provider }) =>
+    [200, { auth_url: `${site}/oauth/callback/${provider}?code=good&state=e2e-state`, state: 'e2e-state' }],
+  'POST /internal/oauth/exchange': ({ code }) =>
+    code === 'good' ? [200, { token: 'all', username: 'tester-all' }] : [400, 'bad code'],
+  'POST /internal/password/forgot': () => [200, {}],
+  'POST /internal/password/reset': ({ code }) =>
+    code === 'good' ? [200, { username: 'tester-none' }] : [404, { error: 'invalid_code' }],
+  'POST /internal/email/verify/confirm': ({ code }) =>
+    code === 'good' ? [200, { username: 'tester-none' }] : [404, { error: 'invalid_code' }],
+  'POST /internal/account/delete/check': ({ code }) =>
+    code === 'good' ? [200, { username: 'tester-none', user_id: 2 }] : [404, { error: 'invalid_code' }],
+  'POST /internal/account/delete/confirm': () => [200, {}],
+  'POST /internal/invite/check': ({ code }) => (code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}]),
+  'POST /internal/invite/redeem': ({ code, token }) =>
+    !(token in PERMISSIONS) ? [401, {}] : code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}],
   // SurrealDB: signed in, and nothing stored.
   'POST /signin': () => [200, { code: 200, token: 'surreal-token' }],
   'POST /rpc': ({ id }) => [200, { id, result: [{ status: 'OK', result: null }] }],

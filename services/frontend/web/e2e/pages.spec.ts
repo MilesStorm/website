@@ -49,7 +49,8 @@ for (const who of VIEWERS) {
 
 // The 403 and 503 pages as the image has them (e2e/serve.sh copies them out of it), shown at the
 // server's address so their styles and scripts come from the server. They are checked here as
-// well as above because no page in PAGES is guarded yet, so no request reaches them.
+// well as above because no page in PAGES needs a login or a permission yet, so no request
+// reaches them; the first such row (PR 6, the profile) replaces this with real requests.
 if (!STAGING) {
   for (const [file, heading] of [
     ['403.html', "You don't have access to this page"],

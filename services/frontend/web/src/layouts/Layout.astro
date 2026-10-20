@@ -17,8 +17,11 @@ import { OLD_KEYS, THEME_KEY } from '@/lib/theme';
 interface Props {
   title: string;
   description?: string;
+  /** The address carries a one-time code (an emailed link, an invite): never sent on to other
+   * sites in a Referer. */
+  noReferrer?: boolean;
 }
-const { title, description = 'Tools for game nights with friends.' } = Astro.props;
+const { title, description = 'Tools for game nights with friends.', noReferrer = false } = Astro.props;
 ---
 
 <!doctype html>
@@ -83,6 +86,7 @@ const { title, description = 'Tools for game nights with friends.' } = Astro.pro
     <style is:inline set:html={GATE_CSS}></style>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
+    {noReferrer && <meta name="referrer" content="no-referrer" />}
     <link rel="icon" href={faviconUrl} />
     <title>{title}</title>
   </head>

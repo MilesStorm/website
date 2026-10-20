@@ -20,10 +20,10 @@ use aide::openapi::{Info, OpenApi};
 use aide::NoApi;
 use aide::{OperationInput, OperationOutput};
 use api_types::{
-    Access, AccountInfo, AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, ArcaneServerMsg,
+    AfterLogin, Access, AccountInfo, AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, ArcaneServerMsg,
     ArkCommandRequest, ArkPlayers, ArkResult, Bootstrap, Code, Confirmed, Deleted, Deletion, DirectDeletion,
     DisplayName, Done, EmailSent, EnshroudedCommandRequest, EnshroudedStatus, ErrorCode, ForgotPassword, InvitePath,
-    KnownPermission, LoggedIn, Login, NewInvite, Opened, PagePath, PagedResult, PasswordReset, Registration,
+    KnownPermission, LoggedIn, Login, NewInvite, NextPage, Opened, PagePath, PagedResult, PasswordReset, Registration,
     RolePermissionPath, Sharing, SharingState, UserRolePath,
 };
 use axum::Extension;
@@ -365,11 +365,21 @@ pub(crate) async fn bootstrap(viewer: api::Viewer) -> Bootstrap {
 }
 
 /// Where a login lands: the invite page it came from (its invite was just redeemed), else
-/// `requested`, else `/`. Takes the invite page out of the session. Every login uses it: the
-/// OAuth callback and the pages' after-login call.
-pub(crate) async fn next_page(session: &Session, requested: Option<PagePath>) -> String {
+/// `requested`, else `/`. Takes the invite out of the session. Every login uses it: the OAuth
+/// callback and the login pages' after-login call.
+pub(crate) async fn next_page(session: &Session, requested: Option<PagePath>) -> NextPage {
     let invite: Option<String> = session.remove(api::INVITE_RETURN_KEY).await.ok().flatten();
-    invite.unwrap_or_else(|| requested.unwrap_or(PagePath::Home).as_str().to_owned())
+    match invite {
+        Some(code) => NextPage { path: PagePath::Invite, fragment: Some(code) },
+        None => NextPage { path: requested.unwrap_or(PagePath::Home), fragment: None },
+    }
+}
+
+/// `POST /api/session/after-login`: where to go now that the session is logged in. A POST, as it
+/// takes the invite out of the session. A `next` that isn't one of the site's pages is refused
+/// (`invalid`); the login page sends only pages.
+async fn after_login(NoApi(session): NoApi<Session>, Body(a): Body<AfterLogin>) -> Json<NextPage> {
+    Json(next_page(&session, a.next).await)
 }
 
 /// `POST /api/session/login`.
@@ -678,6 +688,7 @@ fn api_router(arcane_origins: &str) -> ApiRouter {
         .api_route("/api/session", get(session).delete(logout))
         .api_route("/api/session/login", post(login))
         .api_route("/api/session/register", post(register))
+        .api_route("/api/session/after-login", post(after_login))
         .api_route("/api/email/confirm", post(confirm_email))
         .api_route("/api/password/forgot", post(forgot_password))
         .api_route("/api/password/reset", post(reset_password))
@@ -721,8 +732,10 @@ fn finish(arcane_origins: &str) -> (axum::Router, OpenApi) {
         // Not a route's: the variants of `ArcaneServerMsg` (inlined there, for its tag) by name.
         ctx.schema.subschema_for::<api_types::Frame>();
         ctx.schema.subschema_for::<api_types::Roll>();
-        // Links and `next` are typed by it; no route takes one yet.
+        // Links are typed by it.
         ctx.schema.subschema_for::<api_types::PagePath>();
+        // Not a route's: the `?error=` an OAuth login comes back to the login page with.
+        ctx.schema.subschema_for::<api_types::OAuthError>();
     });
     // The pages and who may see them, for the end-to-end tests' permission matrix.
     doc.extensions.insert("x-pages".into(), serde_json::to_value(api_types::PAGES).expect("the pages serialize"));

@@ -18,7 +18,7 @@ export const STAGING = !!process.env.E2E_BASE_URL;
 export type Who = 'anonymous' | 'plain' | 'all' | 'down';
 
 /** Test accounts: the stand-ins' by default, staging's from the environment (secrets). */
-const USERS = {
+export const USERS = {
   plain: {
     username: process.env.E2E_PLAIN_USERNAME ?? 'tester-none',
     password: process.env.E2E_PLAIN_PASSWORD ?? 'right',
