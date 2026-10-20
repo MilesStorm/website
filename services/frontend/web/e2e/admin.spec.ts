@@ -68,6 +68,30 @@ if (!STAGING) {
     await expect(revoke).toBeHidden();
   });
 
+  test('taking admin rights away from yourself asks first, and says why', async ({ context, page }) => {
+    const me = await logIn(context, 'all', true);
+    const role = `scratch_${me.split('-').at(-1)}`;
+    await page.goto('/admin');
+    await page.getByLabel('Search users').fill(me);
+    await page.getByRole('button', { name: `Remove role admin from ${me}` }).click();
+    const own = page.getByRole('alertdialog', { name: `Remove admin from ${me}?` });
+    await expect(own.getByText(/This is your own account/)).toBeVisible();
+    await expectAccessible(page);
+    await own.getByRole('button', { name: 'Keep' }).click();
+    await expect(page.getByRole('button', { name: `Remove role admin from ${me}` })).toBeVisible();
+
+    // manage_permissions, on the test's own role: asks, then goes.
+    await page.getByRole('tab', { name: 'Roles' }).click();
+    await page.getByLabel('Search roles').fill(role);
+    await page.getByLabel(`Permission to add to ${role}`).selectOption('manage_permissions');
+    await page.getByRole('button', { name: `Add permission to ${role}` }).click();
+    await page.getByRole('button', { name: `Remove permission manage_permissions from ${role}` }).click();
+    const grant = page.getByRole('alertdialog', { name: `Remove manage_permissions from ${role}?` });
+    await expect(grant.getByText(/manage_permissions is what lets anyone use this page/)).toBeVisible();
+    await grant.getByRole('button', { name: 'Remove' }).click();
+    await expect(page.getByRole('button', { name: `Remove permission manage_permissions from ${role}` })).toBeHidden();
+  });
+
   test('an invite link is made, shown once, listed and turned off', async ({ context, page }) => {
     await logIn(context, 'all');
     const note = `e2e ${Math.random().toString(36).slice(2, 10)}`;

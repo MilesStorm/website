@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Schemas } from '@/api/client';
-import { at, json } from './fixtures';
+import { ann, at, json, splice } from './fixtures';
 
-beforeEach(() => vi.resetModules());
+beforeEach(() => {
+  vi.resetModules();
+  document.head.innerHTML = '';
+});
 afterEach(cleanup);
 
 const ROLES: Schemas['AdminRoleRef'][] = [
@@ -98,6 +101,31 @@ describe('the users tab', () => {
     await userEvent.click(within(pages).getByRole('button', { name: 'Next page' }));
     await waitFor(() => expect(calls.some((c) => c.call === 'GET /api/admin/users?page=1&limit=25&search=')).toBe(true));
     expect(within(pages).getByRole('button', { name: 'Page 3' })).toBeTruthy();
+
+    // A search from page 2 starts at the first page, in one request.
+    const before = calls.length;
+    await userEvent.type(screen.getByLabelText('Search users'), 'an');
+    await waitFor(() => expect(calls.slice(before).map((c) => c.call)).toEqual(['GET /api/admin/users?page=0&limit=25&search=an']));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(calls.slice(before).map((c) => c.call)).toEqual(['GET /api/admin/users?page=0&limit=25&search=an']);
+  });
+
+  it('asks before taking a role off your own account, and says why', async () => {
+    splice(ann);
+    const calls = serve((url) => {
+      if (url.pathname === '/api/admin/users') return json({ items: [user], total: 1 });
+      if (url.pathname.startsWith('/api/admin/users/')) return new Response(null, { status: 204 });
+    });
+    const { AdminPanel, OWN_ROLE } = await import('@/islands/AdminPanel');
+    render(<AdminPanel />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove role arcane_user from ann' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Remove arcane_user from ann?' });
+    expect(within(dialog).getByText(OWN_ROLE)).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Keep' }));
+    expect(calls.some((c) => c.call.startsWith('DELETE'))).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: 'Remove role arcane_user from ann' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(calls.some((c) => c.call === 'DELETE /api/admin/users/5/roles/2')).toBe(true));
   });
 });
 
@@ -115,6 +143,36 @@ describe('the roles tab', () => {
     expect(await screen.findByText('(unused)')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Add permission to arcane_user' }));
     await waitFor(() => expect(calls.some((c) => c.call === 'PUT /api/admin/roles/2/permissions/3')).toBe(true));
+  });
+});
+
+describe('the roles tab, manage_permissions', () => {
+  it('asks before taking it off a role, and says why', async () => {
+    const role: Schemas['AdminRole'] = {
+      id: 1,
+      name: 'admin',
+      permissions: [
+        { id: 3, name: 'arcane' },
+        { id: 4, name: 'manage_permissions' },
+      ],
+    };
+    const calls = serve((url) => {
+      if (url.pathname === '/api/admin/users') return json({ items: [], total: 0 });
+      if (url.pathname === '/api/admin/roles') return json({ items: [role], total: 1 });
+      if (url.pathname.startsWith('/api/admin/roles/')) return new Response(null, { status: 204 });
+    });
+    const { AdminPanel, MANAGE_PERMISSIONS } = await import('@/islands/AdminPanel');
+    render(<AdminPanel />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
+    // Another permission goes at once.
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove permission arcane from admin' }));
+    await waitFor(() => expect(calls.some((c) => c.call === 'DELETE /api/admin/roles/1/permissions/3')).toBe(true));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove permission manage_permissions from admin' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Remove manage_permissions from admin?' });
+    expect(within(dialog).getByText(MANAGE_PERMISSIONS)).toBeTruthy();
+    expect(calls.some((c) => c.call === 'DELETE /api/admin/roles/1/permissions/4')).toBe(false);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(calls.some((c) => c.call === 'DELETE /api/admin/roles/1/permissions/4')).toBe(true));
   });
 });
 

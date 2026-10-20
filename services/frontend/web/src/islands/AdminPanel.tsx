@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FormAlert } from '@/components/FormAlert';
 import { client, type Schemas } from '@/api/client';
+import { readBootstrap } from '@/api/session';
 import {
   DEFAULT_INVITE_ROLE,
   PAGE_SIZE,
@@ -45,7 +46,10 @@ export function AdminPanel() {
   // The small lists the pickers need: every role, every permission.
   const [roles, setRoles] = useState<Outcome<RoleRef[]> | null>(null);
   const [permissions, setPermissions] = useState<Outcome<Permission[]> | null>(null);
+  // Who is looking: removing one of their own roles asks first.
+  const [me, setMe] = useState<string | null>(null);
   useEffect(() => {
+    void readBootstrap().then((b) => setMe(b.viewer?.username ?? null));
     void attempt(client.GET('/api/admin/roles/all')).then(setRoles);
     void attempt(client.GET('/api/admin/permissions')).then(setPermissions);
   }, []);
@@ -64,7 +68,7 @@ export function AdminPanel() {
           <TabsTrigger value="invites">Invites</TabsTrigger>
         </TabsList>
         <TabsContent value="users">
-          <UsersTab allRoles={allRoles} />
+          <UsersTab allRoles={allRoles} me={me} />
         </TabsContent>
         <TabsContent value="roles">
           <RolesTab allPermissions={allPermissions} />
@@ -84,8 +88,12 @@ function useListing<T>(load: (page: number, search: string) => Promise<Outcome<{
   const [page, setPage] = useState(0);
   const [result, setResult] = useState<Outcome<{ items: T[]; total: number }> | null>(null);
   const [round, setRound] = useState(0);
+  // A new search starts at the first page: both change together, so it is one request.
   useEffect(() => {
-    const wait = setTimeout(() => setAsked(search), SEARCH_DELAY_MS);
+    const wait = setTimeout(() => {
+      setAsked(search);
+      setPage(0);
+    }, SEARCH_DELAY_MS);
     return () => clearTimeout(wait);
   }, [search]);
   useEffect(() => {
@@ -97,10 +105,7 @@ function useListing<T>(load: (page: number, search: string) => Promise<Outcome<{
   }, [load, page, asked, round]);
   return {
     search,
-    setSearch: (s: string) => {
-      setSearch(s);
-      setPage(0);
-    },
+    setSearch,
     page,
     setPage,
     result,
@@ -113,7 +118,7 @@ const loadUsers = (page: number, search: string) =>
 const loadRoles = (page: number, search: string) =>
   attempt(client.GET('/api/admin/roles', { params: { query: { page, limit: PAGE_SIZE, search } } }));
 
-function UsersTab({ allRoles }: { allRoles: RoleRef[] }) {
+function UsersTab({ allRoles, me }: { allRoles: RoleRef[]; me: string | null }) {
   const list = useListing<Schemas['AdminUser']>(loadUsers);
   const [error, setError] = useState<string | null>(null);
   const change = async (call: Promise<{ error?: unknown; response: Response }>) => {
@@ -139,6 +144,7 @@ function UsersTab({ allRoles }: { allRoles: RoleRef[] }) {
               kind="role"
               have={user.roles.map((r) => ({ id: r.id, name: r.name }))}
               all={allRoles.map((r) => ({ id: r.id, name: r.name }))}
+              warn={() => (user.username === me ? OWN_ROLE : null)}
               add={(roleId) =>
                 void change(client.PUT('/api/admin/users/{user_id}/roles/{role_id}', { params: { path: { user_id: user.id, role_id: roleId } } }))
               }
@@ -181,6 +187,7 @@ function RolesTab({ allPermissions }: { allPermissions: Permission[] }) {
               kind="permission"
               have={role.permissions.map(named)}
               all={allPermissions.map(named)}
+              warn={(p) => (p.name === 'manage_permissions' ? MANAGE_PERMISSIONS : null)}
               add={(permissionId) =>
                 void change(
                   client.PUT('/api/admin/roles/{role_id}/permissions/{permission_id}', {
@@ -267,13 +274,22 @@ function Listing<T>({
   );
 }
 
+/** Why removing one of the viewer's own roles asks first. */
+export const OWN_ROLE =
+  "This is your own account. If this role is what gives you admin rights, you'll lose access to this page and can't give it back yourself.";
+/** Why taking `manage_permissions` off a role asks first. */
+export const MANAGE_PERMISSIONS =
+  "manage_permissions is what lets anyone use this page. If your account has admin rights only through this role, you'll lose access to it and can't give it back yourself.";
+
 /** What a user or role has (each removable), and a picker to add one more. A permission auth
- * has and this site doesn't know is marked, since nothing here checks it. */
+ * has and this site doesn't know is marked, since nothing here checks it. A removal `warn` has
+ * a reason for asks first. */
 function Assigned({
   owner,
   kind,
   have,
   all,
+  warn,
   add,
   remove,
 }: {
@@ -281,6 +297,7 @@ function Assigned({
   kind: 'role' | 'permission';
   have: { id: number; name: string }[];
   all: { id: number; name: string }[];
+  warn: (item: { id: number; name: string }) => string | null;
   add: (id: number) => void;
   remove: (id: number) => void;
 }) {
@@ -298,14 +315,12 @@ function Assigned({
         >
           {h.name}
           {unknown(h.name) && <span className="text-muted-foreground">(unused)</span>}
-          <button
-            type="button"
-            className="-mr-1 rounded-sm p-0.5 hover:bg-muted"
-            aria-label={`Remove ${kind} ${h.name} from ${owner}`}
-            onClick={() => remove(h.id)}
-          >
-            <X aria-hidden="true" />
-          </button>
+          <RemoveButton
+            label={`Remove ${kind} ${h.name} from ${owner}`}
+            title={`Remove ${h.name} from ${owner}?`}
+            warning={warn(h)}
+            remove={() => remove(h.id)}
+          />
         </Badge>
       ))}
       {missing.length > 0 && pick !== null && (
@@ -329,6 +344,33 @@ function Assigned({
         </span>
       )}
     </div>
+  );
+}
+
+/** A badge's remove button; with a `warning`, it asks first and says why. */
+function RemoveButton({ label, title, warning, remove }: { label: string; title: string; warning: string | null; remove: () => void }) {
+  const button = (
+    <button type="button" className="-mr-1 rounded-sm p-0.5 hover:bg-muted" aria-label={label} onClick={warning ? undefined : remove}>
+      <X aria-hidden="true" />
+    </button>
+  );
+  if (!warning) return button;
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>{button}</AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{warning}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={remove}>
+            Remove
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
