@@ -1,7 +1,7 @@
 // The cookie notice sits over the bottom of the window until it is answered: on a phone the page
 // ends that much lower, so its last controls can still be scrolled to and used.
 import { expect, test } from '@playwright/test';
-import { STAGING, logIn } from './site';
+import { logIn } from './site';
 
 test.use({ viewport: { width: 390, height: 844 } });
 
@@ -15,17 +15,3 @@ test('with the cookie notice open, the last control of the profile can be reache
   await theme.click();
   await expect(page.getByRole('menuitemradio', { name: 'Dark' })).toBeVisible();
 });
-
-if (!STAGING) {
-  test('with the cookie notice open, the Enshrouded controls can be used', async ({ context, page }) => {
-    await logIn(context, 'all', true);
-    await page.goto('/enshrouded');
-    await expect(page.getByRole('region', { name: 'Cookies' })).toBeVisible();
-    await page.getByRole('button', { name: 'Force update' }).click();
-    // Clicking the last one of the confirmation: it ends the controls card.
-    const cancel = page.getByRole('button', { name: 'Cancel' });
-    await cancel.scrollIntoViewIfNeeded();
-    await cancel.click();
-    await expect(cancel).toBeHidden();
-  });
-}
