@@ -166,8 +166,23 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
             _ => StatusCode::NOT_FOUND.into_response(),
         }
     };
+    // OAuth: the provider's page carries the state; code `good` is user-all's, `taken` an
+    // email another account has.
+    let oauth_start = |body: axum::Json<Value>| async move {
+        let provider = body["provider"].as_str().unwrap_or_default();
+        axum::Json(json!({"auth_url": format!("https://{provider}.test/authorize?state=st"), "state": "st"}))
+    };
+    let oauth_exchange = |body: axum::Json<Value>| async move {
+        match body["code"].as_str() {
+            Some("good") => axum::Json(json!({"token": "all", "username": "user-all"})).into_response(),
+            Some("taken") => (StatusCode::CONFLICT, "email_exists").into_response(),
+            _ => (StatusCode::BAD_REQUEST, "bad code").into_response(),
+        }
+    };
     let app = axum::Router::new()
         .merge(stand_in_panels(auth_panels))
+        .route("/internal/oauth/start", post(oauth_start))
+        .route("/internal/oauth/exchange", post(oauth_exchange))
         .route("/internal/email/verify/send", post(by_token(json!({"email": "a@b.c"}))))
         .route("/internal/email/verify/confirm", post(by_code(json!({"username": "user-all"}))))
         .route("/internal/password/forgot", post(forgot))
@@ -337,6 +352,7 @@ pub(crate) struct Site {
 
 pub(crate) struct Reply {
     pub(crate) status: StatusCode,
+    pub(crate) headers: axum::http::HeaderMap,
     pub(crate) content_type: Option<String>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) body: Value,
@@ -392,10 +408,11 @@ impl Site {
             self.cookie = set.to_str().unwrap().split(';').next().map(str::to_string);
         }
         let status = res.status();
+        let headers = res.headers().clone();
         let content_type = res.headers().get(header::CONTENT_TYPE).map(|v| v.to_str().unwrap().to_string());
         let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec();
         let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        Reply { status, content_type, bytes, body }
+        Reply { status, headers, content_type, bytes, body }
     }
 
     /// Pictures on, stored by the stand-in.
@@ -409,7 +426,7 @@ impl Site {
         self.send(Method::GET, path, None, None).await
     }
 
-    async fn json(&mut self, method: Method, path: &str, body: Value) -> Reply {
+    pub(crate) async fn json(&mut self, method: Method, path: &str, body: Value) -> Reply {
         self.send(method, path, Some(SITE), Some(("application/json", body.to_string().into_bytes()))).await
     }
 }
@@ -1082,6 +1099,23 @@ async fn invites_join_or_wait_for_a_login() {
     let mut site = Site::logged_in("dead").await;
     let reply = site.json(Method::POST, "/api/invites/open", json!({"code": "join"})).await;
     assert_eq!(reply.body["kind"], "needs_account");
+}
+
+#[tokio::test]
+async fn a_login_lands_on_the_invite_page_else_the_page_asked_for_else_home() {
+    use api_types::PagePath;
+    let session = session_of(None).await;
+    session.insert(api::INVITE_RETURN_KEY, "/invite#join").await.unwrap();
+    // The invite wins, once.
+    assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await, "/invite#join");
+    assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await, "/asshole");
+    assert_eq!(super::next_page(&session, None).await, "/");
+
+    // The Dioxus login's server function is the same, without a page asked for.
+    let _site = Site::new().await;
+    session.insert(api::INVITE_RETURN_KEY, "/invite#join").await.unwrap();
+    assert_eq!(in_request(&session, crate::invites::after_login_path()).await.unwrap(), "/invite#join");
+    assert_eq!(in_request(&session, crate::invites::after_login_path()).await.unwrap(), "/");
 }
 
 #[tokio::test]

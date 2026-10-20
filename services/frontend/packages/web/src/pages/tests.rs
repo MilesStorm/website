@@ -1,16 +1,17 @@
 //! The Astro pages: the startup checks of the build, the splice and its escaping, what a page
-//! says about the viewer, and that the page's `traceparent` is the request's own span.
+//! says about the viewer, the guards of the pages that aren't public, and that the page's
+//! `traceparent` is the request's own span.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use api_types::{Bootstrap, KnownPermission, Viewer};
+use api_types::{Access, Bootstrap, KnownPermission, Page, PagePath, Viewer, PAGES};
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 
-use super::{Built, Injected, Split, Ui, MARKER};
+use super::{verdict, Built, Injected, Split, Ui, Verdict, MARKER};
 use crate::json_api::tests::{Public, Site};
 
 /// A page as Astro writes it: the charset first, then the marker.
@@ -36,7 +37,7 @@ impl Dist {
     }
 
     fn built(&self) -> Arc<Built> {
-        Arc::new(Built::load(&self.0).unwrap())
+        Arc::new(Built::load(&self.0, PAGES).unwrap())
     }
 }
 
@@ -129,24 +130,24 @@ fn version_attributes_are_escaped() {
 #[test]
 fn the_build_must_have_exactly_the_pages() {
     let dist = Dist::new("exact");
-    let built = Built::load(&dist.0).unwrap();
+    let built = Built::load(&dist.0, PAGES).unwrap();
     assert_eq!(built.pages.len(), api_types::PAGES.len() + api_types::STATUS_PAGES.len());
 
     std::fs::create_dir_all(dist.0.join("admin")).unwrap();
     std::fs::write(dist.0.join("admin/secret.html"), page("")).unwrap();
-    let e = Built::load(&dist.0).unwrap_err().to_string();
+    let e = Built::load(&dist.0, PAGES).unwrap_err().to_string();
     assert!(e.contains("admin/secret.html"), "{e}");
     std::fs::remove_dir_all(dist.0.join("admin")).unwrap();
 
     std::fs::remove_file(dist.0.join("asshole.html")).unwrap();
-    let e = Built::load(&dist.0).unwrap_err().to_string();
+    let e = Built::load(&dist.0, PAGES).unwrap_err().to_string();
     assert!(e.contains("asshole.html"), "{e}");
 
     std::fs::write(dist.0.join("asshole.html"), "<html></html>").unwrap();
-    let e = Built::load(&dist.0).unwrap_err().to_string();
+    let e = Built::load(&dist.0, PAGES).unwrap_err().to_string();
     assert!(e.contains("asshole.html") && e.contains("bff-inject"), "{e}");
 
-    assert!(Built::load(&dist.0.join("nowhere")).is_err());
+    assert!(Built::load(&dist.0.join("nowhere"), PAGES).is_err());
 }
 
 #[tokio::test]
@@ -161,7 +162,7 @@ async fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
             .serve_dioxus_application(ServeConfig::default(), crate::App)
             .route("/ws/arcane", axum::routing::get(|| async {}))
             .merge(crate::json_api::router());
-        let app = super::mount(router, built).unwrap();
+        let app = super::mount(router, built);
         if astro {
             // A page's path with a slash goes to the page, never to Dioxus's fallback.
             let res = app.oneshot(Request::get("/asshole/?a=1").body(Body::empty()).unwrap()).await.unwrap();
@@ -174,7 +175,7 @@ async fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
 #[tokio::test]
 async fn pages_and_astro_files_are_served_and_nothing_else() {
     let dist = Dist::new("serve");
-    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built())).unwrap()).await;
+    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built()))).await;
 
     let home = site.get("/").await;
     assert_eq!(home.status, StatusCode::OK);
@@ -199,7 +200,6 @@ async fn pages_and_astro_files_are_served_and_nothing_else() {
 async fn cache_headers_keep_pages_private_and_files_forever() {
     let dist = Dist::new("cache");
     let app = super::mount(axum::Router::new(), Some(dist.built()))
-        .unwrap()
         .layer(tower_sessions::SessionManagerLayer::new(tower_sessions::MemoryStore::default()));
     let get = |path: &'static str| {
         let app = app.clone();
@@ -223,7 +223,7 @@ async fn cache_headers_keep_pages_private_and_files_forever() {
 #[tokio::test]
 async fn astro_files_go_compressed_when_the_browser_takes_it() {
     let dist = Dist::new("compressed");
-    let app = super::mount(axum::Router::new(), Some(dist.built())).unwrap();
+    let app = super::mount(axum::Router::new(), Some(dist.built()));
     let req = Request::get("/_astro/app.Ab12.js").header(header::ACCEPT_ENCODING, "gzip, br").body(Body::empty()).unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.headers()[header::CONTENT_ENCODING], "br");
@@ -242,7 +242,7 @@ async fn astro_files_go_compressed_when_the_browser_takes_it() {
 #[tokio::test]
 async fn a_logged_in_page_knows_the_viewer_with_one_call_to_auth() {
     let dist = Dist::new("viewer");
-    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built())).unwrap()).await.log_in("all").await;
+    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built()))).await.log_in("all").await;
     let html = String::from_utf8(site.get("/").await.bytes).unwrap();
     // Known permissions only, in auth's order.
     assert!(html.contains(r#"<html data-session="in" data-perms="llama enshrouded arcane manage_permissions""#), "{html}");
@@ -253,13 +253,13 @@ async fn a_logged_in_page_knows_the_viewer_with_one_call_to_auth() {
     drop(site);
 
     // Auth down: logged in, with no permissions.
-    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built())).unwrap()).await.log_in("down").await;
+    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built()))).await.log_in("down").await;
     let html = String::from_utf8(site.get("/").await.bytes).unwrap();
     assert!(html.contains(r#"data-session="in" data-perms="""#), "{html}");
 }
 
 #[test]
-fn every_public_page_is_a_leaf_span() {
+fn every_page_is_a_leaf_span() {
     #[derive(serde::Deserialize)]
     struct Registry {
         leaf: Vec<Leaf>,
@@ -271,7 +271,8 @@ fn every_public_page_is_a_leaf_span() {
     }
     let registry: Registry = toml::from_str(include_str!("../../../../../../tracing/leaf_spans.toml")).unwrap();
     let leaf = |name: &str| registry.leaf.iter().any(|l| l.service == "frontend" && l.name == name);
-    for page in api_types::PAGES.iter().filter(|p| p.access == api_types::Access::Public) {
+    // A guarded page's redirect of the logged out is childless too, under the same name.
+    for page in PAGES {
         let name = format!("GET {}", page.path.as_str());
         assert!(leaf(&name), "tracing/leaf_spans.toml has no [[leaf]] {name:?}: an anonymous request for it has no children");
         if page.path.as_str() != "/" {
@@ -288,7 +289,6 @@ async fn the_page_traceparent_is_the_request_span() {
     let (exporter, _guard) = crate::trace_tests::exporting();
     let dist = Dist::new("trace");
     let app = super::mount(axum::Router::new(), Some(dist.built()))
-        .unwrap()
         // As the server layers them: the session's own spans are current in the handler.
         .layer(tower_sessions::SessionManagerLayer::new(tower_sessions::MemoryStore::default()))
         .layer(axum::middleware::from_fn(api::trace::capture_request_context))
@@ -301,4 +301,130 @@ async fn the_page_traceparent_is_the_request_span() {
     let sc = &server.span_context;
     let expected = format!(r#"<meta name="traceparent" content="00-{}-{}-01">"#, sc.trace_id(), sc.span_id());
     assert!(html.contains(&expected), "{expected} not in {html}");
+}
+
+// ---- Guards ----
+
+/// The access levels, each on one page (`/asshole`) of a table otherwise public.
+const LEVELS: [Access; 4] = [Access::Public, Access::GuestOnly, Access::LoggedIn, Access::Perm(KnownPermission::Arcane)];
+
+/// What a page of `access` answers each kind of viewer, written out by hand: the status, and
+/// where a redirect goes or which file is the body.
+fn expected(access: Access, token: Option<&str>, path: &str) -> (StatusCode, String) {
+    let page = |file: &str| (StatusCode::OK, file.to_string());
+    let file = PAGES.iter().find(|p| p.path.as_str() == path).map_or("", |p| p.file);
+    match (access, token) {
+        (Access::Public, _) | (Access::GuestOnly, None) => page(file),
+        (Access::GuestOnly, Some(_)) => (StatusCode::SEE_OTHER, "/".into()),
+        (_, None) => (StatusCode::SEE_OTHER, format!("/login?next={path}")),
+        (_, Some("down")) => (StatusCode::SERVICE_UNAVAILABLE, "503.html".into()),
+        (Access::LoggedIn, Some(_)) | (Access::Perm(_), Some("all")) => page(file),
+        (Access::Perm(_), Some(_)) => (StatusCode::FORBIDDEN, "403.html".into()),
+    }
+}
+
+/// Anonymous, logged in without permissions, with every permission, and auth down.
+const VIEWERS: [Option<&str>; 4] = [None, Some("none"), Some("all"), Some("down")];
+
+/// Requests `path` as `token` from `app` and checks the answer against [`expected`].
+async fn check(app: axum::Router, access: Access, token: Option<&str>, path: &str) {
+    let site = Site::serving(app).await;
+    let mut site = match token {
+        Some(token) => site.log_in(token).await,
+        None => site,
+    };
+    let reply = site.get(path).await;
+    let (status, target) = expected(access, token, path);
+    let who = format!("{path} ({access:?}) as {token:?}");
+    assert_eq!(reply.status, status, "{who}");
+    if status == StatusCode::SEE_OTHER {
+        assert_eq!(reply.headers[header::LOCATION], target.as_str(), "{who}");
+        return;
+    }
+    // Status pages too: spliced, private, with the viewer on the html tag.
+    assert_eq!(reply.content_type.as_deref(), Some("text/html; charset=utf-8"), "{who}");
+    assert_eq!(reply.headers[header::CACHE_CONTROL], "private, no-cache", "{who}");
+    let html = String::from_utf8(reply.bytes).unwrap();
+    assert!(html.contains(&format!("<body>{target}</body>")), "{who}: {html}");
+    assert!(!html.contains(MARKER), "{who}");
+    let session = if token.is_some() { "in" } else { "out" };
+    assert!(html.contains(&format!(r#"<html data-session="{session}""#)), "{who}: {html}");
+    assert_eq!(bootstrap_of(&html)["viewer"].is_null(), token.is_none(), "{who}");
+    if let Some(token) = token {
+        // The guard and the page share one viewer: one introspect.
+        assert_eq!(site.auth.introspected(token), 1, "{who}");
+    }
+}
+
+#[test]
+fn the_guard_rule_fails_closed() {
+    use api::Viewer as V;
+    use api_types::Permission;
+    let user = |permissions: Vec<Permission>| {
+        crate::json_api::Viewer(V::User { username: "u".into(), token: "t".into(), permissions })
+    };
+    let anonymous = crate::json_api::Viewer(V::Anonymous);
+    let plain = user(vec![Permission::Other("arcane_admin".into())]);
+    let arcane = user(vec![Permission::Known(KnownPermission::Arcane)]);
+    let degraded = crate::json_api::Viewer(V::Degraded { username: "u".into() });
+    let [public, guest, logged_in, perm] = LEVELS;
+    // (access, anonymous, no permission, the permission, auth down, session unreadable)
+    for (access, rules) in [
+        (public, [Verdict::Serve; 5]),
+        (guest, [Verdict::Serve, Verdict::Home, Verdict::Home, Verdict::Home, Verdict::Serve]),
+        (logged_in, [Verdict::LogIn, Verdict::Serve, Verdict::Serve, Verdict::Unavailable, Verdict::Unavailable]),
+        (perm, [Verdict::LogIn, Verdict::Forbidden, Verdict::Serve, Verdict::Unavailable, Verdict::Unavailable]),
+    ] {
+        let viewers = [Some(&anonymous), Some(&plain), Some(&arcane), Some(&degraded), None];
+        for (viewer, rule) in viewers.into_iter().zip(rules) {
+            assert_eq!(verdict(access, viewer), rule, "{access:?} for {viewer:?}");
+        }
+    }
+    // Another permission, or one the site doesn't know by that name, is no permission.
+    let llama = user(vec![Permission::Known(KnownPermission::Llama), Permission::Other("arcane".into())]);
+    assert_eq!(verdict(perm, Some(&llama)), Verdict::Forbidden);
+}
+
+/// Every access level for every kind of viewer, through the router: the page, a redirect, the
+/// 403 page or the 503 page.
+#[tokio::test]
+async fn every_access_level_answers_every_viewer() {
+    let dist = Dist::new("guards");
+    let built = dist.built();
+    for access in LEVELS {
+        let rows = [
+            Page { path: PagePath::Home, file: "index.html", access: Access::Public },
+            Page { path: PagePath::Asshole, file: "asshole.html", access },
+            Page { path: PagePath::AccountDeleted, file: "account-deleted.html", access: Access::Public },
+        ];
+        for token in VIEWERS {
+            check(super::mount_rows(axum::Router::new(), built.clone(), &rows), access, token, "/asshole").await;
+        }
+    }
+}
+
+/// The real table, every row for every kind of viewer.
+#[tokio::test]
+async fn every_page_answers_every_viewer() {
+    let dist = Dist::new("table");
+    for page in PAGES {
+        for token in VIEWERS {
+            check(super::mount(axum::Router::new(), Some(dist.built())), page.access, token, page.path.as_str()).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_logged_out_redirect_asks_auth_nothing() {
+    let dist = Dist::new("anonymous");
+    let rows = [Page { path: PagePath::Asshole, file: "asshole.html", access: Access::Perm(KnownPermission::Arcane) }];
+    let mut site = Site::serving(super::mount_rows(axum::Router::new(), dist.built(), &rows)).await;
+    // Its trailing-slash form is still a redirect to the page, which then guards it.
+    let slash = site.get("/asshole/?x=1").await;
+    assert_eq!(slash.status, StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(slash.headers[header::LOCATION], "/asshole?x=1");
+    let reply = site.get("/asshole?x=1").await;
+    assert_eq!(reply.status, StatusCode::SEE_OTHER);
+    assert_eq!(reply.headers[header::LOCATION], "/login?next=/asshole");
+    assert!(site.auth.introspected.lock().unwrap().is_empty());
 }

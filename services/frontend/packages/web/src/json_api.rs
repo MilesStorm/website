@@ -23,7 +23,7 @@ use api_types::{
     Access, AccountInfo, AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, ArcaneServerMsg,
     ArkCommandRequest, ArkPlayers, ArkResult, Bootstrap, Code, Confirmed, Deleted, Deletion, DirectDeletion,
     DisplayName, Done, EmailSent, EnshroudedCommandRequest, EnshroudedStatus, ErrorCode, ForgotPassword, InvitePath,
-    KnownPermission, LoggedIn, Login, NewInvite, Opened, PagedResult, PasswordReset, Registration,
+    KnownPermission, LoggedIn, Login, NewInvite, Opened, PagePath, PagedResult, PasswordReset, Registration,
     RolePermissionPath, Sharing, SharingState, UserRolePath,
 };
 use axum::Extension;
@@ -274,14 +274,18 @@ fn origin_allowed(headers: &axum::http::HeaderMap, dev: &str, debug: bool) -> bo
 }
 
 /// Whether `viewer` may use a route of `access`: 401 `logged_out`, 403 `forbidden`, or 503
-/// while auth can't say who is logged in.
-fn allowed(access: Access, viewer: &Viewer) -> Result<(), ApiError> {
+/// while auth can't say who is logged in. Anyone may use a guest-only route (only a page sends
+/// the logged in away, [`crate::pages`]).
+pub(crate) fn allowed(access: Access, viewer: &Viewer) -> Result<(), ApiError> {
+    if matches!(access, Access::Public | Access::GuestOnly) {
+        return Ok(());
+    }
     let permissions = match &viewer.0 {
         api::Viewer::User { permissions, .. } => permissions,
         _ => return viewer.token().map(|_| ()),
     };
     match access {
-        Access::Public | Access::LoggedIn => Ok(()),
+        Access::Public | Access::GuestOnly | Access::LoggedIn => Ok(()),
         Access::Perm(p) if permissions.iter().any(|q| q.known() == Some(p)) => Ok(()),
         Access::Perm(_) => Err(api_types::ApiError::forbidden().into()),
     }
@@ -290,7 +294,7 @@ fn allowed(access: Access, viewer: &Viewer) -> Result<(), ApiError> {
 /// The access layer of a group of routes: `.route_layer(from_fn_with_state(Access::LoggedIn,
 /// access))`. Public routes don't resolve the viewer.
 async fn access(State(access): State<Access>, req: Request, next: Next) -> Response {
-    if access == Access::Public {
+    if matches!(access, Access::Public | Access::GuestOnly) {
         return next.run(req).await;
     }
     let (mut parts, body) = req.into_parts();
@@ -358,6 +362,14 @@ pub(crate) async fn bootstrap(viewer: api::Viewer) -> Bootstrap {
         }
     };
     Bootstrap { viewer }
+}
+
+/// Where a login lands: the invite page it came from (its invite was just redeemed), else
+/// `requested`, else `/`. Takes the invite page out of the session. Every login uses it: the
+/// OAuth callback and the pages' after-login call.
+pub(crate) async fn next_page(session: &Session, requested: Option<PagePath>) -> String {
+    let invite: Option<String> = session.remove(api::INVITE_RETURN_KEY).await.ok().flatten();
+    invite.unwrap_or_else(|| requested.unwrap_or(PagePath::Home).as_str().to_owned())
 }
 
 /// `POST /api/session/login`.

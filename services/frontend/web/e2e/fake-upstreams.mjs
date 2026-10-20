@@ -2,8 +2,9 @@
 // (login, the token check, profiles, Ark), and SurrealDB (no pictures stored). Test code only:
 // it runs on the CI runner beside the container, never in an image.
 //
-// Accounts: `tester-none` and `tester-all`, password `right`. Their tokens are `none` (no
-// permissions) and `all` (every permission the site knows, plus one it doesn't).
+// Accounts: `tester-none`, `tester-all` and `tester-down`, password `right`. Their tokens are
+// `none` (no permissions), `all` (every permission the site knows, plus one it doesn't) and
+// `down`, whose check fails as if auth were down: logged in, with no permissions known.
 import { createServer } from 'node:http';
 
 const port = Number(process.env.FAKE_PORT ?? 4010);
@@ -11,11 +12,15 @@ const PERMISSIONS = { all: ['llama', 'enshrouded', 'arcane', 'manage_permissions
 
 const routes = {
   'POST /internal/token/exchange': ({ username, password }) =>
-    password === 'right' && ['tester-none', 'tester-all'].includes(username)
+    password === 'right' && ['tester-none', 'tester-all', 'tester-down'].includes(username)
       ? [200, { token: username.slice('tester-'.length), username }]
       : [401, 'Invalid credentials'],
   'POST /internal/token/introspect': ({ token }) =>
-    token in PERMISSIONS ? [200, { permissions: PERMISSIONS[token] }] : [401, 'Invalid or expired token'],
+    token === 'down'
+      ? [500, {}]
+      : token in PERMISSIONS
+        ? [200, { permissions: PERMISSIONS[token] }]
+        : [401, 'Invalid or expired token'],
   'POST /internal/profile': ({ token }) =>
     token in PERMISSIONS
       ? [200, { user_id: token === 'all' ? 1 : 2, username: `tester-${token}`, display_name: token === 'all' ? 'Tess All' : null, email: `${token}@example.test`, email_verified: true }]

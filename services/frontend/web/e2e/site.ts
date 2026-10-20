@@ -5,12 +5,17 @@ import AxeBuilder from '@axe-core/playwright';
 import spec from '../src/api/openapi.json' with { type: 'json' };
 import type { components } from '../src/api/schema';
 
-type Access = 'public' | 'logged_in' | { perm: components['schemas']['KnownPermission'] };
+export type Access = 'public' | 'guest_only' | 'logged_in' | { perm: components['schemas']['KnownPermission'] };
 export const PAGES = (spec as unknown as { 'x-pages': { path: components['schemas']['PagePath']; access: Access }[] })[
   'x-pages'
 ];
 
-export type Who = 'anonymous' | 'plain' | 'all';
+/** Against staging (real auth, its test accounts) rather than the image with stand-ins. */
+export const STAGING = !!process.env.E2E_BASE_URL;
+
+/** Logged out, logged in without permissions, with every permission, and logged in while auth
+ * can't be asked (only the stand-ins can arrange that). */
+export type Who = 'anonymous' | 'plain' | 'all' | 'down';
 
 /** Test accounts: the stand-ins' by default, staging's from the environment (secrets). */
 const USERS = {
@@ -22,6 +27,7 @@ const USERS = {
     username: process.env.E2E_ALL_USERNAME ?? 'tester-all',
     password: process.env.E2E_ALL_PASSWORD ?? 'right',
   },
+  down: { username: 'tester-down', password: 'right' },
 };
 
 /** Logs `context` in as `who`. The API call carries no Origin (it isn't a page's), so the

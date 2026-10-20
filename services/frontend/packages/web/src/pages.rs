@@ -5,15 +5,21 @@
 //! and at the `<meta name="bff-inject">` marker (the page request's `traceparent`, the
 //! `service-version` and the [`Bootstrap`] JSON). Astro's hashed files under `/_astro/` are
 //! served from disk and cached for good; no other file of the build is served.
+//!
+//! A page that isn't public has a guard ([`guard`], a route layer): logged out, it redirects to
+//! `/login?next=<page>`; without the permission it is the 403 page, and while auth can't say
+//! who is logged in the 503 page. A guest-only page sends the logged in to `/`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use api_types::{Access, Bootstrap, PAGES, STATUS_PAGES};
-use axum::extract::State;
+use api_types::{Access, Bootstrap, ErrorCode, Page, PAGES, STATUS_PAGES};
+use axum::extract::{FromRequestParts, Request, State};
 use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+use axum::middleware::{from_fn_with_state, Next};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Router;
 
 use crate::json_api;
@@ -49,7 +55,7 @@ pub fn from_env() -> anyhow::Result<Option<Arc<Built>>> {
         Ui::Dioxus => Ok(None),
         Ui::Astro => {
             let dir = std::env::var_os("WEB_DIST").map_or_else(|| PathBuf::from("web/dist"), PathBuf::from);
-            let built = Built::load(&dir)?;
+            let built = Built::load(&dir, PAGES)?;
             tracing::info!(dir = %dir.display(), pages = PAGES.len(), "serving the Astro pages");
             Ok(Some(Arc::new(built)))
         }
@@ -151,12 +157,13 @@ pub struct Built {
 }
 
 impl Built {
-    /// Reads `dir`. Fails when a page or status page is missing, can't be split, or the build
-    /// has an HTML file that is neither: a page without a row in `PAGES` would have no access rule.
-    pub fn load(dir: &Path) -> anyhow::Result<Self> {
+    /// Reads `dir`, the build of `rows` ([`PAGES`]). Fails when a page or status page is
+    /// missing, can't be split, or the build has an HTML file that is neither: a page without a
+    /// row in `PAGES` would have no access rule.
+    pub fn load(dir: &Path, rows: &[Page]) -> anyhow::Result<Self> {
         let mut found = BTreeSet::new();
         html_files(dir, dir, &mut found).map_err(|e| anyhow::anyhow!("can't read the Astro build at {}: {e}", dir.display()))?;
-        let expected: BTreeSet<&str> = PAGES.iter().map(|p| p.file).chain(STATUS_PAGES.iter().copied()).collect();
+        let expected: BTreeSet<&str> = rows.iter().map(|p| p.file).chain(STATUS_PAGES.iter().copied()).collect();
         let unlisted: Vec<_> = found.iter().filter(|f| !expected.contains(f.as_str())).collect();
         if !unlisted.is_empty() {
             anyhow::bail!("{}: HTML that isn't a page in PAGES or a status page: {unlisted:?}", dir.display());
@@ -190,16 +197,24 @@ fn html_files(root: &Path, dir: &Path, found: &mut BTreeSet<String>) -> std::io:
     Ok(())
 }
 
-/// Adds the pages and `/_astro/*` to `router` when there is a build. Guards come with the pages
-/// that need them: until then a page that isn't public stops the server from starting.
-pub fn mount<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Option<Arc<Built>>) -> anyhow::Result<Router<S>> {
-    let Some(built) = built else { return Ok(router) };
+/// Adds the pages and `/_astro/*` to `router` when there is a build.
+pub fn mount<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Option<Arc<Built>>) -> Router<S> {
+    match built {
+        Some(built) => mount_rows(router, built, PAGES),
+        None => router,
+    }
+}
+
+/// [`mount`] with `rows` for the pages: a page that isn't public gets its [`guard`].
+fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Built>, rows: &[Page]) -> Router<S> {
     let mut router = router;
-    for page in PAGES {
-        if page.access != Access::Public {
-            anyhow::bail!("page {} needs a guard: only public pages are served", page.path.as_str());
-        }
-        router = router.route(page.path.as_str(), axum::routing::get(serve).with_state((built.clone(), page.file)));
+    for page in rows {
+        let route = axum::routing::get(serve).with_state((built.clone(), page.file));
+        let route = match page.access {
+            Access::Public => route,
+            _ => route.route_layer(from_fn_with_state((built.clone(), *page), guard)),
+        };
+        router = router.route(page.path.as_str(), route);
         // `/asshole/` is the same page: sent to its one address, rather than to Dioxus's
         // fallback, which would render the Dioxus page under the flag.
         if page.path.as_str() != "/" {
@@ -210,7 +225,67 @@ pub fn mount<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Option<
     let assets = Router::new()
         .route_service("/_astro/{*path}", files)
         .layer(axum::middleware::map_response(immutable));
-    Ok(router.merge(assets))
+    router.merge(assets)
+}
+
+/// What a page that isn't public answers a viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// The page.
+    Serve,
+    /// A redirect to `/login?next=<page>`.
+    LogIn,
+    /// A redirect to `/`: a guest-only page, logged in.
+    Home,
+    /// The 403 page: logged in, without the permission.
+    Forbidden,
+    /// The 503 page: auth can't say who is logged in, or the session can't be read.
+    Unavailable,
+}
+
+/// The access rule of a page: the API's ([`json_api::allowed`]), with the page's answers.
+/// `viewer` is `None` when the session can't be read. Fails closed: whatever isn't known to be
+/// allowed is no page.
+fn verdict(access: Access, viewer: Option<&json_api::Viewer>) -> Verdict {
+    let logged_in = |v: &json_api::Viewer| !matches!(v.0, api::Viewer::Anonymous);
+    match (access, viewer) {
+        (Access::Public, _) => Verdict::Serve,
+        // Unknown counts as logged out: the page shows the logged-out navbar too.
+        (Access::GuestOnly, Some(v)) if logged_in(v) => Verdict::Home,
+        (Access::GuestOnly, _) => Verdict::Serve,
+        (_, None) => Verdict::Unavailable,
+        (access, Some(v)) => match json_api::allowed(access, v) {
+            Ok(()) => Verdict::Serve,
+            Err(e) => match e.0.error {
+                ErrorCode::LoggedOut => Verdict::LogIn,
+                ErrorCode::Forbidden => Verdict::Forbidden,
+                _ => Verdict::Unavailable,
+            },
+        },
+    }
+}
+
+/// The route layer of a page that isn't public. The viewer is resolved here and kept in the
+/// request, so the page's own splice asks auth nothing more. Redirects and status pages are
+/// traced under the page's route (`GET /admin`).
+async fn guard(State((built, page)): State<(Arc<Built>, Page)>, req: Request, next: Next) -> Response {
+    let (mut parts, body) = req.into_parts();
+    // Logged by the extractor when it fails.
+    let viewer = json_api::Viewer::from_request_parts(&mut parts, &()).await.ok();
+    let (file, status) = match verdict(page.access, viewer.as_ref()) {
+        Verdict::Serve => return next.run(Request::from_parts(parts, body)).await,
+        // A path has nothing to escape in a query (`api-types` tests it).
+        Verdict::LogIn => return Redirect::to(&format!("/login?next={}", page.path.as_str())).into_response(),
+        Verdict::Home => return Redirect::to("/").into_response(),
+        Verdict::Forbidden => ("403.html", StatusCode::FORBIDDEN),
+        Verdict::Unavailable => ("503.html", StatusCode::SERVICE_UNAVAILABLE),
+    };
+    let bootstrap = match viewer {
+        Some(viewer) => json_api::bootstrap(viewer.0).await,
+        None => Bootstrap { viewer: None },
+    };
+    let request = parts.extensions.get::<api::trace::RequestTraceContext>();
+    respond(&built, file, status, request, &bootstrap)
 }
 
 /// A page's path with a trailing slash: a permanent redirect to the path without it, keeping
@@ -247,14 +322,26 @@ async fn serve(
         // Logged out is what the page then shows; the reason is logged by the extractor.
         Err(_) => Bootstrap { viewer: None },
     };
-    let traceparent = request.and_then(|axum::Extension(cx)| api::trace::page_traceparent(&cx));
+    respond(&built, file, StatusCode::OK, request.as_ref().map(|r| &r.0), &bootstrap)
+}
+
+/// `file` of the build with `status`, spliced with `bootstrap` and the request's trace.
+fn respond(
+    built: &Built,
+    file: &str,
+    status: StatusCode,
+    request: Option<&api::trace::RequestTraceContext>,
+    bootstrap: &Bootstrap,
+) -> Response {
+    let traceparent = request.and_then(api::trace::page_traceparent);
     let version = api::trace::service_version();
     let html = built.page(file).render(&Injected {
         traceparent: traceparent.as_deref(),
         version: version.as_deref(),
-        bootstrap: &bootstrap,
+        bootstrap,
     });
     (
+        status,
         [
             (CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8")),
             // Per request (the viewer, the trace): never from a shared cache. The browser's
