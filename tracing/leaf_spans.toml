@@ -153,3 +153,36 @@ reason = "after a login without a pending invite it only reads the session and r
 service = "frontend"
 name = "GET /assets/*"
 reason = "a static file sent from disk: the span is the read and the send, with nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /_astro/*"
+reason = "an Astro file (hashed) sent from disk: the read and the send, with nothing of ours inside"
+
+# Astro's pages (FRONTEND_UI=astro), one entry per page, never a glob: a broader one would hide
+# childless API GETs. A Rust test (packages/web/src/pages/tests.rs) checks every public page has one.
+[[leaf]]
+service = "frontend"
+name = "GET /"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /asshole"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /account-deleted"
+reason = "childless only for a request without a session: no session load or introspect"
+
+# A page's path with a trailing slash: a redirect to the page, one entry per page as above.
+[[leaf]]
+service = "frontend"
+name = "GET /asshole/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /account-deleted/"
+reason = "a redirect to the page without the slash: nothing of ours inside"

@@ -1,0 +1,11 @@
+# Astro
+dist/
+.astro/
+node_modules/
+# The tracing script, made by `npm run vendor`
+src/vendor/
+# Playwright
+test-results/
+playwright-report/
+e2e/.fake.pid
+e2e/fake.log

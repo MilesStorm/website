@@ -1,0 +1,36 @@
+name: staging-journeys
+
+# The end-to-end tests (services/frontend/web/e2e) against https://staging.milesstorm.com, with
+# real auth and staging's test accounts. Run by hand before approving a release to production.
+# The accounts' names and passwords are secrets of the `staging` environment (ENV.md, "Staging
+# test accounts"): one with no permissions, one with every permission the site knows. Nothing
+# is uploaded: this repository is public, and a report would hold those accounts' sessions.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  journeys:
+    name: staging journeys
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: services/frontend/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+        env:
+          E2E_BASE_URL: https://staging.milesstorm.com
+          E2E_PLAIN_USERNAME: ${{ secrets.STAGING_PLAIN_USERNAME }}
+          E2E_PLAIN_PASSWORD: ${{ secrets.STAGING_PLAIN_PASSWORD }}
+          E2E_ALL_USERNAME: ${{ secrets.STAGING_ALL_USERNAME }}
+          E2E_ALL_PASSWORD: ${{ secrets.STAGING_ALL_PASSWORD }}

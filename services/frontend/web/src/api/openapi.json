@@ -2432,6 +2432,15 @@
           }
         ]
       },
+      "PagePath": {
+        "description": "A page's path. Deserializing anything else (another site, an API path, a page that\ndoesn't exist) fails.",
+        "type": "string",
+        "enum": [
+          "/",
+          "/asshole",
+          "/account-deleted"
+        ]
+      },
       "PasswordReset": {
         "description": "`POST /api/password/reset`.",
         "type": "object",
@@ -2675,5 +2684,22 @@
         ]
       }
     }
-  }
+  },
+  "x-pages": [
+    {
+      "access": "public",
+      "file": "index.html",
+      "path": "/"
+    },
+    {
+      "access": "public",
+      "file": "asshole.html",
+      "path": "/asshole"
+    },
+    {
+      "access": "public",
+      "file": "account-deleted.html",
+      "path": "/account-deleted"
+    }
+  ]
 }

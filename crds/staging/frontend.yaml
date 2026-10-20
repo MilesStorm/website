@@ -20,3 +20,6 @@ spec:
             - {name: SURREAL_USER, value: "dice_staging"}
             - {name: SURREAL_NS, value: "milesstorm_staging"}
             - {name: SURREAL_DB, value: "arcane"}
+            # The Astro pages instead of Dioxus's (the image has both); production keeps Dioxus
+            # until the cutover.
+            - {name: FRONTEND_UI, value: "astro"}

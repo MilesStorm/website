@@ -1,0 +1,14 @@
+---
+// Shown only to logged-in (`session="in"`) or logged-out (`session="out"`) viewers, or to
+// viewers with a permission (`requires`, logged in implied). CSS does it: src/lib/gates.ts.
+import type { KnownPermission } from '@/api/session';
+
+type Props = {
+  as?: 'div' | 'li' | 'span';
+  class?: string;
+} & ({ session: 'in' | 'out'; requires?: never } | { requires: KnownPermission; session?: never });
+
+const { as: Tag = 'div', class: className, session, requires } = Astro.props;
+---
+
+<Tag data-gate={requires ? 'in' : session} data-requires={requires} class={className}><slot /></Tag>

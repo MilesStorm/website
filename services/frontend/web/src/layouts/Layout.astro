@@ -1,0 +1,111 @@
+---
+// Every page's frame. The <head> order is a contract with the server and the tracing
+// (TRACING.md, "Browser"): the charset first (within the first 1024 bytes however large the
+// spliced data is), then the `bff-inject` marker the server replaces with the trace context and
+// the viewer, then the theme (before anything paints) and the guard for islands whose script a
+// deploy removed (before any island loads), then the tracing script (classic and
+// synchronous, so fetch is wrapped before any module runs), then the CSS and the modules, which
+// Astro puts at the end of <head>.
+import '@/styles/global.css';
+import tracingUrl from '@/vendor/tracing.js?url';
+import faviconUrl from '@/assets/favicon.ico?url';
+import Navbar from '@/components/Navbar.astro';
+import { CookieConsent } from '@/islands/CookieConsent';
+import { GATE_CSS } from '@/lib/gates';
+import { OLD_KEYS, THEME_KEY } from '@/lib/theme';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+const { title, description = 'Tools for game nights with friends.' } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="bff-inject" />
+    <script is:inline define:vars={{ themeKey: THEME_KEY, oldKeys: OLD_KEYS }}>
+      // Dark unless the saved theme, or the system's when there is none, is light. The first
+      // visit also drops the Dioxus app's saved theme and cookie choice (a one-time reset).
+      var saved = null;
+      try {
+        if (localStorage.getItem(themeKey) === null) {
+          oldKeys.forEach(function (k) { localStorage.removeItem(k); });
+          localStorage.setItem(themeKey, 'system');
+        }
+        saved = localStorage.getItem(themeKey);
+      } catch (e) {}
+      var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+      function apply() {
+        var dark = saved === 'dark' || (saved !== 'light' && (!media || media.matches));
+        document.documentElement.classList.toggle('dark', dark);
+      }
+      apply();
+      if (media && media.addEventListener) media.addEventListener('change', apply);
+      window.addEventListener('storage', function (e) {
+        if (e.key === themeKey) { saved = e.newValue; apply(); }
+      });
+    </script>
+    <script is:inline>
+      // An island whose script is gone (a tab open across a deploy, or the old pod's page asking
+      // the new pod during a rolling update) reloads the page, once per page and release, so a
+      // file that is missing for good can't loop. Astro has already retried the import once.
+      (function () {
+        function reloadOnce() {
+          try {
+            var key = 'ms.skew:' + location.pathname;
+            var meta = document.querySelector('meta[name="service-version"]');
+            var value = (meta && meta.content) || 'unversioned';
+            if (sessionStorage.getItem(key) === value) return;
+            sessionStorage.setItem(key, value);
+          } catch (e) {
+            return;
+          }
+          location.reload();
+        }
+        // A failed import() is a TypeError naming the module in every browser; an island's own
+        // bug isn't a missing file.
+        document.addEventListener('astro:hydration-error', function (e) {
+          var d = e.detail || {};
+          if (d.error instanceof TypeError && /module/i.test(d.error.message) && d.componentUrl) {
+            reloadOnce();
+          }
+        });
+        window.addEventListener('vite:preloadError', function (e) {
+          e.preventDefault();
+          reloadOnce();
+        });
+      })();
+    </script>
+    <script is:inline src={tracingUrl}></script>
+    <style is:inline set:html={GATE_CSS}></style>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <link rel="icon" href={faviconUrl} />
+    <title>{title}</title>
+  </head>
+  <body class="min-h-screen antialiased">
+    <Navbar />
+    <slot />
+    <CookieConsent client:only="react" />
+    <script>
+      import { applySession, fetchBootstrap, readBootstrap, sameViewer } from '@/api/session';
+
+      const root = document.documentElement;
+      // A page the server didn't splice (`astro dev`, a bundled app): ask who is looking.
+      if (!root.hasAttribute('data-session')) {
+        void readBootstrap().then((b) => applySession(b));
+      }
+      // Back after logging out (or in) elsewhere may show this page from the back/forward
+      // cache, as it was: load it again when the viewer has changed.
+      window.addEventListener('pageshow', (e) => {
+        if (!e.persisted) return;
+        void Promise.all([readBootstrap(), fetchBootstrap()]).then(([shown, now]) => {
+          if (!sameViewer(shown, now)) location.reload();
+        });
+      });
+    </script>
+  </body>
+</html>

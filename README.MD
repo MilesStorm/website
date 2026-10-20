@@ -148,6 +148,14 @@ cargo test -p web --features server --bin web --locked
 cargo check -p web --features web --target wasm32-unknown-unknown --locked
 npm run test:trace
 
+# From services/frontend/web (the Astro pages; Node 22.22 or later)
+npm ci && npm run vendor
+npm run check   # types, against src/api/schema.d.ts
+npm test        # component tests (Vitest)
+npm run build   # dist/, served by the frontend with FRONTEND_UI=astro
+# The built image in a browser (Docker): build it as `frontend:e2e`, then
+e2e/serve.sh && npx playwright test; e2e/serve.sh stop
+
 # From extension/arcane-dice
 node --test "test/*.test.js"
 ```
@@ -166,5 +174,7 @@ GitHub Actions builds the frontend, auth, and AI service images into GHCR when t
 | [extension/arcane-dice/](extension/arcane-dice/) | Browser extension, tests, and release configuration |
 | [crds/](crds/) | Kubernetes deployments, services, and routing for the application |
 | [.github/workflows/](.github/workflows/) | Container builds and extension release automation |
+
+Astro's files under `/_astro/` are named by a hash of their content, and the frontend sends them `public, max-age=31536000, immutable`. Cloudflare caches them through a cache rule made by hand in its dashboard (there is no Cloudflare configuration in code): URI path starts with `/_astro/`, eligible for cache, edge TTL from the origin's header. Pages are per request (`private, no-cache`) and never cached at the edge.
 
 For a change, start in the relevant component, run its checks, and open a pull request. Include what changed, how it was verified, and any environment or migration requirements.

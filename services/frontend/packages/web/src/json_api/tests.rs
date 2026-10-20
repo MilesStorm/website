@@ -26,8 +26,8 @@ const SITE: &str = "https://milesstorm.test";
 
 /// Introspect calls, by token, and the stored picture (base64 JPEG, version).
 #[derive(Default)]
-struct Auth {
-    introspected: Mutex<HashMap<String, usize>>,
+pub(crate) struct Auth {
+    pub(crate) introspected: Mutex<HashMap<String, usize>>,
     picture: Mutex<Option<(String, i64)>>,
     /// The SurrealDB statements run, and `delete/confirm` calls to auth, in order.
     queries: Mutex<Vec<String>>,
@@ -38,7 +38,7 @@ struct Auth {
 }
 
 impl Auth {
-    fn introspected(&self, token: &str) -> usize {
+    pub(crate) fn introspected(&self, token: &str) -> usize {
         self.introspected.lock().unwrap().get(token).copied().unwrap_or(0)
     }
 }
@@ -328,18 +328,18 @@ fn stand_in_panels(auth: Arc<Auth>) -> axum::Router {
 /// The API as the server mounts it, behind an in-memory session layer, and a browser with
 /// a cookie jar of one. A `Site` holds [`AUTH_ENV`] until dropped: drop one before making
 /// the next in the same test, or the test waits for itself.
-struct Site {
+pub(crate) struct Site {
     app: axum::Router,
-    auth: Arc<Auth>,
+    pub(crate) auth: Arc<Auth>,
     cookie: Option<String>,
     _env: tokio::sync::MutexGuard<'static, ()>,
 }
 
-struct Reply {
-    status: StatusCode,
-    content_type: Option<String>,
-    bytes: Vec<u8>,
-    body: Value,
+pub(crate) struct Reply {
+    pub(crate) status: StatusCode,
+    pub(crate) content_type: Option<String>,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) body: Value,
 }
 
 impl Site {
@@ -348,7 +348,7 @@ impl Site {
     }
 
     /// The site with `app` instead of the API as the server mounts it.
-    async fn serving(app: axum::Router) -> Self {
+    pub(crate) async fn serving(app: axum::Router) -> Self {
         let env = AUTH_ENV.lock().await;
         let auth = Arc::new(Auth::default());
         let url = stand_in_auth(auth.clone()).await;
@@ -370,7 +370,7 @@ impl Site {
         Self::new().await.log_in(token).await
     }
 
-    async fn log_in(mut self, token: &str) -> Self {
+    pub(crate) async fn log_in(mut self, token: &str) -> Self {
         assert_eq!(self.send(Method::POST, "/test/seed", Some(SITE), Some(("text/plain", token.into()))).await.status, StatusCode::OK);
         self
     }
@@ -405,7 +405,7 @@ impl Site {
         self
     }
 
-    async fn get(&mut self, path: &str) -> Reply {
+    pub(crate) async fn get(&mut self, path: &str) -> Reply {
         self.send(Method::GET, path, None, None).await
     }
 
@@ -603,12 +603,12 @@ fn errors_answer_their_status_with_the_envelope() {
 /// Dioxus routes each file of its public dir (as the image has it: dx's bundle). Nothing else
 /// reads DIOXUS_PUBLIC_PATH; it is put back, and the directory removed, either way. Tests that
 /// make one hold [`PUBLIC_ENV`].
-struct Public(std::path::PathBuf, Option<std::ffi::OsString>, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+pub(crate) struct Public(std::path::PathBuf, Option<std::ffi::OsString>, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
 
 static PUBLIC_ENV: Mutex<()> = Mutex::new(());
 
 impl Public {
-    fn new(name: &str) -> Self {
+    pub(crate) fn new(name: &str) -> Self {
         let guard = PUBLIC_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let public = Public(
             std::env::temp_dir().join(format!("web-public-{name}-{}", std::process::id())),

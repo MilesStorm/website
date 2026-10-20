@@ -2,7 +2,8 @@ name: checks
 
 # Clippy and the tests of every service, on every push and pull request (TRACING.md, "Checks").
 # No path filters, so the jobs can be required checks. ai_pipeline builds without CUDA (burn
-# loads it at run time) and no test needs a GPU, so all three run on GitHub's runners.
+# loads it at run time) and no test needs a GPU, so all three run on GitHub's runners. The
+# built image's browser tests are e2e.yml.
 
 on:
   push:
@@ -37,14 +38,29 @@ jobs:
       - run: cargo test -p api-types -p api -p web --features web/server
       - run: npm run test:trace
       # The committed API contract is what the handlers say (web/src/api/openapi.json), and the
-      # TypeScript types are generated from it: regenerate both with `npm run api`.
+      # TypeScript types are generated from it: regenerate both with `npm run api` in web/.
       - name: OpenAPI document is current
         run: cargo run -q -p web --features web/server -- openapi | diff - web/src/api/openapi.json
       - name: TypeScript API types are current
-        run: npm run api:types && git diff --exit-code -- web/src/api/schema.d.ts
+        working-directory: services/frontend/web
+        run: npm ci && npm run api:types && git diff --exit-code -- src/api/schema.d.ts
       # aide can't read a response type through `impl IntoApiResponse`: handlers name theirs.
       - name: API handlers return concrete types
         run: '! grep -rn "impl IntoApiResponse" packages/web/src'
+      # The Astro pages: typed against schema.d.ts, their component tests, and a build with
+      # exactly the pages in PAGES, each with the marker the server splices at.
+      - name: Astro pages type-check
+        working-directory: services/frontend/web
+        env:
+          ASTRO_TELEMETRY_DISABLED: 1
+        run: npm run vendor && npm run check
+      - name: Component tests
+        working-directory: services/frontend/web
+        run: npm test
+      - name: Astro build has exactly the pages
+        env:
+          ASTRO_TELEMETRY_DISABLED: 1
+        run: (cd web && npm run build) && cargo run -q -p web --features web/server -- check-pages web/dist
 
   # The browser extension's scripts, type-checked (tsconfig.json); a job of its own so it runs
   # beside the frontend's.

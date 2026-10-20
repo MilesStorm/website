@@ -2271,6 +2271,12 @@ export interface components {
             kind: "needs_account";
             role: string;
         };
+        /**
+         * @description A page's path. Deserializing anything else (another site, an API path, a page that
+         *     doesn't exist) fails.
+         * @enum {string}
+         */
+        PagePath: "/" | "/asshole" | "/account-deleted";
         /** @description `POST /api/password/reset`. */
         PasswordReset: {
             code: string;
