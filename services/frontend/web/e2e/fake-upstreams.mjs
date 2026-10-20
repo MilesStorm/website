@@ -1,6 +1,6 @@
 // Stand-ins for what the server calls, for the end-to-end tests against the built image: auth
-// (login, the token check, profiles, Ark), and SurrealDB (profile pictures, kept in memory, and
-// shared rolls, of which there are none). Test code only:
+// (login, the token check, profiles, emails, invites, roll-sharing consent) and Ark. SurrealDB is
+// a real one (e2e/serve.sh). Test code only:
 // it runs on the CI runner beside the container, never in an image.
 //
 // Accounts: `tester-none`, `tester-all` and `tester-down`, password `right`, and any
@@ -21,9 +21,6 @@ const site = process.env.SITE_URL ?? 'https://localhost:8443';
 /** Display names set, and the roll-sharing choice, by token. */
 const names = {};
 const sharing = {};
-/** Profile pictures by user id: [base64 JPEG, version]. */
-const pictures = {};
-let version = 1700000000000;
 
 /** User ids, by token, given out as accounts are first seen. */
 const userIds = { all: 1, none: 2 };
@@ -39,26 +36,6 @@ const profile = (token) => ({
   email_verified: kind(token) === 'all',
 });
 
-/** SurrealDB's `/rpc`: the profile-picture statements (src/dataset.rs), and none stored else. */
-function surreal({ id, params: [sql = '', vars = {}] = [] }) {
-  const ok = (result) => [200, { id, result: [{ status: 'OK', result }] }];
-  const key = vars.id;
-  if (sql.startsWith('UPSERT type::record(\'profile_picture\'')) {
-    pictures[key] = [vars.jpeg, ++version];
-    return ok([version]);
-  }
-  if (sql.startsWith('SELECT VALUE time::millis(updated_at)')) return ok(pictures[key]?.[1] ?? null);
-  if (sql.startsWith('SELECT encoding::base64::encode(jpeg)')) {
-    const stored = pictures[key];
-    return ok(stored ? { jpeg: stored[0], version: stored[1] } : null);
-  }
-  if (sql.startsWith('DELETE type::record(\'profile_picture\'')) {
-    delete pictures[key];
-    return ok(null);
-  }
-  if (sql.startsWith('DELETE roll_sample')) return ok([]);
-  return ok(null);
-}
 const PERMISSIONS = { all: ['llama', 'enshrouded', 'arcane', 'manage_permissions', 'brand_new'], none: [] };
 const kind = (token) => String(token).split('-')[0];
 const known = (token) => kind(token) in PERMISSIONS;
@@ -111,9 +88,6 @@ const routes = {
   'POST /internal/invite/check': ({ code }) => (code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}]),
   'POST /internal/invite/redeem': ({ code, token }) =>
     !known(token) ? [401, {}] : code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}],
-  // SurrealDB: signed in, and nothing stored.
-  'POST /signin': () => [200, { code: 200, token: 'surreal-token' }],
-  'POST /rpc': surreal,
 };
 
 createServer((req, res) => {

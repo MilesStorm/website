@@ -56,7 +56,7 @@ export function Profile() {
     });
   };
 
-  if (!account) return <Skeleton className="h-64 w-full rounded-xl" aria-label="Loading your account" />;
+  if (!account) return <Skeleton className="h-64 w-full rounded-xl" role="status" aria-label="Loading your account" />;
   if (!account.ok) return <FormAlert message={account.message} />;
   const canShare = viewer?.permissions.includes('arcane') ?? false;
   return (
@@ -268,7 +268,7 @@ function SharingCard() {
     void attempt(client.GET('/api/account/sharing')).then(setState);
   }, []);
 
-  if (!state) return <Skeleton className="h-40 w-full rounded-xl" aria-label="Loading your sharing setting" />;
+  if (!state) return <Skeleton className="h-40 w-full rounded-xl" role="status" aria-label="Loading your sharing setting" />;
   if (!state.ok) return <FormAlert message="Couldn't load your sharing setting." />;
   // The store isn't set up on this server: nothing to choose.
   if (!state.data.available) return null;

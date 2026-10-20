@@ -13,7 +13,7 @@ const PNG = Buffer.from(
 test('the profile shows the account, and its theme card works', async ({ context, page }) => {
   await logIn(context, 'plain');
   await page.goto('/profile');
-  await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Email' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Delete account' })).toBeVisible();
   await expectAccessible(page);
@@ -85,7 +85,7 @@ if (!STAGING) {
   test('without it, there is no sharing card', async ({ context, page }) => {
     await logIn(context, 'plain');
     await page.goto('/profile');
-    await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Help improve dice recognition' })).toBeHidden();
   });
 
@@ -102,7 +102,7 @@ if (!STAGING) {
     await logIn(context, 'all');
     await page.goto('/ark');
     await expect(page.getByText('3', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Start' }).click();
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
     await expect(page.getByText('Started.')).toBeVisible();
   });
 }

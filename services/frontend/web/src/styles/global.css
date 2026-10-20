@@ -63,9 +63,10 @@
     --muted-foreground: oklch(0.556 0 0);
     --accent: oklch(0.97 0 0);
     --accent-foreground: oklch(0.205 0 0);
-    /* Tailwind's red-700, not shadcn's red-600: destructive text (alerts, the destructive button
-       on its own tint) on a light card is then over WCAG's 4.5:1 contrast. */
-    --destructive: oklch(0.505 0.213 27.518);
+    /* Tailwind's red-800, not shadcn's red-600: destructive text on a light card stays over
+       WCAG's 4.5:1 on its own tint, hovered too (the destructive button's 20% tint: 5.7:1;
+       red-700 gave 4.4:1). */
+    --destructive: oklch(0.444 0.177 26.899);
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
     --ring: oklch(0.708 0 0);

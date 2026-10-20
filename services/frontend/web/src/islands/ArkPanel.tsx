@@ -74,7 +74,7 @@ export function ArkPanel() {
         </CardHeader>
         <CardContent>
           {count === null ? (
-            <Skeleton className="h-10 w-24" aria-label="Loading the player count" />
+            <Skeleton className="h-10 w-24" role="status" aria-label="Loading the player count" />
           ) : shown ? (
             <p className="text-4xl font-bold tabular-nums">{shown.value}</p>
           ) : (
