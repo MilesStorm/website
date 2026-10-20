@@ -8,6 +8,8 @@ import { SseParser } from "./sse.js";
 import { parseRoll } from "./roll.js";
 import { BASE } from "./config.js";
 
+/** @import { components } from "../../../services/frontend/web/src/api/schema.js" */
+
 /** The server sends a keep-alive every 20 s; this long without a byte means the link is dead. */
 const STALL_MS = 50_000;
 
@@ -20,7 +22,10 @@ export function sleep(ms, signal) {
   });
 }
 
-/** `GET /api/arcane/me`: `{logged_in, username, has_arcane}`. */
+/**
+ * `GET /api/arcane/me`: `{logged_in, username, has_arcane}`.
+ * @returns {Promise<components["schemas"]["ArcaneMe"]>}
+ */
 export async function getMe(signal) {
   const resp = await fetch(`${BASE}/api/arcane/me`, { credentials: "include", cache: "no-store", signal });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

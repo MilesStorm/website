@@ -75,6 +75,11 @@ impl ApiError {
         Self::new(ErrorCode::LoggedOut, "You've been logged out. Log in again.")
     }
 
+    /// Logged in, without the permission a route needs.
+    pub fn forbidden() -> Self {
+        Self::new(ErrorCode::Forbidden, "You don't have access to this.")
+    }
+
     /// Auth can't be asked who is logged in.
     pub fn login_unavailable() -> Self {
         Self::new(ErrorCode::Unavailable, "Your login can't be checked right now. Try again later.")
@@ -142,6 +147,12 @@ impl Permission {
             Self::Known(p) => p.as_str(),
             Self::Other(name) => name,
         }
+    }
+}
+
+impl std::fmt::Display for Permission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -329,6 +340,369 @@ pub struct Deleted {
     pub deleted: u64,
 }
 
+// ---- Ark ----
+
+/// What the Ark server can be told to do: the commands auth accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ArkCommand {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl ArkCommand {
+    /// The name auth takes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+}
+
+/// `POST /api/ark/command`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArkCommandRequest {
+    pub cmd: ArkCommand,
+}
+
+/// What an Ark command did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ArkOutcome {
+    Stopped,
+    AlreadyStopped,
+    FailedToStop,
+    Started,
+    AlreadyRunning,
+    FailedToStart,
+    Timeout,
+    Restarting,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ArkResult {
+    pub outcome: ArkOutcome,
+}
+
+/// `GET /api/ark/players`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ArkPlayers {
+    /// `None` when the game server doesn't say (it is offline).
+    pub count: Option<u32>,
+}
+
+// ---- Enshrouded ----
+
+/// The Enshrouded server as the panel (`/enshrouded`) shows it: auth's `StatusResp`, passed on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct EnshroudedStatus {
+    pub state: EnshroudedState,
+    /// `None` when the server doesn't answer the query.
+    pub players: Option<EnshroudedPlayers>,
+    /// The game's build number.
+    pub version: Option<String>,
+    /// Seconds the server process has been running.
+    pub uptime_secs: Option<i64>,
+    /// When Steam last published a build (unix seconds).
+    pub latest_build_at: Option<i64>,
+    /// Steam has a build the server doesn't run.
+    pub update_pending: bool,
+    /// Someone asked for an update that waits for the server to be empty.
+    #[serde(default)]
+    pub update_queued: bool,
+    /// Whether Restart / Force update can be sent right now.
+    pub can_control: bool,
+    /// Latest commands, newest first.
+    pub recent: Vec<EnshroudedAction>,
+    /// When the next command may be sent (unix seconds), while that is in the future.
+    pub next_command_at: Option<i64>,
+}
+
+/// Auth's names, unchanged.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub enum EnshroudedState {
+    Online,
+    /// The process runs but the world isn't loaded yet.
+    Starting,
+    Restarting,
+    Updating,
+    Stopping,
+    Stopped,
+    Crashed,
+    /// Neither the server nor its control port answers.
+    Unreachable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct EnshroudedPlayers {
+    pub online: u8,
+    pub max: u8,
+    /// How long each player has been connected, in seconds (the game sends no names).
+    pub sessions: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct EnshroudedAction {
+    /// `None` when the account was deleted.
+    pub name: Option<String>,
+    pub action: EnshroudedActionName,
+    /// Unix seconds.
+    pub at: i64,
+}
+
+/// A command as auth stored it: one this site sends, or a name it doesn't know (from an older
+/// or newer auth), which still deserializes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum EnshroudedActionName {
+    Known(EnshroudedCommand),
+    Other(String),
+}
+
+/// Restart, or force an update: `update` waits until nobody is online, `update_now`
+/// disconnects the players.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EnshroudedCommand {
+    Restart,
+    Update,
+    UpdateNow,
+}
+
+impl EnshroudedCommand {
+    /// The name auth takes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Restart => "restart",
+            Self::Update => "update",
+            Self::UpdateNow => "update_now",
+        }
+    }
+}
+
+/// `POST /api/enshrouded/command`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EnshroudedCommandRequest {
+    pub cmd: EnshroudedCommand,
+}
+
+// ---- Admin ----
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct AdminPermission {
+    pub id: i32,
+    /// Also the ones the site doesn't know yet.
+    pub name: Permission,
+}
+
+/// A role as the roles listing has it, with its permissions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct AdminRole {
+    pub id: i32,
+    pub name: String,
+    pub permissions: Vec<AdminPermission>,
+}
+
+/// A role without its permissions: `GET /api/admin/roles/all`, for the pickers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct AdminRoleRef {
+    pub id: i32,
+    pub name: String,
+}
+
+/// A role as the user listing has it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct AdminUserRole {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct AdminUser {
+    pub id: i64,
+    pub username: String,
+    pub email: Option<String>,
+    pub roles: Vec<AdminUserRole>,
+}
+
+/// An invite link as the admin panel lists it (services/auth/src/auth/invites.rs).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct AdminInvite {
+    pub id: i32,
+    pub role_id: i32,
+    pub role: String,
+    pub note: Option<String>,
+    /// Username of the admin who made it.
+    pub created_by: Option<String>,
+    /// RFC 3339 timestamps.
+    pub created_at: String,
+    pub expires_at: String,
+    /// `None` = any number of people.
+    pub max_uses: Option<i32>,
+    pub uses: i32,
+    pub revoked: bool,
+    /// Whether it can still let someone new in.
+    pub live: bool,
+    /// Usernames of who joined through it, in order.
+    #[serde(default)]
+    pub joined: Vec<String>,
+    /// The link itself: only right after making it.
+    #[serde(default)]
+    pub link: Option<String>,
+}
+
+/// One page of a listing, and how many there are in all.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[schemars(rename = "{T}Page")]
+pub struct PagedResult<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+}
+
+/// The query of `GET /api/admin/users` and `GET /api/admin/roles`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AdminPage {
+    /// From 0.
+    pub page: u32,
+    pub limit: u32,
+    /// Part of a name; empty or absent for all.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub search: String,
+}
+
+/// `POST /api/admin/invites`: a link that gives `role_id`, working for `days` days and for up
+/// to `max_uses` people (`None`: any number).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NewInvite {
+    pub role_id: i32,
+    pub days: i64,
+    pub max_uses: Option<i32>,
+    pub note: Option<String>,
+}
+
+/// `/api/admin/users/{user_id}/roles/{role_id}`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct UserRolePath {
+    pub user_id: i64,
+    pub role_id: i32,
+}
+
+/// `/api/admin/roles/{role_id}/permissions/{permission_id}`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct RolePermissionPath {
+    pub role_id: i32,
+    pub permission_id: i32,
+}
+
+/// `/api/admin/invites/{invite_id}`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct InvitePath {
+    pub invite_id: i32,
+}
+
+// ---- Arcane ----
+
+/// `GET /api/arcane/me`: always answered, so the extension can tell "logged out" from
+/// "server down".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ArcaneMe {
+    pub logged_in: bool,
+    pub username: Option<String>,
+    pub has_arcane: bool,
+}
+
+/// `POST /api/arcane/flag`: the latest roll read wrong, with the user's corrections (one per
+/// die, left to right; `null` for one left empty).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FlagRequest {
+    pub roll_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<Option<String>>,
+}
+
+/// A flagged roll was saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Flagged {
+    pub ok: bool,
+}
+
+// What ai_pipeline sends the camera page over `/ws/arcane` (services/ai_pipeline/src/serve.rs),
+// and the rolls `/api/arcane/rolls` streams. The server passes them on without reading them
+// into these types: the golden fixtures in contracts/arcane/ keep both sides to them.
+
+/// A message from `/ws/arcane`, or an event's data on `/api/arcane/rolls` (always a roll).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArcaneServerMsg {
+    /// What was seen in one camera frame.
+    Frame(Frame),
+    /// The dice in view have settled into a new roll (or one re-read).
+    Roll(Roll),
+    /// A frame couldn't be read.
+    Error { error: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Frame {
+    pub detections: Vec<Detection>,
+    /// How long reading the frame took.
+    pub frame_ms: u64,
+    /// The number of the camera frame this answers (1, 2, … per connection).
+    pub frame_seq: u64,
+}
+
+/// One die found in a frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Detection {
+    /// The box, as fractions of the frame.
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+    pub yolo_conf: f32,
+    pub yolo_class: u32,
+    pub dice_class: u32,
+    pub dice_conf: f32,
+    /// The face it shows ("0" is the d10 zero).
+    pub value: String,
+    /// When false, `value` isn't a reading.
+    pub confident: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Roll {
+    /// Kept when the same dice are read again.
+    pub roll_id: String,
+    /// Left to right.
+    pub dice: Vec<RolledDie>,
+    /// The sum (a d10's "0" counts 10); `None` unless every die was read.
+    pub total: Option<u32>,
+    pub complete: bool,
+    /// Unix milliseconds.
+    pub ts: u64,
+    /// The model that read it.
+    pub model: String,
+    /// The camera frame it settled on.
+    pub frame_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RolledDie {
+    /// "1".."20" ("0" is the d10 zero); `None` when it couldn't be read confidently.
+    pub value: Option<String>,
+    pub conf: f32,
+    /// As fractions of the frame: [x1, y1, x2, y2].
+    #[serde(rename = "box")]
+    pub bbox: [f32; 4],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,6 +751,72 @@ mod tests {
         );
         let kept = Opened::NeedsAccount { role: "r".into(), group_label: "g".into() };
         assert_eq!(serde_json::to_value(kept).unwrap()["kind"], "needs_account");
+    }
+
+    /// ai_pipeline's test checks it writes these same files (contracts/arcane/README.md).
+    #[test]
+    fn arcane_fixtures_are_the_documented_messages() {
+        let read = |text: &str| -> ArcaneServerMsg {
+            let msg = serde_json::from_str(text).unwrap();
+            // Nothing in the fixture is lost on the way through the type.
+            assert_eq!(serde_json::to_value(&msg).unwrap(), serde_json::from_str::<serde_json::Value>(text).unwrap());
+            msg
+        };
+        let ArcaneServerMsg::Frame(frame) = read(include_str!("../../../../../contracts/arcane/frame.json")) else {
+            panic!("not a frame")
+        };
+        assert_eq!((frame.frame_seq, frame.detections[0].value.as_str()), (6, "16"));
+        let ArcaneServerMsg::Roll(roll) = read(include_str!("../../../../../contracts/arcane/roll.json")) else {
+            panic!("not a roll")
+        };
+        assert_eq!((roll.total, roll.dice[0].value.as_deref()), (Some(16), Some("16")));
+        let ArcaneServerMsg::Roll(roll) = read(include_str!("../../../../../contracts/arcane/roll_unread.json")) else {
+            panic!("not a roll")
+        };
+        assert_eq!((roll.total, roll.dice[1].value.as_deref()), (None, None));
+        let error = read(include_str!("../../../../../contracts/arcane/error.json"));
+        assert!(matches!(error, ArcaneServerMsg::Error { .. }));
+    }
+
+    #[test]
+    fn arcane_messages_with_unknown_fields_are_refused() {
+        let mut roll: serde_json::Value = serde_json::from_str(include_str!("../../../../../contracts/arcane/roll.json")).unwrap();
+        roll["dice"][0]["colour"] = json!("red");
+        assert!(serde_json::from_value::<ArcaneServerMsg>(roll.clone()).is_err(), "a die's unknown field");
+        roll["dice"][0].as_object_mut().unwrap().remove("colour");
+        roll["mood"] = json!("lucky");
+        assert!(serde_json::from_value::<ArcaneServerMsg>(roll).is_err(), "a roll's unknown field");
+        assert!(serde_json::from_value::<ArcaneServerMsg>(json!({"type": "error", "error": "x", "more": 1})).is_err());
+        assert!(serde_json::from_value::<ArcaneServerMsg>(json!({"type": "dance"})).is_err());
+    }
+
+    #[test]
+    fn commands_are_the_names_auth_takes() {
+        for c in [ArkCommand::Start, ArkCommand::Stop, ArkCommand::Restart] {
+            assert_eq!(serde_json::to_value(c).unwrap(), json!(c.as_str()));
+        }
+        for c in [EnshroudedCommand::Restart, EnshroudedCommand::Update, EnshroudedCommand::UpdateNow] {
+            assert_eq!(serde_json::to_value(c).unwrap(), json!(c.as_str()));
+        }
+        assert!(serde_json::from_value::<ArkCommandRequest>(json!({"cmd": "explode"})).is_err());
+    }
+
+    #[test]
+    fn enshrouded_actions_keep_auths_names() {
+        let actions = json!([
+            {"name": null, "action": "update_now", "at": 1},
+            {"name": "ann", "action": "reinstall", "at": 2},
+        ]);
+        let read: Vec<EnshroudedAction> = serde_json::from_value(actions.clone()).unwrap();
+        assert_eq!(read[0].action, EnshroudedActionName::Known(EnshroudedCommand::UpdateNow));
+        assert_eq!(read[1].action, EnshroudedActionName::Other("reinstall".into()));
+        assert_eq!(serde_json::to_value(&read).unwrap(), actions);
+    }
+
+    #[test]
+    fn a_flag_without_values_has_none() {
+        let flag: FlagRequest = serde_json::from_value(json!({"roll_id": "r"})).unwrap();
+        assert!(flag.values.is_empty());
     }
 
     #[test]

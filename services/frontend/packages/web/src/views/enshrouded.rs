@@ -8,7 +8,8 @@ use dioxus::prelude::*;
 use api::enshrouded_command;
 #[cfg(target_arch = "wasm32")]
 use api::enshrouded_status;
-use ui::data_dir::{EnshroudedAction, EnshroudedState, EnshroudedStatus, LoginStatus};
+use api_types::{EnshroudedAction, EnshroudedActionName, EnshroudedCommand, EnshroudedState, EnshroudedStatus};
+use ui::data_dir::LoginStatus;
 
 use crate::{LOGIN_STATUS, PERMISSIONS};
 
@@ -55,11 +56,11 @@ enum Command {
 }
 
 impl Command {
-    fn wire(self) -> &'static str {
+    fn wire(self) -> EnshroudedCommand {
         match self {
-            Command::Restart => "restart",
-            Command::Update => "update",
-            Command::UpdateNow => "update_now",
+            Command::Restart => EnshroudedCommand::Restart,
+            Command::Update => EnshroudedCommand::Update,
+            Command::UpdateNow => EnshroudedCommand::UpdateNow,
         }
     }
 }
@@ -98,7 +99,7 @@ fn Panel() -> Element {
     let send = move |cmd: Command| {
         spawn(async move {
             command.set(CommandUi::Sending(cmd));
-            match enshrouded_command(cmd.wire().to_string()).await {
+            match enshrouded_command(cmd.wire()).await {
                 Ok(()) => command.set(CommandUi::Sent(cmd)),
                 Err(e) => command.set(CommandUi::Failed(message(&e))),
             }
@@ -373,9 +374,11 @@ fn Activity(recent: Vec<EnshroudedAction>, now: i64) -> Element {
                     li { class: "flex justify-between gap-4",
                         span {
                             span { class: "font-semibold", "{a.name.as_deref().unwrap_or(\"A deleted account\")}" }
-                            match a.action.as_str() {
-                                "update" => " asked for an update",
-                                "update_now" => " force-updated the server, disconnecting players",
+                            match a.action {
+                                EnshroudedActionName::Known(EnshroudedCommand::Update) => " asked for an update",
+                                EnshroudedActionName::Known(EnshroudedCommand::UpdateNow) => {
+                                    " force-updated the server, disconnecting players"
+                                }
                                 _ => " restarted the server",
                             }
                         }
@@ -428,7 +431,7 @@ mod tests {
     fn status() -> EnshroudedStatus {
         EnshroudedStatus {
             state: EnshroudedState::Online,
-            players: Some(ui::data_dir::EnshroudedPlayers { online: 2, max: 16, sessions: vec![300, 7500] }),
+            players: Some(api_types::EnshroudedPlayers { online: 2, max: 16, sessions: vec![300, 7500] }),
             version: Some("1269579".into()),
             uptime_secs: Some(90_000),
             latest_build_at: Some(1_000),
@@ -436,8 +439,8 @@ mod tests {
             update_queued: false,
             can_control: true,
             recent: vec![
-                EnshroudedAction { name: Some("Ada".into()), action: "update_now".into(), at: 9_000 },
-                EnshroudedAction { name: None, action: "restart".into(), at: 2_000 },
+                EnshroudedAction { name: Some("Ada".into()), action: EnshroudedActionName::Known(EnshroudedCommand::UpdateNow), at: 9_000 },
+                EnshroudedAction { name: None, action: EnshroudedActionName::Known(EnshroudedCommand::Restart), at: 2_000 },
             ],
             next_command_at: None,
         }
@@ -497,7 +500,7 @@ mod tests {
         assert!(html.contains("Force update waits until everyone has left"), "{html}");
         assert!(html.contains("Update when empty") && html.contains("Update now anyway"), "{html}");
         let empty = EnshroudedStatus {
-            players: Some(ui::data_dir::EnshroudedPlayers { online: 0, max: 16, sessions: vec![] }),
+            players: Some(api_types::EnshroudedPlayers { online: 0, max: 16, sessions: vec![] }),
             ..status()
         };
         let html = render(empty, CommandUi::Confirming(Command::Update), 10_000);

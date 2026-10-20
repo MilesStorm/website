@@ -4,7 +4,8 @@
 //! the site doesn't know), `none`, `lost` (an account auth can't load), `dead` (a token auth
 //! dropped), `down` (auth failing) and `github` (an account without an email). Emailed codes:
 //! `good` works, anything else has expired; invite code `join` is for `arcane_user`. The same
-//! stand-in plays SurrealDB for pictures and shared rolls.
+//! stand-in plays SurrealDB for pictures and shared rolls, and the Ark, Enshrouded and admin
+//! endpoints, which fail while [`Auth::failing`] is set.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,6 +31,10 @@ struct Auth {
     picture: Mutex<Option<(String, i64)>>,
     /// The SurrealDB statements run, and `delete/confirm` calls to auth, in order.
     queries: Mutex<Vec<String>>,
+    /// The Ark, Enshrouded and admin calls to auth, as `METHOD path?query`, in order.
+    calls: Mutex<Vec<String>>,
+    /// The game hosts and auth's database are down: those endpoints fail.
+    failing: std::sync::atomic::AtomicBool,
 }
 
 impl Auth {
@@ -45,6 +50,7 @@ fn profile(token: &str, display_name: Option<&str>) -> Value {
 async fn stand_in_auth(auth: Arc<Auth>) -> String {
     use axum::response::IntoResponse;
 
+    let auth_panels = auth.clone();
     let pictures = auth.clone();
     let confirmed = auth.clone();
     let introspect = move |body: axum::Json<Value>| async move {
@@ -161,6 +167,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
         }
     };
     let app = axum::Router::new()
+        .merge(stand_in_panels(auth_panels))
         .route("/internal/email/verify/send", post(by_token(json!({"email": "a@b.c"}))))
         .route("/internal/email/verify/confirm", post(by_code(json!({"username": "user-all"}))))
         .route("/internal/password/forgot", post(forgot))
@@ -186,6 +193,138 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     base
 }
 
+/// Auth's Ark, Enshrouded and admin endpoints. Ark: `start` starts, `stop` finds it stopped,
+/// `restart` gets no result. Enshrouded: `restart` works, `update` is too soon, `update_now`
+/// finds it busy. Admin: role 1 has admin rights, role 999 and invite 999 don't exist.
+fn stand_in_panels(auth: Arc<Auth>) -> axum::Router {
+    use axum::extract::OriginalUri;
+    use axum::response::IntoResponse;
+    use std::sync::atomic::Ordering;
+
+    let ark_reply = |result: Value| axum::Json(json!({"restart_result": "ok", "command_result": result})).into_response();
+    let refuse = |status: StatusCode, code: &str| (status, axum::Json(json!({"error": code}))).into_response();
+    let ark = {
+        let auth = auth.clone();
+        move |uri: OriginalUri, body: axum::Json<Value>| {
+            let auth = auth.clone();
+            async move {
+                auth.calls.lock().unwrap().push(format!("POST {} {}", uri.path(), body["cmd"]));
+                if auth.failing.load(Ordering::SeqCst) {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Could not reach ark host").into_response();
+                }
+                if body["token"] != "all" {
+                    return (StatusCode::FORBIDDEN, "No ark permission").into_response();
+                }
+                match body["cmd"].as_str() {
+                    None => ark_reply(json!({"NumPlayers": 3})),
+                    Some("start") => ark_reply(json!("Started")),
+                    Some("stop") => ark_reply(json!("AlreadyStopped")),
+                    _ => ark_reply(Value::Null),
+                }
+            }
+        }
+    };
+    let enshrouded = {
+        let auth = auth.clone();
+        move |uri: OriginalUri, body: axum::Json<Value>| {
+            let auth = auth.clone();
+            async move {
+                auth.calls.lock().unwrap().push(format!("POST {} {}", uri.path(), body["cmd"]));
+                if auth.failing.load(Ordering::SeqCst) {
+                    return refuse(StatusCode::SERVICE_UNAVAILABLE, "not_configured");
+                }
+                if body["token"] != "all" {
+                    return refuse(StatusCode::FORBIDDEN, "forbidden");
+                }
+                match body["cmd"].as_str() {
+                    None => axum::Json(json!({
+                        "state": "Online", "players": {"online": 1, "max": 16, "sessions": [60]},
+                        "version": "123", "uptime_secs": 3600, "latest_build_at": null, "update_pending": false,
+                        "update_queued": false, "can_control": true,
+                        "recent": [{"name": "user-all", "action": "restart", "at": 1000}], "next_command_at": null,
+                    }))
+                    .into_response(),
+                    Some("restart") => axum::Json(json!({})).into_response(),
+                    Some("update") => refuse(StatusCode::TOO_MANY_REQUESTS, "too_soon"),
+                    _ => refuse(StatusCode::CONFLICT, "busy"),
+                }
+            }
+        }
+    };
+    // Every admin endpoint: logs the call, then answers `reply` unless failing.
+    let admin = move |reply: fn(&str, Option<&Value>) -> axum::response::Response| {
+        let auth = auth.clone();
+        move |method: axum::http::Method, uri: OriginalUri, body: Option<axum::Json<Value>>| {
+            let auth = auth.clone();
+            async move {
+                auth.calls.lock().unwrap().push(format!("{method} {}", uri.0));
+                if auth.failing.load(Ordering::SeqCst) {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                reply(uri.path(), body.as_ref().map(|b| &b.0))
+            }
+        }
+    };
+    let users = |_: &str, _: Option<&Value>| {
+        let user = json!({"id": 5, "username": "ann", "email": null, "roles": [{"id": 2, "name": "arcane_user"}]});
+        axum::Json(json!({"items": [user], "total": 1})).into_response()
+    };
+    let roles = |_: &str, _: Option<&Value>| {
+        let permissions = [json!({"id": 3, "name": "arcane"}), json!({"id": 9, "name": "brand_new"})];
+        axum::Json(json!({"items": [{"id": 2, "name": "arcane_user", "permissions": permissions}], "total": 1}))
+            .into_response()
+    };
+    let all_roles = |_: &str, _: Option<&Value>| axum::Json(json!([{"id": 2, "name": "arcane_user"}])).into_response();
+    let permissions =
+        |_: &str, _: Option<&Value>| axum::Json(json!([{"id": 3, "name": "arcane"}, {"id": 9, "name": "brand_new"}])).into_response();
+    // User 404 doesn't exist; user 400 is refused for a reason this site doesn't know.
+    let done = |path: &str, _: Option<&Value>| match path {
+        p if p.contains("/users/404/") => (StatusCode::NOT_FOUND, axum::Json(json!({"error": "no_user"}))).into_response(),
+        p if p.contains("/users/400/") => (StatusCode::BAD_REQUEST, axum::Json(json!({"error": "something_new"}))).into_response(),
+        _ => StatusCode::NO_CONTENT.into_response(),
+    };
+    let invites = |_: &str, body: Option<&Value>| {
+        let invite = json!({
+            "id": 4, "role_id": 2, "role": "arcane_user", "note": null, "created_by": "user-all",
+            "created_at": "2026-10-19T00:00:00Z", "expires_at": "2026-10-26T00:00:00Z", "max_uses": null,
+            "uses": 0, "revoked": false, "live": true, "joined": [],
+        });
+        let Some(body) = body else { return axum::Json(json!([invite])).into_response() };
+        let refuse = |status: StatusCode, code: &str| (status, axum::Json(json!({"error": code}))).into_response();
+        match (body["token"].as_str(), body["role_id"].as_i64(), body["days"].as_i64()) {
+            (Some("all"), Some(1), _) => refuse(StatusCode::BAD_REQUEST, "admin_role"),
+            (Some("all"), Some(999), _) => refuse(StatusCode::NOT_FOUND, "no_role"),
+            (Some("all"), _, Some(1..=365)) => {
+                let mut made = invite;
+                made["link"] = json!("https://milesstorm.test/invite#code");
+                axum::Json(made).into_response()
+            }
+            (Some("all"), _, _) => refuse(StatusCode::BAD_REQUEST, "invalid_invite"),
+            _ => StatusCode::UNAUTHORIZED.into_response(),
+        }
+    };
+    let revoke = |path: &str, _: Option<&Value>| {
+        if path.ends_with("/999") {
+            (StatusCode::NOT_FOUND, axum::Json(json!({"error": "no_invite"}))).into_response()
+        } else {
+            StatusCode::NO_CONTENT.into_response()
+        }
+    };
+    axum::Router::new()
+        .route("/internal/ark/num_players", post(ark.clone()))
+        .route("/internal/ark/command", post(ark))
+        .route("/internal/enshrouded/status", post(enshrouded.clone()))
+        .route("/internal/enshrouded/command", post(enshrouded))
+        .route("/internal/admin/users", axum::routing::get(admin(users)))
+        .route("/internal/admin/users/{user_id}/roles/{role_id}", post(admin(done)).delete(admin(done)))
+        .route("/internal/admin/roles", axum::routing::get(admin(roles)))
+        .route("/internal/admin/roles/all", axum::routing::get(admin(all_roles)))
+        .route("/internal/admin/roles/{role_id}/permissions/{permission_id}", post(admin(done)).delete(admin(done)))
+        .route("/internal/admin/permissions", axum::routing::get(admin(permissions)))
+        .route("/internal/admin/invites", axum::routing::get(admin(invites)).post(admin(invites)))
+        .route("/internal/admin/invites/{invite_id}", axum::routing::delete(admin(revoke)))
+}
+
 /// The API as the server mounts it, behind an in-memory session layer, and a browser with
 /// a cookie jar of one. A `Site` holds [`AUTH_ENV`] until dropped: drop one before making
 /// the next in the same test, or the test waits for itself.
@@ -205,6 +344,11 @@ struct Reply {
 
 impl Site {
     async fn new() -> Self {
+        Self::serving(super::router()).await
+    }
+
+    /// The site with `app` instead of the API as the server mounts it.
+    async fn serving(app: axum::Router) -> Self {
         let env = AUTH_ENV.lock().await;
         let auth = Arc::new(Auth::default());
         let url = stand_in_auth(auth.clone()).await;
@@ -216,16 +360,19 @@ impl Site {
             session.insert("opaque_token", &token).await.unwrap();
             session.insert("username", format!("user-{token}")).await.unwrap();
         };
-        let app = super::router()
+        let app = app
             .route("/test/seed", post(seed))
             .layer(SessionManagerLayer::new(MemoryStore::default()).with_secure(false));
         Self { app, auth, cookie: None, _env: env }
     }
 
     async fn logged_in(token: &str) -> Self {
-        let mut site = Self::new().await;
-        assert_eq!(site.send(Method::POST, "/test/seed", Some(SITE), Some(("text/plain", token.into()))).await.status, StatusCode::OK);
-        site
+        Self::new().await.log_in(token).await
+    }
+
+    async fn log_in(mut self, token: &str) -> Self {
+        assert_eq!(self.send(Method::POST, "/test/seed", Some(SITE), Some(("text/plain", token.into()))).await.status, StatusCode::OK);
+        self
     }
 
     async fn send(&mut self, method: Method, path: &str, origin: Option<&str>, body: Option<(&str, Vec<u8>)>) -> Reply {
@@ -438,6 +585,14 @@ async fn changes_from_another_site_are_refused() {
 }
 
 #[test]
+fn unreadable_addresses_are_ours_when_the_route_is_wrong() {
+    let ours = super::rejected_address(StatusCode::INTERNAL_SERVER_ERROR).0;
+    assert_eq!((ours.status(), ours.error), (500, api_types::ErrorCode::Internal));
+    let theirs = super::rejected_address(StatusCode::BAD_REQUEST).0;
+    assert_eq!((theirs.status(), theirs.error), (400, api_types::ErrorCode::Invalid));
+}
+
+#[test]
 fn errors_answer_their_status_with_the_envelope() {
     use axum::response::IntoResponse;
     let error = api_types::ApiError::new(api_types::ErrorCode::Invalid, "too big").with_status(413);
@@ -445,34 +600,84 @@ fn errors_answer_their_status_with_the_envelope() {
     assert_eq!(super::ApiError(api_types::ApiError::internal()).into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+/// Dioxus routes each file of its public dir (as the image has it: dx's bundle). Nothing else
+/// reads DIOXUS_PUBLIC_PATH; it is put back, and the directory removed, either way. Tests that
+/// make one hold [`PUBLIC_ENV`].
+struct Public(std::path::PathBuf, Option<std::ffi::OsString>, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+static PUBLIC_ENV: Mutex<()> = Mutex::new(());
+
+impl Public {
+    fn new(name: &str) -> Self {
+        let guard = PUBLIC_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let public = Public(
+            std::env::temp_dir().join(format!("web-public-{name}-{}", std::process::id())),
+            std::env::var_os("DIOXUS_PUBLIC_PATH"),
+            guard,
+        );
+        std::fs::create_dir_all(public.0.join("assets")).unwrap();
+        std::fs::write(public.0.join("assets/web.js"), "").unwrap();
+        std::fs::write(public.0.join("favicon.ico"), "").unwrap();
+        std::env::set_var("DIOXUS_PUBLIC_PATH", &public.0);
+        public
+    }
+}
+
+impl Drop for Public {
+    fn drop(&mut self) {
+        match self.1.take() {
+            Some(old) => std::env::set_var("DIOXUS_PUBLIC_PATH", old),
+            None => std::env::remove_var("DIOXUS_PUBLIC_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn the_api_mounts_beside_the_dioxus_app() {
     use dioxus::prelude::*;
-    // Dioxus routes each file of its public dir (as the image has it: dx's bundle). Nothing
-    // else reads DIOXUS_PUBLIC_PATH; it is put back, and the directory removed, either way.
-    struct Public(std::path::PathBuf, Option<std::ffi::OsString>);
-    impl Drop for Public {
-        fn drop(&mut self) {
-            match self.1.take() {
-                Some(old) => std::env::set_var("DIOXUS_PUBLIC_PATH", old),
-                None => std::env::remove_var("DIOXUS_PUBLIC_PATH"),
-            }
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let public = Public(
-        std::env::temp_dir().join(format!("web-public-{}", std::process::id())),
-        std::env::var_os("DIOXUS_PUBLIC_PATH"),
-    );
-    std::fs::create_dir_all(public.0.join("assets")).unwrap();
-    std::fs::write(public.0.join("assets/web.js"), "").unwrap();
-    std::fs::write(public.0.join("favicon.ico"), "").unwrap();
-    std::env::set_var("DIOXUS_PUBLIC_PATH", &public.0);
+    let _public = Public::new("mount");
     // axum panics on overlapping routes when the router is built.
     let _ = axum::Router::new()
         .serve_dioxus_application(ServeConfig::default(), crate::App)
-        .route("/api/arcane/me", axum::routing::get(|| async {}))
+        .route("/ws/arcane", axum::routing::get(|| async {}))
         .merge(super::router());
+}
+
+/// The Dioxus pages' calls over HTTP, as the browser makes them: the command enums go over the
+/// wire as auth's names and come back.
+#[tokio::test]
+async fn panel_server_functions_over_http() {
+    use dioxus::prelude::*;
+    let public = Public::new("bff");
+    let app = axum::Router::new().serve_dioxus_application(ServeConfig::default(), crate::App);
+    drop(public);
+    let mut site = Site::serving(app).await.log_in("all").await;
+    let path = |name: &str| {
+        let fns = ServerFunction::collect();
+        let found = fns.iter().find(|f| f.path().strip_prefix("/bff/").and_then(|p| p.strip_prefix(name)).is_some_and(|hash| hash.bytes().all(|b| b.is_ascii_digit())));
+        found.map(|f| f.path()).unwrap_or_else(|| panic!("no server function {name}"))
+    };
+
+    let reply = site.json(Method::POST, path("ark_command"), json!({"cmd": "start"})).await;
+    assert_eq!((reply.status, &reply.body), (StatusCode::OK, &json!("started")));
+    let reply = site.json(Method::POST, path("enshrouded_command"), json!({"cmd": "update_now"})).await;
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
+    let reply = site.json(Method::POST, path("enshrouded_command"), json!({"cmd": "restart"})).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(
+        site.calls(),
+        [
+            "POST /internal/ark/command \"start\"",
+            "POST /internal/enshrouded/command \"update_now\"",
+            "POST /internal/enshrouded/command \"restart\"",
+        ]
+    );
+    // A name that isn't a command doesn't reach auth (Dioxus answers arguments it can't read
+    // with a 500).
+    let reply = site.json(Method::POST, path("ark_command"), json!({"cmd": "explode"})).await;
+    assert!(!reply.status.is_success(), "{}", reply.status);
+    assert_eq!(site.calls().len(), 3);
 }
 
 #[test]
@@ -490,18 +695,34 @@ fn the_document_has_every_route_and_leaves_the_old_picture_path_out() {
         [
             "DELETE /api/account/picture",
             "DELETE /api/account/sharing/data",
+            "DELETE /api/admin/invites/{invite_id}",
+            "DELETE /api/admin/roles/{role_id}/permissions/{permission_id}",
+            "DELETE /api/admin/users/{user_id}/roles/{role_id}",
             "DELETE /api/session",
             "GET /api/account",
             "GET /api/account/picture",
             "GET /api/account/sharing",
+            "GET /api/admin/invites",
+            "GET /api/admin/permissions",
+            "GET /api/admin/roles",
+            "GET /api/admin/roles/all",
+            "GET /api/admin/users",
+            "GET /api/arcane/me",
+            "GET /api/arcane/rolls",
+            "GET /api/ark/players",
+            "GET /api/enshrouded",
             "GET /api/session",
             "POST /api/account/deletion/direct",
             "POST /api/account/deletion/request",
             "POST /api/account/email/send-confirmation",
             "POST /api/account/picture",
+            "POST /api/admin/invites",
+            "POST /api/arcane/flag",
+            "POST /api/ark/command",
             "POST /api/deletion/check",
             "POST /api/deletion/confirm",
             "POST /api/email/confirm",
+            "POST /api/enshrouded/command",
             "POST /api/invites/open",
             "POST /api/password/forgot",
             "POST /api/password/reset",
@@ -509,13 +730,59 @@ fn the_document_has_every_route_and_leaves_the_old_picture_path_out() {
             "POST /api/session/register",
             "PUT /api/account/display-name",
             "PUT /api/account/sharing",
+            "PUT /api/admin/roles/{role_id}/permissions/{permission_id}",
+            "PUT /api/admin/users/{user_id}/roles/{role_id}",
         ]
     );
-    // One-time codes go in bodies: no route has a path or query parameter.
-    assert!(!doc["paths"].to_string().contains("\"parameters\""), "{}", doc["paths"]);
+    // Parameters: the admin routes' ids (named like the path's segments, from the path
+    // structs) and the listings' paging. One-time codes go in bodies, never the URL.
+    let mut parameters: Vec<String> = Vec::new();
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        for (method, op) in item.as_object().unwrap() {
+            for p in op["parameters"].as_array().into_iter().flatten() {
+                let name = p["name"].as_str().unwrap();
+                if p["in"] == "path" {
+                    assert!(path.contains(&format!("{{{name}}}")), "{method} {path}: {name}");
+                }
+                parameters.push(format!("{} {path} {}:{name}", method.to_uppercase(), p["in"].as_str().unwrap()));
+            }
+        }
+    }
+    parameters.sort();
+    assert_eq!(
+        parameters,
+        [
+            "DELETE /api/admin/invites/{invite_id} path:invite_id",
+            "DELETE /api/admin/roles/{role_id}/permissions/{permission_id} path:permission_id",
+            "DELETE /api/admin/roles/{role_id}/permissions/{permission_id} path:role_id",
+            "DELETE /api/admin/users/{user_id}/roles/{role_id} path:role_id",
+            "DELETE /api/admin/users/{user_id}/roles/{role_id} path:user_id",
+            "GET /api/admin/roles query:limit",
+            "GET /api/admin/roles query:page",
+            "GET /api/admin/roles query:search",
+            "GET /api/admin/users query:limit",
+            "GET /api/admin/users query:page",
+            "GET /api/admin/users query:search",
+            "PUT /api/admin/roles/{role_id}/permissions/{permission_id} path:permission_id",
+            "PUT /api/admin/roles/{role_id}/permissions/{permission_id} path:role_id",
+            "PUT /api/admin/users/{user_id}/roles/{role_id} path:role_id",
+            "PUT /api/admin/users/{user_id}/roles/{role_id} path:user_id",
+        ]
+    );
+    let schemas = &doc["components"]["schemas"];
     // Literal unions for TypeScript.
-    assert_eq!(doc["components"]["schemas"]["KnownPermission"]["enum"], json!(["llama", "enshrouded", "arcane", "manage_permissions"]));
-    assert_eq!(doc["components"]["schemas"]["Bootstrap"]["required"], json!(["viewer"]));
+    assert_eq!(schemas["KnownPermission"]["enum"], json!(["llama", "enshrouded", "arcane", "manage_permissions"]));
+    assert_eq!(schemas["Bootstrap"]["required"], json!(["viewer"]));
+    assert_eq!(schemas["ArkCommand"]["enum"], json!(["start", "stop", "restart"]));
+    assert_eq!(schemas["EnshroudedCommand"]["enum"], json!(["restart", "update", "update_now"]));
+    // The camera socket's and the roll stream's messages, tagged by `type`.
+    let tags: Vec<&Value> = schemas["ArcaneServerMsg"]["oneOf"].as_array().unwrap().iter().map(|v| &v["properties"]["type"]["const"]).collect();
+    assert_eq!(tags, [&json!("frame"), &json!("roll"), &json!("error")]);
+    for name in ["Roll", "RolledDie", "Frame", "Detection", "ArcaneMe", "FlagRequest"] {
+        assert!(schemas[name].is_object(), "{name}");
+    }
+    let stream = &doc["paths"]["/api/arcane/rolls"]["get"]["responses"]["200"]["content"]["text/event-stream"];
+    assert_eq!(stream["schema"]["$ref"], "#/components/schemas/ArcaneServerMsg");
 }
 
 #[tokio::test]
@@ -578,14 +845,8 @@ async fn pictures_need_auth_to_answer() {
 
 #[tokio::test]
 async fn origins_let_in_for_arcane_are_not_let_into_the_api() {
-    let mut site = Site::logged_in("all").await;
-    let old = std::env::var_os("ARCANE_ALLOWED_ORIGINS");
-    std::env::set_var("ARCANE_ALLOWED_ORIGINS", "https://dev.example");
+    let mut site = Site::serving(super::router_with("https://dev.example")).await.log_in("all").await;
     let reply = site.send(Method::DELETE, "/api/session", Some("https://dev.example"), None).await;
-    match old {
-        Some(old) => std::env::set_var("ARCANE_ALLOWED_ORIGINS", old),
-        None => std::env::remove_var("ARCANE_ALLOWED_ORIGINS"),
-    }
     envelope(&reply, 403, "forbidden");
 }
 
@@ -612,11 +873,11 @@ fn dev_proxy_origins_count_in_debug_builds_only() {
 #[tokio::test]
 async fn unknown_api_paths_and_methods_get_the_envelope_and_plain_routes_still_match() {
     let mut site = Site::new().await;
-    site.app = site.app.clone().route("/api/arcane/me", axum::routing::get(|| async { "plain" }));
+    site.app = site.app.clone().route("/api/test/plain", axum::routing::get(|| async { "plain" }));
     envelope(&site.get("/api/nope").await, 404, "not_found");
     envelope(&site.send(Method::POST, "/api/account/nope", Some(SITE), None).await, 404, "not_found");
     envelope(&site.send(Method::PATCH, "/api/session", Some(SITE), None).await, 405, "invalid");
-    let plain = site.get("/api/arcane/me").await;
+    let plain = site.get("/api/test/plain").await;
     assert_eq!((plain.status, plain.bytes.as_slice()), (StatusCode::OK, &b"plain"[..]));
 }
 
@@ -924,4 +1185,365 @@ async fn login_register_and_picture_server_functions() {
     assert_eq!(info.picture_version, None);
     let logged_out = in_request(&session_of(None).await, crate::account::remove_profile_picture()).await;
     assert!(matches!(logged_out, Err(dioxus::prelude::ServerFnError::ServerError { code: 401, .. })));
+}
+
+// ---- Ark, Enshrouded, admin and Arcane (PR 2c) ----
+
+impl Site {
+    fn calls(&self) -> Vec<String> {
+        self.auth.calls.lock().unwrap().clone()
+    }
+
+    fn failing(self) -> Self {
+        self.auth.failing.store(true, std::sync::atomic::Ordering::SeqCst);
+        self
+    }
+}
+
+/// Logged out 401, without the permission 403, auth down 503: the same for each route.
+async fn guarded(routes: &[(Method, &str, Option<Value>)]) {
+    for (token, status, error) in [(None, 401, "logged_out"), (Some("none"), 403, "forbidden"), (Some("down"), 503, "unavailable")] {
+        let mut site = match token {
+            Some(token) => Site::logged_in(token).await,
+            None => Site::new().await,
+        };
+        for (method, path, body) in routes {
+            let body = body.as_ref().map(|b| ("application/json", b.to_string().into_bytes()));
+            let reply = site.send(method.clone(), path, Some(SITE), body).await;
+            envelope(&reply, status, error);
+        }
+        assert!(site.calls().is_empty(), "auth's panels were asked: {:?}", site.calls());
+    }
+}
+
+#[tokio::test]
+async fn ark_needs_llama() {
+    guarded(&[(Method::GET, "/api/ark/players", None), (Method::POST, "/api/ark/command", Some(json!({"cmd": "start"})))]).await;
+}
+
+#[tokio::test]
+async fn ark_answers_players_and_commands() {
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let mut site = Site::logged_in("all").await;
+    let reply = site.get("/api/ark/players").await;
+    assert_eq!((reply.status, &reply.body), (StatusCode::OK, &json!({"count": 3})));
+    crate::trace_tests::span(&exporter, "bff.ark_player_count").await;
+
+    let reply = site.json(Method::POST, "/api/ark/command", json!({"cmd": "start"})).await;
+    assert_eq!((reply.status, &reply.body), (StatusCode::OK, &json!({"outcome": "started"})));
+    let reply = site.json(Method::POST, "/api/ark/command", json!({"cmd": "stop"})).await;
+    assert_eq!(reply.body, json!({"outcome": "already_stopped"}));
+    crate::trace_tests::span(&exporter, "bff.ark_command").await;
+    // A command auth doesn't take never reaches it.
+    envelope(&site.json(Method::POST, "/api/ark/command", json!({"cmd": "explode"})).await, 422, "invalid");
+    assert_eq!(site.calls(), ["POST /internal/ark/num_players null", "POST /internal/ark/command \"start\"", "POST /internal/ark/command \"stop\""]);
+}
+
+#[tokio::test]
+async fn ark_failures_are_gateway_errors() {
+    let mut site = Site::logged_in("all").await;
+    // A reply without a result.
+    envelope(&site.json(Method::POST, "/api/ark/command", json!({"cmd": "restart"})).await, 502, "upstream");
+    let mut site = { drop(site); Site::logged_in("all").await.failing() };
+    for reply in [site.get("/api/ark/players").await, site.json(Method::POST, "/api/ark/command", json!({"cmd": "start"})).await] {
+        envelope(&reply, 502, "upstream");
+        assert_eq!(reply.body["message"], "The Ark server can't be reached right now. Try again later.");
+    }
+}
+
+#[tokio::test]
+async fn enshrouded_needs_enshrouded() {
+    guarded(&[(Method::GET, "/api/enshrouded", None), (Method::POST, "/api/enshrouded/command", Some(json!({"cmd": "restart"})))])
+        .await;
+}
+
+#[tokio::test]
+async fn enshrouded_answers_status_and_commands() {
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let mut site = Site::logged_in("all").await;
+    let reply = site.get("/api/enshrouded").await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!((&reply.body["state"], &reply.body["players"]["online"]), (&json!("Online"), &json!(1)));
+    crate::trace_tests::span(&exporter, "bff.enshrouded_status").await;
+
+    let reply = site.json(Method::POST, "/api/enshrouded/command", json!({"cmd": "restart"})).await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.body);
+    crate::trace_tests::span(&exporter, "bff.enshrouded_command").await;
+    let reply = site.json(Method::POST, "/api/enshrouded/command", json!({"cmd": "update"})).await;
+    envelope(&reply, 429, "rate_limited");
+    assert_eq!(reply.body["message"], "Someone just sent a command. Wait a moment and try again.");
+    envelope(&site.json(Method::POST, "/api/enshrouded/command", json!({"cmd": "update_now"})).await, 409, "conflict");
+    envelope(&site.json(Method::POST, "/api/enshrouded/command", json!({"cmd": "dance"})).await, 422, "invalid");
+
+    let mut site = { drop(site); Site::logged_in("all").await.failing() };
+    let reply = site.get("/api/enshrouded").await;
+    envelope(&reply, 503, "unavailable");
+    assert_eq!(reply.body["message"], "The website can't control the server yet (no control password).");
+}
+
+#[tokio::test]
+async fn admin_needs_manage_permissions() {
+    guarded(&[
+        (Method::GET, "/api/admin/users?page=0&limit=25", None),
+        (Method::GET, "/api/admin/roles?page=0&limit=25", None),
+        (Method::GET, "/api/admin/roles/all", None),
+        (Method::GET, "/api/admin/permissions", None),
+        (Method::PUT, "/api/admin/users/5/roles/2", None),
+        (Method::DELETE, "/api/admin/users/5/roles/2", None),
+        (Method::PUT, "/api/admin/roles/2/permissions/3", None),
+        (Method::DELETE, "/api/admin/roles/2/permissions/3", None),
+        (Method::GET, "/api/admin/invites", None),
+        (Method::POST, "/api/admin/invites", Some(json!({"role_id": 2, "days": 7, "max_uses": null, "note": null}))),
+        (Method::DELETE, "/api/admin/invites/4", None),
+    ])
+    .await;
+}
+
+#[tokio::test]
+async fn admin_lists_and_changes() {
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let mut site = Site::logged_in("all").await;
+    let reply = site.get("/api/admin/users?page=1&limit=25&search=a%20b").await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(reply.body["items"][0]["roles"], json!([{"id": 2, "name": "arcane_user"}]));
+    assert_eq!(reply.body["total"], 1);
+    crate::trace_tests::span(&exporter, "bff.admin_list_users").await;
+    // Search is optional.
+    let reply = site.get("/api/admin/roles?page=0&limit=25").await;
+    // A permission the site doesn't know yet is still listed.
+    assert_eq!(reply.body["items"][0]["permissions"], json!([{"id": 3, "name": "arcane"}, {"id": 9, "name": "brand_new"}]));
+    assert_eq!(site.get("/api/admin/roles/all").await.body, json!([{"id": 2, "name": "arcane_user"}]));
+    assert_eq!(site.get("/api/admin/permissions").await.body[1], json!({"id": 9, "name": "brand_new"}));
+    assert_eq!(site.get("/api/admin/invites").await.body[0]["id"], 4);
+
+    for (method, path) in [
+        (Method::PUT, "/api/admin/users/5/roles/2"),
+        (Method::DELETE, "/api/admin/users/5/roles/2"),
+        (Method::PUT, "/api/admin/roles/2/permissions/3"),
+        (Method::DELETE, "/api/admin/roles/2/permissions/3"),
+        (Method::DELETE, "/api/admin/invites/4"),
+    ] {
+        let reply = site.send(method.clone(), path, Some(SITE), None).await;
+        assert_eq!(reply.status, StatusCode::NO_CONTENT, "{method} {path}: {}", reply.body);
+    }
+    crate::trace_tests::span(&exporter, "bff.admin_revoke_role_permission").await;
+    assert_eq!(
+        site.calls(),
+        [
+            "GET /internal/admin/users?page=1&limit=25&search=a+b",
+            "GET /internal/admin/roles?page=0&limit=25&search=",
+            "GET /internal/admin/roles/all",
+            "GET /internal/admin/permissions",
+            "GET /internal/admin/invites",
+            "POST /internal/admin/users/5/roles/2",
+            "DELETE /internal/admin/users/5/roles/2",
+            "POST /internal/admin/roles/2/permissions/3",
+            "DELETE /internal/admin/roles/2/permissions/3",
+            "DELETE /internal/admin/invites/4",
+        ]
+    );
+
+    let new = |role_id: i32, days: i64| json!({"role_id": role_id, "days": days, "max_uses": 3, "note": "for ann"});
+    let reply = site.json(Method::POST, "/api/admin/invites", new(2, 7)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_eq!(reply.body["link"], "https://milesstorm.test/invite#code");
+    crate::trace_tests::span(&exporter, "bff.admin_create_invite").await;
+}
+
+#[tokio::test]
+async fn admin_refusals_and_failures_have_messages() {
+    let mut site = Site::logged_in("all").await;
+    let new = |role_id: i32, days: i64| json!({"role_id": role_id, "days": days, "max_uses": null, "note": null});
+    let reply = site.json(Method::POST, "/api/admin/invites", new(1, 7)).await;
+    envelope(&reply, 400, "invalid");
+    assert_eq!(reply.body["message"], "Links can't give a role with admin rights: give that role in the Users tab instead.");
+    let reply = site.json(Method::POST, "/api/admin/invites", new(2, 400)).await;
+    envelope(&reply, 400, "invalid");
+    assert!(reply.body["message"].as_str().unwrap().starts_with("Check the fields"));
+    envelope(&site.json(Method::POST, "/api/admin/invites", new(999, 7)).await, 404, "not_found");
+    envelope(&site.send(Method::DELETE, "/api/admin/invites/999", Some(SITE), None).await, 404, "not_found");
+    // Refusals without a message of their own: 404 is not_found, any other 4xx invalid.
+    envelope(&site.send(Method::PUT, "/api/admin/users/404/roles/2", Some(SITE), None).await, 404, "not_found");
+    envelope(&site.send(Method::DELETE, "/api/admin/users/400/roles/2", Some(SITE), None).await, 400, "invalid");
+
+    // Bad ids and paging never reach auth.
+    let before = site.calls().len();
+    envelope(&site.send(Method::PUT, "/api/admin/users/ann/roles/2", Some(SITE), None).await, 400, "invalid");
+    envelope(&site.get("/api/admin/users?page=0").await, 400, "invalid");
+    envelope(&site.get("/api/admin/users?page=-1&limit=25").await, 400, "invalid");
+    let reply = site.get("/api/admin/users?page=0&limit=1000").await;
+    envelope(&reply, 400, "invalid");
+    assert_eq!(reply.body["message"], "Ask for 1 to 100 rows at a time.");
+    assert_eq!(site.calls().len(), before);
+
+    let mut site = { drop(site); Site::logged_in("all").await.failing() };
+    let reply = site.get("/api/admin/users?page=0&limit=25").await;
+    envelope(&reply, 502, "upstream");
+    assert_eq!(reply.body["message"], "Users can't be loaded right now. Try again later.");
+    envelope(&site.send(Method::PUT, "/api/admin/users/5/roles/2", Some(SITE), None).await, 502, "upstream");
+}
+
+#[tokio::test]
+async fn panel_changes_from_another_site_are_refused() {
+    let mut site = Site::logged_in("all").await;
+    let evil = Some("https://evil.example");
+    for (method, path, body) in [
+        (Method::POST, "/api/ark/command", Some(json!({"cmd": "start"}))),
+        (Method::POST, "/api/enshrouded/command", Some(json!({"cmd": "restart"}))),
+        (Method::PUT, "/api/admin/users/5/roles/2", None),
+        (Method::DELETE, "/api/admin/users/5/roles/2", None),
+        (Method::PUT, "/api/admin/roles/2/permissions/3", None),
+        (Method::DELETE, "/api/admin/roles/2/permissions/3", None),
+        (Method::POST, "/api/admin/invites", Some(json!({"role_id": 2, "days": 7, "max_uses": null, "note": null}))),
+        (Method::DELETE, "/api/admin/invites/4", None),
+        (Method::POST, "/api/arcane/flag", Some(json!({"roll_id": "18f3a2b-0badf00d", "values": []}))),
+    ] {
+        let body = body.map(|b| ("application/json", b.to_string().into_bytes()));
+        envelope(&site.send(method.clone(), path, evil, body).await, 403, "forbidden");
+    }
+    assert!(site.calls().is_empty(), "{:?}", site.calls());
+    // The extension's own origin is let in on the flag only.
+    for origin in ["moz-extension://1b2c3d", "chrome-extension://abcdef"] {
+        let ark = site.send(Method::POST, "/api/ark/command", Some(origin), Some(("application/json", br#"{"cmd":"start"}"#.to_vec()))).await;
+        envelope(&ark, 403, "forbidden");
+        let flag = br#"{"roll_id":"18f3a2b-0badf00d"}"#.to_vec();
+        // Past the origin check: no roll hub in this test.
+        envelope(&site.send(Method::POST, "/api/arcane/flag", Some(origin), Some(("application/json", flag))).await, 503, "unavailable");
+    }
+}
+
+#[tokio::test]
+async fn arcane_dev_origins_count_on_the_flag_only() {
+    let mut site = Site::serving(super::router_with("https://dev.example")).await.log_in("all").await;
+    let dev = Some("https://dev.example");
+    let flag = site.send(Method::POST, "/api/arcane/flag", dev, Some(("application/json", br#"{"roll_id":"x"}"#.to_vec()))).await;
+    // Past the origin check: no roll hub in this test.
+    envelope(&flag, 503, "unavailable");
+    let ark = site.send(Method::POST, "/api/ark/command", dev, Some(("application/json", br#"{"cmd":"start"}"#.to_vec()))).await;
+    envelope(&ark, 403, "forbidden");
+    // Not on the flag of a site without it.
+    let mut site = { drop(site); Site::logged_in("all").await };
+    let flag = site.send(Method::POST, "/api/arcane/flag", dev, Some(("application/json", br#"{"roll_id":"x"}"#.to_vec()))).await;
+    envelope(&flag, 403, "forbidden");
+}
+
+#[tokio::test]
+async fn arcane_me_answers_everyone() {
+    for (token, me) in [
+        (None, json!({"logged_in": false, "username": null, "has_arcane": false})),
+        (Some("all"), json!({"logged_in": true, "username": "user-all", "has_arcane": true})),
+        (Some("none"), json!({"logged_in": true, "username": "user-none", "has_arcane": false})),
+        (Some("down"), json!({"logged_in": true, "username": "user-down", "has_arcane": false})),
+        // A token auth dropped: the session is over.
+        (Some("dead"), json!({"logged_in": false, "username": null, "has_arcane": false})),
+    ] {
+        let mut site = match token {
+            Some(token) => Site::logged_in(token).await,
+            None => Site::new().await,
+        };
+        let reply = site.get("/api/arcane/me").await;
+        assert_eq!((reply.status, &reply.body), (StatusCode::OK, &me), "{token:?}");
+    }
+}
+
+#[tokio::test]
+async fn roll_streams_and_flags_need_arcane() {
+    guarded(&[(Method::GET, "/api/arcane/rolls", None), (Method::POST, "/api/arcane/flag", Some(json!({"roll_id": "r"})))]).await;
+    let mut site = Site::logged_in("all").await;
+    let reply = site.get("/api/arcane/rolls").await;
+    envelope(&reply, 503, "unavailable");
+    assert_eq!(reply.body["message"], "Live rolls aren't available right now.");
+}
+
+/// A held roll of `user-all` (as the camera proxy keeps one) in `pool`'s Redis.
+async fn hold_roll(pool: &tower_sessions_redis_store::fred::prelude::Pool, roll_id: &str) {
+    use tower_sessions_redis_store::fred::prelude::KeysInterface as _;
+    let roll: Value = serde_json::from_str(include_str!("../../../../../../contracts/arcane/roll_unread.json")).unwrap();
+    let meta = json!({"roll_id": roll_id, "roll": roll, "frame": null}).to_string();
+    let _: () = pool.set("arcane:held:user-all", meta, None, None, false).await.unwrap();
+    let _: () = pool.set("arcane:held_jpeg:user-all", b"\xff\xd8\xff\xe0jpeg".to_vec(), None, None, false).await.unwrap();
+}
+
+/// Needs Docker (Redis), like the trace tests.
+#[tokio::test]
+async fn rolls_stream_and_flags_are_saved() {
+    let (_node, config) = crate::trace_tests::redis().await;
+    let (hub, pool) = crate::trace_tests::hub(&config, tokio_util::sync::CancellationToken::new()).await;
+    let mut site = Site::logged_in("all").await.with_pictures();
+    site.app = site.app.clone().layer(axum::Extension(hub.clone()));
+
+    // The stream starts with the stored last roll, as ai_pipeline sent it.
+    let roll = include_str!("../../../../../../contracts/arcane/roll.json");
+    let stored: Value = serde_json::from_str(roll).unwrap();
+    let last = tower_sessions_redis_store::fred::prelude::KeysInterface::set(&pool, "arcane:last_roll:user-all", stored.to_string(), None, None, false);
+    let _: () = last.await.unwrap();
+    let mut req = Request::builder().uri("/api/arcane/rolls").header(header::HOST, HOST);
+    req = req.header(header::COOKIE, site.cookie.clone().unwrap());
+    let res = site.app.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "text/event-stream");
+    let mut body = res.into_body().into_data_stream();
+    let mut event = String::new();
+    while !event.ends_with("\n\n") {
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), futures_util::StreamExt::next(&mut body)).await.unwrap().unwrap().unwrap();
+        event.push_str(std::str::from_utf8(&chunk).unwrap());
+    }
+    let data = event.strip_prefix("event: replay\ndata: ").unwrap().trim_end();
+    assert!(matches!(serde_json::from_str(data).unwrap(), api_types::ArcaneServerMsg::Roll(_)), "{data}");
+    drop(body);
+
+    let flag = |roll_id: &str, values: Value| json!({"roll_id": roll_id, "values": values});
+    envelope(&site.json(Method::POST, "/api/arcane/flag", flag("not a roll", json!([]))).await, 400, "invalid");
+    let reply = site.json(Method::POST, "/api/arcane/flag", flag("18f3a2b-0badf00d", json!([null, "7"]))).await;
+    envelope(&reply, 410, "gone");
+    hold_roll(&pool, "18f3a2b-0badf00d").await;
+    // One value per die (the held roll has two).
+    envelope(&site.json(Method::POST, "/api/arcane/flag", flag("18f3a2b-0badf00d", json!(["7"]))).await, 400, "invalid");
+    let reply = site.json(Method::POST, "/api/arcane/flag", flag("18f3a2b-0badf00d", json!([null, "7"]))).await;
+    assert_eq!((reply.status, &reply.body), (StatusCode::OK, &json!({"ok": true})));
+    assert!(site.auth.queries.lock().unwrap().iter().any(|q| q.contains("UPSERT $rec")), "saved");
+    // From the extension too.
+    let body = flag("18f3a2b-0badf00d", json!([])).to_string().into_bytes();
+    let reply = site.send(Method::POST, "/api/arcane/flag", Some("moz-extension://1b2c3d"), Some(("application/json", body))).await;
+    envelope(&reply, 400, "invalid");
+    // At most 30 an hour.
+    for _ in 0..29 {
+        site.json(Method::POST, "/api/arcane/flag", flag("18f3a2b-0badf00d", json!([null, null]))).await;
+    }
+    envelope(&site.json(Method::POST, "/api/arcane/flag", flag("18f3a2b-0badf00d", json!([null, null]))).await, 429, "rate_limited");
+}
+
+#[tokio::test]
+async fn panel_server_functions() {
+    use dioxus::prelude::ServerFnError;
+    let site = Site::new().await;
+    let code = |e: ServerFnError| match e {
+        ServerFnError::ServerError { code, .. } => code,
+        other => panic!("{other:?}"),
+    };
+    let all = session_of(Some("all")).await;
+    assert_eq!(in_request(&all, api::ark_player_count()).await.unwrap(), 3);
+    assert_eq!(in_request(&all, api::ark_command(api::ArkCommand::Start)).await.unwrap(), api::ArkOutcome::Started);
+    assert_eq!(code(in_request(&session_of(None).await, api::ark_player_count()).await.unwrap_err()), 401);
+    // Auth checks the permission for Ark and Enshrouded.
+    assert_eq!(code(in_request(&session_of(Some("none")).await, api::ark_player_count()).await.unwrap_err()), 403);
+
+    assert_eq!(in_request(&all, api::enshrouded_status()).await.unwrap().state, api_types::EnshroudedState::Online);
+    in_request(&all, api::enshrouded_command(api::EnshroudedCommand::Restart)).await.unwrap();
+    let busy = in_request(&all, api::enshrouded_command(api::EnshroudedCommand::UpdateNow)).await.unwrap_err();
+    assert_eq!(code(busy), 409);
+
+    // The website checks admin rights itself: auth's admin endpoints trust it.
+    let users = in_request(&all, api::admin_list_users(0, 25, String::new())).await.unwrap();
+    assert_eq!(users.items[0].username, "ann");
+    assert_eq!(in_request(&all, api::admin_list_all_roles()).await.unwrap()[0].name, "arcane_user");
+    in_request(&all, api::admin_assign_user_role(5, 2)).await.unwrap();
+    let invite = in_request(&all, api::admin_create_invite(2, 7, None, None)).await.unwrap();
+    assert!(invite.link.is_some());
+    let calls = site.calls().len();
+    for (session, status) in [(session_of(Some("none")).await, 403), (session_of(None).await, 401), (session_of(Some("down")).await, 503)] {
+        assert_eq!(code(in_request(&session, api::admin_list_permissions()).await.unwrap_err()), status);
+        assert_eq!(code(in_request(&session, api::admin_revoke_invite(4)).await.unwrap_err()), status);
+    }
+    assert_eq!(site.calls().len(), calls, "refused before asking auth");
 }

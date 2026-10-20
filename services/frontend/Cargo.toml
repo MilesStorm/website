@@ -24,7 +24,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 # The JSON API's OpenAPI document comes from the handlers' types (crates/api-types). aide is
 # an alpha, pinned exactly.
 schemars = "1.2.2"
-aide = { version = "=0.16.0-alpha.4", features = ["axum", "axum-json"] }
+aide = { version = "=0.16.0-alpha.4", features = ["axum", "axum-json", "axum-query"] }
 
 # OpenTelemetry: bump these together, with reqwest-tracing's `opentelemetry_0_NN` feature
 # matching `opentelemetry`. A mismatch still compiles but silently stops trace propagation;

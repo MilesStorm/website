@@ -1,7 +1,6 @@
 use dioxus::prelude::*;
 
-use api::{ark_command, ark_player_count};
-use ui::data_dir::CommandResult;
+use api::{ark_command, ark_player_count, ArkCommand, ArkOutcome};
 
 use crate::{LOGIN_STATUS, PERMISSIONS};
 use ui::data_dir::LoginStatus;
@@ -31,9 +30,9 @@ fn ArkPanel() -> Element {
         div { class: "flex flex-col items-center justify-center min-h-[calc(100vh-5rem)] gap-12",
             PlayerCount {}
             div { class: "flex items-center gap-10",
-                ArkButton { cmd: "restart".to_string(), label: "Restart" }
-                ArkButton { cmd: "stop".to_string(), label: "Stop" }
-                ArkButton { cmd: "start".to_string(), label: "Start" }
+                ArkButton { cmd: ArkCommand::Restart, label: "Restart" }
+                ArkButton { cmd: ArkCommand::Stop, label: "Stop" }
+                ArkButton { cmd: ArkCommand::Start, label: "Start" }
             }
         }
     }
@@ -76,22 +75,20 @@ fn PlayerCount() -> Element {
 }
 
 #[component]
-fn ArkButton(cmd: String, label: String) -> Element {
-    let mut result: Signal<Option<Result<CommandResult, ServerFnError>>> = use_signal(|| None);
+fn ArkButton(cmd: ArkCommand, label: String) -> Element {
+    let mut result: Signal<Option<Result<ArkOutcome, ServerFnError>>> = use_signal(|| None);
     let mut loading = use_signal(|| false);
 
-    let cmd_clone = cmd.clone();
     let run = move |_| {
-        let c = cmd_clone.clone();
         spawn(async move {
             loading.set(true);
-            result.set(Some(ark_command(c).await));
+            result.set(Some(ark_command(cmd).await));
             loading.set(false);
         });
     };
 
     let tooltip = result().as_ref().map(|r| match r {
-        Ok(cr) => cr.to_string(),
+        Ok(outcome) => format!("{outcome:?}"),
         Err(_) => "Error".to_string(),
     });
 

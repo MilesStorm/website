@@ -1,0 +1,13 @@
+{
+  "type": "roll",
+  "roll_id": "18f3a2b-0badf00d",
+  "dice": [
+    { "value": "16", "conf": 0.75, "box": [0.25, 0.5, 0.375, 0.625] },
+    { "value": null, "conf": 0.5, "box": [0.5, 0.5, 0.625, 0.625] }
+  ],
+  "total": null,
+  "complete": false,
+  "ts": 1727250000000,
+  "model": "yolo26s+dice_head_resnet18",
+  "frame_seq": 9
+}

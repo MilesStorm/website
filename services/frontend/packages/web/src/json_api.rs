@@ -5,11 +5,14 @@
 //! functions, so both keep the `bff.<fn>` spans.
 //!
 //! Access is per route group, as layers ([`access`]): `/api/account/*` needs a login, and its
-//! sharing settings the `arcane` permission; the session, password, email, deletion and invite
+//! sharing settings the `arcane` permission; `/api/ark/*` needs `llama`, `/api/enshrouded/*`
+//! `enshrouded`, `/api/admin/*` `manage_permissions` and `/api/arcane/*` `arcane`, except
+//! `/api/arcane/me`, which answers anyone. The session, password, email, deletion and invite
 //! routes are public (a code in the body authorizes them). The one exception under
 //! `/api/account/` is deleting shared pictures, which needs only the session's username. Every
-//! non-GET request must come from the site itself ([`same_origin`]). Unknown `/api/*` paths and
-//! methods get the error envelope too.
+//! non-GET request must come from the site itself ([`same_origin`]), except a flagged roll,
+//! which the browser extension sends ([`extension_origin`]). Unknown `/api/*` paths and methods
+//! get the error envelope too.
 
 use aide::axum::routing::{delete, get, get_with, post, put};
 use aide::axum::ApiRouter;
@@ -17,8 +20,11 @@ use aide::openapi::{Info, OpenApi};
 use aide::NoApi;
 use aide::{OperationInput, OperationOutput};
 use api_types::{
-    Access, AccountInfo, Bootstrap, Code, Confirmed, Deleted, Deletion, DirectDeletion, DisplayName, Done, EmailSent,
-    ErrorCode, ForgotPassword, LoggedIn, Login, Opened, PasswordReset, Registration, Sharing, SharingState,
+    Access, AccountInfo, AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, ArcaneServerMsg,
+    ArkCommandRequest, ArkPlayers, ArkResult, Bootstrap, Code, Confirmed, Deleted, Deletion, DirectDeletion,
+    DisplayName, Done, EmailSent, EnshroudedCommandRequest, EnshroudedStatus, ErrorCode, ForgotPassword, InvitePath,
+    KnownPermission, LoggedIn, Login, NewInvite, Opened, PagedResult, PasswordReset, Registration,
+    RolePermissionPath, Sharing, SharingState, UserRolePath,
 };
 use axum::Extension;
 use axum::extract::{FromRequest, FromRequestParts, Request, State};
@@ -28,10 +34,11 @@ use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, NoContent, Response};
 use axum::Json;
 use serde::de::DeserializeOwned;
+use std::sync::Arc;
 use tower_sessions::Session;
 
 use crate::rolls::RollHub;
-use crate::{account, emails, invites, sharing};
+use crate::{account, capture, emails, invites, rolls, sharing};
 
 /// An [`api_types::ApiError`] as a response: its status and the `{error, message}` body.
 #[derive(Debug)]
@@ -88,6 +95,17 @@ fn rejected(status: StatusCode) -> ApiError {
     api_types::ApiError::new(ErrorCode::Invalid, "The request body isn't valid.").with_status(status.as_u16()).into()
 }
 
+/// A rejected path or query: `invalid`, 400. A rejection that is a server error (a route whose
+/// path doesn't fit its handler) is ours: `internal`.
+fn rejected_address(status: StatusCode) -> ApiError {
+    if status.is_server_error() {
+        tracing::error!(status = status.as_u16(), "API request address can't be read: the route doesn't fit its handler");
+        return api_types::ApiError::internal().into();
+    }
+    tracing::info!(status = status.as_u16(), "API request address rejected");
+    api_types::ApiError::new(ErrorCode::Invalid, "The request's address isn't valid.").into()
+}
+
 /// `axum::Json` as a request body, rejected with an [`ApiError`].
 pub struct Body<T>(pub T);
 
@@ -105,6 +123,61 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
 impl<T: schemars::JsonSchema> OperationInput for Body<T> {
     fn operation_input(ctx: &mut aide::generate::GenContext, operation: &mut aide::openapi::Operation) {
         Json::<T>::operation_input(ctx, operation);
+    }
+
+    fn inferred_early_responses(
+        ctx: &mut aide::generate::GenContext,
+        operation: &mut aide::openapi::Operation,
+    ) -> Vec<(Option<aide::openapi::StatusCode>, aide::openapi::Response)> {
+        rejections(ctx, operation)
+    }
+}
+
+/// `axum::extract::Path` into a struct whose fields are named like the route's `{…}` segments
+/// (so the document names the parameters), rejected with an [`ApiError`].
+pub struct Path<T>(pub T);
+
+impl<T: DeserializeOwned + Send, S: Send + Sync> FromRequestParts<S> for Path<T> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        match axum::extract::Path::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Path(t)) => Ok(Self(t)),
+            Err(e) => Err(rejected_address(e.status())),
+        }
+    }
+}
+
+impl<T: schemars::JsonSchema> OperationInput for Path<T> {
+    fn operation_input(ctx: &mut aide::generate::GenContext, operation: &mut aide::openapi::Operation) {
+        axum::extract::Path::<T>::operation_input(ctx, operation);
+    }
+
+    fn inferred_early_responses(
+        ctx: &mut aide::generate::GenContext,
+        operation: &mut aide::openapi::Operation,
+    ) -> Vec<(Option<aide::openapi::StatusCode>, aide::openapi::Response)> {
+        rejections(ctx, operation)
+    }
+}
+
+/// `axum::extract::Query`, rejected with an [`ApiError`].
+pub struct Query<T>(pub T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for Query<T> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        match axum::extract::Query::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Query(t)) => Ok(Self(t)),
+            Err(e) => Err(rejected_address(e.status())),
+        }
+    }
+}
+
+impl<T: schemars::JsonSchema> OperationInput for Query<T> {
+    fn operation_input(ctx: &mut aide::generate::GenContext, operation: &mut aide::openapi::Operation) {
+        axum::extract::Query::<T>::operation_input(ctx, operation);
     }
 
     fn inferred_early_responses(
@@ -210,7 +283,7 @@ fn allowed(access: Access, viewer: &Viewer) -> Result<(), ApiError> {
     match access {
         Access::Public | Access::LoggedIn => Ok(()),
         Access::Perm(p) if permissions.iter().any(|q| q.known() == Some(p)) => Ok(()),
-        Access::Perm(_) => Err(api_types::ApiError::new(ErrorCode::Forbidden, "You don't have access to this.").into()),
+        Access::Perm(_) => Err(api_types::ApiError::forbidden().into()),
     }
 }
 
@@ -242,6 +315,20 @@ async fn same_origin(req: Request, next: Next) -> Response {
     if read || origin_allowed(req.headers(), &dev, cfg!(debug_assertions)) {
         return next.run(req).await;
     }
+    foreign(&req)
+}
+
+/// [`same_origin`] for flagging a roll, which the browser extension sends: from its own origin
+/// (`moz-extension://…`, `chrome-extension://…`) or one of `arcane_origins`
+/// (`ARCANE_ALLOWED_ORIGINS`, read once by [`router`]) too.
+async fn extension_origin(State(arcane_origins): State<Arc<str>>, req: Request, next: Next) -> Response {
+    if capture::flag_origin_allowed(req.headers(), &arcane_origins) {
+        return next.run(req).await;
+    }
+    foreign(&req)
+}
+
+fn foreign(req: &Request) -> Response {
     tracing::warn!(origin = ?req.headers().get(axum::http::header::ORIGIN), "API request rejected: foreign origin");
     ApiError::from(api_types::ApiError::new(ErrorCode::Forbidden, "This request came from another site.")).into_response()
 }
@@ -308,8 +395,8 @@ async fn remove_picture(viewer: Viewer) -> Result<Json<AccountInfo>, ApiError> {
 // The codes from emailed links come in the body, never the URL. The calls a code alone
 // authorizes are public, so a link works on a logged-out device too.
 
-/// The roll hub, for forgetting a deleted account's held rolls (absent in tests).
-type Hub = NoApi<Option<Extension<RollHub>>>;
+/// The roll hub: held and live rolls (absent in tests).
+pub(crate) type Hub = NoApi<Option<Extension<RollHub>>>;
 
 /// `POST /api/account/email/send-confirmation`.
 async fn send_confirmation(viewer: Viewer) -> Result<Json<EmailSent>, ApiError> {
@@ -388,8 +475,126 @@ async fn delete_shared(viewer: Viewer, NoApi(hub): Hub) -> Result<Json<Deleted>,
     Ok(Json(Deleted { deleted: n as u64 }))
 }
 
-/// The routes, with their documentation. Builds without Redis, env or network.
-fn api_router() -> ApiRouter {
+// ---- Ark ----
+
+/// `GET /api/ark/players`.
+async fn ark_players(viewer: Viewer) -> Result<Json<ArkPlayers>, ApiError> {
+    Ok(Json(api::ark::players(viewer.token()?).await?))
+}
+
+/// `POST /api/ark/command`.
+async fn ark_command(viewer: Viewer, Body(c): Body<ArkCommandRequest>) -> Result<Json<ArkResult>, ApiError> {
+    let outcome = api::ark::command(viewer.token()?, viewer.username()?, c.cmd).await?;
+    Ok(Json(ArkResult { outcome }))
+}
+
+// ---- Enshrouded ----
+
+/// `GET /api/enshrouded`.
+async fn enshrouded_status(viewer: Viewer) -> Result<Json<EnshroudedStatus>, ApiError> {
+    Ok(Json(api::enshrouded::status(viewer.token()?).await?))
+}
+
+/// `POST /api/enshrouded/command`.
+async fn enshrouded_command(viewer: Viewer, Body(c): Body<EnshroudedCommandRequest>) -> Result<NoContent, ApiError> {
+    api::enshrouded::command(viewer.token()?, c.cmd).await?;
+    Ok(NoContent)
+}
+
+// ---- Admin ----
+//
+// Auth trusts the website to have checked `manage_permissions`: the group's access layer does.
+
+/// `GET /api/admin/users?page&limit&search`.
+async fn admin_users(Query(p): Query<AdminPage>) -> Result<Json<PagedResult<AdminUser>>, ApiError> {
+    Ok(Json(api::admin::users(&p).await?))
+}
+
+/// `GET /api/admin/roles?page&limit&search`.
+async fn admin_roles(Query(p): Query<AdminPage>) -> Result<Json<PagedResult<AdminRole>>, ApiError> {
+    Ok(Json(api::admin::roles(&p).await?))
+}
+
+/// `GET /api/admin/roles/all`: every role, without its permissions.
+async fn admin_all_roles() -> Result<Json<Vec<AdminRoleRef>>, ApiError> {
+    Ok(Json(api::admin::all_roles().await?))
+}
+
+/// `GET /api/admin/permissions`.
+async fn admin_permissions() -> Result<Json<Vec<AdminPermission>>, ApiError> {
+    Ok(Json(api::admin::permissions().await?))
+}
+
+/// `PUT /api/admin/users/{user_id}/roles/{role_id}`.
+async fn assign_user_role(Path(p): Path<UserRolePath>) -> Result<NoContent, ApiError> {
+    api::admin::assign_user_role(p.user_id, p.role_id).await?;
+    Ok(NoContent)
+}
+
+/// `DELETE /api/admin/users/{user_id}/roles/{role_id}`.
+async fn revoke_user_role(Path(p): Path<UserRolePath>) -> Result<NoContent, ApiError> {
+    api::admin::revoke_user_role(p.user_id, p.role_id).await?;
+    Ok(NoContent)
+}
+
+/// `PUT /api/admin/roles/{role_id}/permissions/{permission_id}`.
+async fn assign_role_permission(Path(p): Path<RolePermissionPath>) -> Result<NoContent, ApiError> {
+    api::admin::assign_role_permission(p.role_id, p.permission_id).await?;
+    Ok(NoContent)
+}
+
+/// `DELETE /api/admin/roles/{role_id}/permissions/{permission_id}`.
+async fn revoke_role_permission(Path(p): Path<RolePermissionPath>) -> Result<NoContent, ApiError> {
+    api::admin::revoke_role_permission(p.role_id, p.permission_id).await?;
+    Ok(NoContent)
+}
+
+/// `GET /api/admin/invites`: the latest, newest first.
+async fn admin_invites() -> Result<Json<Vec<AdminInvite>>, ApiError> {
+    Ok(Json(api::admin::invites().await?))
+}
+
+/// `POST /api/admin/invites`: the new link is in the reply, and only there.
+async fn create_invite(viewer: Viewer, Body(invite): Body<NewInvite>) -> Result<Json<AdminInvite>, ApiError> {
+    Ok(Json(api::admin::create_invite(viewer.token()?, &invite).await?))
+}
+
+/// `DELETE /api/admin/invites/{invite_id}`.
+async fn revoke_invite(Path(p): Path<InvitePath>) -> Result<NoContent, ApiError> {
+    api::admin::revoke_invite(p.invite_id).await?;
+    Ok(NoContent)
+}
+
+// ---- Arcane ----
+
+/// How `GET /api/arcane/rolls` is documented: server-sent events (`roll`, and `replay` for the
+/// stored last roll), whose data are [`ArcaneServerMsg`] rolls as ai_pipeline sent them.
+struct RollEvents;
+
+impl OperationOutput for RollEvents {
+    type Inner = ArcaneServerMsg;
+
+    fn operation_response(
+        ctx: &mut aide::generate::GenContext,
+        _operation: &mut aide::openapi::Operation,
+    ) -> Option<aide::openapi::Response> {
+        let schema = aide::openapi::SchemaObject {
+            json_schema: ctx.schema.subschema_for::<ArcaneServerMsg>(),
+            example: None,
+            external_docs: None,
+        };
+        let mut response = aide::openapi::Response::default();
+        response.content.insert(
+            "text/event-stream".into(),
+            aide::openapi::MediaType { schema: Some(schema), ..Default::default() },
+        );
+        Some(response)
+    }
+}
+
+/// The routes, with their documentation. Builds without Redis, env or network: the flag
+/// takes `arcane_origins` too ([`extension_origin`]).
+fn api_router(arcane_origins: &str) -> ApiRouter {
     let picture_limit = || axum::extract::DefaultBodyLimit::max(account::PICTURE_MAX_UPLOAD);
     let account = ApiRouter::new()
         .api_route("/api/account", get(get_account))
@@ -416,7 +621,41 @@ fn api_router() -> ApiRouter {
         .route_layer(from_fn_with_state(Access::LoggedIn, access));
     let arcane = ApiRouter::new()
         .api_route("/api/account/sharing", get(get_sharing).put(set_sharing))
-        .route_layer(from_fn_with_state(Access::Perm(api_types::KnownPermission::Arcane), access));
+        .api_route(
+            "/api/arcane/rolls",
+            get_with(rolls::arcane_rolls, |op| {
+                op.response_with::<200, RollEvents, _>(|r| {
+                    r.description("Server-sent events: `replay` (the last roll of the past hour) first, then `roll`.")
+                })
+            }),
+        )
+        .route_layer(from_fn_with_state(Access::Perm(KnownPermission::Arcane), access));
+    let ark = ApiRouter::new()
+        .api_route("/api/ark/players", get(ark_players))
+        .api_route("/api/ark/command", post(ark_command))
+        .route_layer(from_fn_with_state(Access::Perm(KnownPermission::Llama), access));
+    let enshrouded = ApiRouter::new()
+        .api_route("/api/enshrouded", get(enshrouded_status))
+        .api_route("/api/enshrouded/command", post(enshrouded_command))
+        .route_layer(from_fn_with_state(Access::Perm(KnownPermission::Enshrouded), access));
+    let admin = ApiRouter::new()
+        .api_route("/api/admin/users", get(admin_users))
+        .api_route("/api/admin/users/{user_id}/roles/{role_id}", put(assign_user_role).delete(revoke_user_role))
+        .api_route("/api/admin/roles", get(admin_roles))
+        .api_route("/api/admin/roles/all", get(admin_all_roles))
+        .api_route(
+            "/api/admin/roles/{role_id}/permissions/{permission_id}",
+            put(assign_role_permission).delete(revoke_role_permission),
+        )
+        .api_route("/api/admin/permissions", get(admin_permissions))
+        .api_route("/api/admin/invites", get(admin_invites).post(create_invite))
+        .api_route("/api/admin/invites/{invite_id}", delete(revoke_invite))
+        .route_layer(from_fn_with_state(Access::Perm(KnownPermission::ManagePermissions), access));
+    // The browser extension's: its own origin is let in, not only the site's.
+    let flag = ApiRouter::new()
+        .api_route("/api/arcane/flag", post(capture::arcane_flag))
+        .route_layer(from_fn_with_state(Access::Perm(KnownPermission::Arcane), access))
+        .route_layer(from_fn_with_state(Arc::<str>::from(arcane_origins), extension_origin));
     // Public: the handlers take what they need (a code, the session's username).
     let public = ApiRouter::new()
         .api_route("/api/session", get(session).delete(logout))
@@ -430,12 +669,21 @@ fn api_router() -> ApiRouter {
         .api_route("/api/invites/open", post(open_invite))
         // Deleting what one shared must not depend on auth (see the handler).
         .api_route("/api/account/sharing/data", delete(delete_shared))
+        // Answers anyone, so the extension can tell "logged out" from "server down".
+        .api_route("/api/arcane/me", get(rolls::arcane_me))
         .route_layer(from_fn_with_state(Access::Public, access));
-    public.merge(account).merge(arcane).route_layer(from_fn(same_origin))
+    public
+        .merge(account)
+        .merge(arcane)
+        .merge(ark)
+        .merge(enshrouded)
+        .merge(admin)
+        .route_layer(from_fn(same_origin))
+        .merge(flag)
 }
 
 /// The API's routes, and its OpenAPI document.
-fn finish() -> (axum::Router, OpenApi) {
+fn finish(arcane_origins: &str) -> (axum::Router, OpenApi) {
     let mut doc = OpenApi {
         info: Info {
             title: "milesstorm.com".into(),
@@ -453,20 +701,27 @@ fn finish() -> (axum::Router, OpenApi) {
             s.definitions_path = "#/components/schemas/".into();
         });
         ctx.schema = schemars::SchemaGenerator::new(settings);
+        // Not a route's: the variants of `ArcaneServerMsg` (inlined there, for its tag) by name.
+        ctx.schema.subschema_for::<api_types::Frame>();
+        ctx.schema.subschema_for::<api_types::Roll>();
     });
-    let router = api_router().finish_api(&mut doc);
+    let router = api_router(arcane_origins).finish_api(&mut doc);
     (router, doc)
 }
 
 /// The API's routes, and the envelope for every other `/api/*` path and for a method a route
-/// doesn't have. The plain `/api/arcane/*` routes are explicit routes, so they still match
-/// before the catch-all.
+/// doesn't have. The extension's flag also takes the origins in `ARCANE_ALLOWED_ORIGINS`.
 pub fn router() -> axum::Router {
+    router_with(&std::env::var("ARCANE_ALLOWED_ORIGINS").unwrap_or_default())
+}
+
+/// [`router`] with the flag's extra origins (comma-separated).
+pub(crate) fn router_with(arcane_origins: &str) -> axum::Router {
     let not_found = || async { ApiError::from(api_types::ApiError::new(ErrorCode::NotFound, "There is no such API.")) };
     let not_allowed = || async {
         ApiError::from(api_types::ApiError::new(ErrorCode::Invalid, "That method isn't allowed here.").with_status(405))
     };
-    finish()
+    finish(arcane_origins)
         .0
         .method_not_allowed_fallback(not_allowed)
         .route("/api/{*rest}", axum::routing::any(not_found))
@@ -474,7 +729,7 @@ pub fn router() -> axum::Router {
 
 /// The OpenAPI document as `web openapi` prints it (and web/src/api/openapi.json holds it).
 pub fn openapi_json() -> String {
-    let mut json = serde_json::to_string_pretty(&finish().1).expect("the OpenAPI document serializes");
+    let mut json = serde_json::to_string_pretty(&finish("").1).expect("the OpenAPI document serializes");
     json.push('\n');
     json
 }

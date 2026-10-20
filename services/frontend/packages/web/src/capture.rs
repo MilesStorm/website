@@ -17,11 +17,11 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
+use aide::NoApi;
+use api_types::{ApiError, ErrorCode, FlagRequest, Flagged};
 use axum::extract::Extension;
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::http::{header, HeaderMap};
 use axum::Json;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tower_sessions_redis_store::fred::prelude::*;
@@ -30,7 +30,8 @@ use api::trace::Carried;
 use tracing::Instrument as _;
 
 use crate::dataset::{auto_reason, clean_values, dataset, is_roll_id, shares, Capture};
-use crate::rolls::{arcane_user, origin_allowed, Denied, RollHub};
+use crate::json_api::{self, Body, Viewer};
+use crate::rolls::{origin_allowed_with, RollHub};
 
 /// How long the latest roll's picture is kept for flagging.
 pub const HOLD_SECS: i64 = 600;
@@ -268,69 +269,61 @@ impl RollHub {
 }
 
 /// The flag endpoint is called by the extension: its Origin is the extension's own
-/// (random per install) or absent. Web pages other than this site are refused;
-/// they also can't send a JSON body cross-site without CORS, which is never granted.
-fn flag_origin_allowed(headers: &HeaderMap) -> bool {
+/// (random per install) or absent. Web pages other than this site and `extra` (comma-separated,
+/// `ARCANE_ALLOWED_ORIGINS`) are refused; they also can't send a JSON body cross-site without
+/// CORS, which is never granted.
+pub(crate) fn flag_origin_allowed(headers: &HeaderMap, extra: &str) -> bool {
     match headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
         Some(o) if o.starts_with("moz-extension://") || o.starts_with("chrome-extension://") => true,
-        _ => origin_allowed(headers),
+        _ => origin_allowed_with(headers, extra, cfg!(debug_assertions)),
     }
 }
 
-#[derive(Deserialize)]
-pub struct FlagRequest {
-    roll_id: String,
-    #[serde(default)]
-    values: Vec<Option<String>>,
-}
-
-fn error(status: StatusCode, code: &str) -> Response {
-    (status, Json(json!({"error": code}))).into_response()
+fn unavailable() -> json_api::ApiError {
+    ApiError::new(ErrorCode::Unavailable, "Flagging isn't available right now.").into()
 }
 
 /// `POST /api/arcane/flag` `{"roll_id":..,"values":["5",null,..]}`: save the user's
-/// latest roll and its picture as a wrong reading, with optional corrections.
+/// latest roll and its picture as a wrong reading, with optional corrections. The access
+/// layer has checked `arcane`, and the origin (the extension's is let in).
 pub async fn arcane_flag(
-    Extension(hub): Extension<RollHub>,
-    headers: HeaderMap,
-    session: tower_sessions::Session,
-    Json(req): Json<FlagRequest>,
-) -> Response {
-    if !flag_origin_allowed(&headers) {
-        return error(StatusCode::FORBIDDEN, "origin");
-    }
-    let user = match arcane_user(&session).await {
-        Ok(u) => u,
-        Err(Denied::LoggedOut) => return error(StatusCode::UNAUTHORIZED, "login"),
-        Err(Denied::NoPermission) => return error(StatusCode::FORBIDDEN, "permission"),
-    };
-    let Some(ds) = dataset() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable");
+    viewer: Viewer,
+    NoApi(hub): json_api::Hub,
+    Body(req): Body<FlagRequest>,
+) -> Result<Json<Flagged>, json_api::ApiError> {
+    let user = viewer.username()?;
+    let (Some(Extension(hub)), Some(ds)) = (hub, dataset()) else {
+        return Err(unavailable());
     };
     if !is_roll_id(&req.roll_id) {
-        return error(StatusCode::BAD_REQUEST, "roll_id");
+        return Err(ApiError::new(ErrorCode::Invalid, "That isn't a roll.").into());
     }
-    let Some(capture) = hub.held(&user, &req.roll_id).await else {
-        return error(StatusCode::GONE, "expired");
+    let Some(capture) = hub.held(user, &req.roll_id).await else {
+        let message = "That roll can't be flagged any more: only your latest roll can be, for 10 minutes.";
+        return Err(ApiError::new(ErrorCode::Gone, message).into());
     };
     let dice = capture.roll.get("dice").and_then(Value::as_array).map_or(0, Vec::len);
     let Some(values) = clean_values(&req.values, dice) else {
-        return error(StatusCode::BAD_REQUEST, "values");
+        let message = "Give one value per die: a face from 0 to 20, or nothing.";
+        return Err(ApiError::new(ErrorCode::Invalid, message).into());
     };
     // Counted only for flags that would be saved; refused if Redis can't count.
     match hub.count_in_window(&format!("arcane:flag_count:{user}"), 3600).await {
         Some(n) if n <= FLAGS_PER_HOUR => {}
-        Some(_) => return error(StatusCode::TOO_MANY_REQUESTS, "rate"),
-        None => return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+        Some(_) => {
+            let message = "You've flagged a lot of rolls this hour. Try again later.";
+            return Err(ApiError::new(ErrorCode::RateLimited, message).into());
+        }
+        None => return Err(unavailable()),
     }
-    match ds.save(&user, &capture, None, Some(&values)).await {
+    match ds.save(user, &capture, None, Some(&values)).await {
         Ok(()) => {
             tracing::info!(roll_id = %req.roll_id, "roll flagged as wrong");
-            Json(json!({"ok": true})).into_response()
+            Ok(Json(Flagged { ok: true }))
         }
         Err(e) => {
             tracing::error!(error = %e, "saving flagged roll failed");
-            error(StatusCode::BAD_GATEWAY, "store")
+            Err(ApiError::new(ErrorCode::Upstream, "The roll couldn't be saved. Try again.").into())
         }
     }
 }
@@ -376,9 +369,10 @@ mod tests {
             h.insert(header::ORIGIN, origin.parse().unwrap());
             h
         };
-        assert!(flag_origin_allowed(&h("moz-extension://1b2c3d")));
-        assert!(flag_origin_allowed(&h("chrome-extension://abcdef")));
-        assert!(flag_origin_allowed(&h("https://milesstorm.com")));
-        assert!(!flag_origin_allowed(&h("https://evil.example")));
+        assert!(flag_origin_allowed(&h("moz-extension://1b2c3d"), ""));
+        assert!(flag_origin_allowed(&h("chrome-extension://abcdef"), ""));
+        assert!(flag_origin_allowed(&h("https://milesstorm.com"), ""));
+        assert!(!flag_origin_allowed(&h("https://evil.example"), ""));
+        assert!(flag_origin_allowed(&h("https://dev.example"), "https://dev.example, https://other.example"));
     }
 }

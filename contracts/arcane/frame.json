@@ -1,0 +1,19 @@
+{
+  "type": "frame",
+  "detections": [
+    {
+      "x1": 0.25,
+      "y1": 0.5,
+      "x2": 0.375,
+      "y2": 0.625,
+      "yolo_conf": 0.875,
+      "yolo_class": 0,
+      "dice_class": 16,
+      "dice_conf": 0.75,
+      "value": "16",
+      "confident": true
+    }
+  ],
+  "frame_ms": 42,
+  "frame_seq": 6
+}

@@ -71,14 +71,14 @@ pub(crate) fn context_of(span: &tracing::Span) -> SpanContext {
 }
 
 /// A Redis in Docker, gone when the handle is dropped.
-async fn redis() -> (ContainerAsync<Redis>, Config) {
+pub(crate) async fn redis() -> (ContainerAsync<Redis>, Config) {
     let node = Redis::default().with_tag("7-alpine").start().await.expect("these tests need Docker (for Redis)");
     let url = format!("redis://{}:{}", node.get_host().await.unwrap(), node.get_host_port_ipv4(REDIS_PORT).await.unwrap());
     (node, Config::from_url(&url).unwrap())
 }
 
 /// The pool and hub as `router` builds them.
-async fn hub(config: &Config, shutdown: CancellationToken) -> (RollHub, Pool) {
+pub(crate) async fn hub(config: &Config, shutdown: CancellationToken) -> (RollHub, Pool) {
     let pool = api::trace::redis_pool(config.clone(), ConnectionConfig::default(), 2, RedisTracing::Commands).unwrap();
     pool.connect();
     pool.wait_for_connect().await.unwrap();

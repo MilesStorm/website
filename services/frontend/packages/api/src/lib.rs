@@ -2,15 +2,22 @@
 
 use api_types::ApiError;
 #[cfg(feature = "server")]
-use api_types::{ErrorCode, Permission};
+use api_types::{ErrorCode, KnownPermission, Permission};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub use ui::data_dir::{
-    AdminInvite, AdminPermission, AdminRole, AdminUser, AdminUserRole, CommandResult, EnshroudedStatus, LoginStatus,
-    PagedResult,
+pub use api_types::{
+    AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, AdminUserRole, ArkCommand, ArkOutcome,
+    EnshroudedCommand, EnshroudedStatus, NewInvite, PagedResult,
 };
+pub use ui::data_dir::{CommandResult, LoginStatus};
 
+#[cfg(feature = "server")]
+pub mod admin;
+#[cfg(feature = "server")]
+pub mod ark;
+#[cfg(feature = "server")]
+pub mod enshrouded;
 pub mod trace;
 
 /// Preserve an expected auth rejection; upstream failures remain gateway errors.
@@ -613,15 +620,14 @@ pub struct AccountProfile {
 /// reply isn't JSON). Auth's email endpoints answer errors as `{"error": code}`.
 #[cfg(feature = "server")]
 pub async fn auth_json<T: Serialize>(path: &str, body: &T) -> Result<(u16, serde_json::Value), String> {
-    use session::{auth_url, service_secret};
+    auth_send(http_client().post(format!("{}{path}", session::auth_url())).json(body)).await
+}
 
-    let resp = http_client()
-        .post(format!("{}{path}", auth_url()))
-        .header("x-service-token", service_secret())
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+/// Sends `req` (to auth) with the service token: the status and the JSON reply (`Null` when
+/// the reply isn't JSON).
+#[cfg(feature = "server")]
+async fn auth_send(req: reqwest_middleware::RequestBuilder) -> Result<(u16, serde_json::Value), String> {
+    let resp = req.header("x-service-token", session::service_secret()).send().await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();
     let json = resp.json().await.unwrap_or(serde_json::Value::Null);
     Ok((status, json))
@@ -683,7 +689,11 @@ pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) 
     };
     match auth_json("/internal/invite/redeem", &serde_json::json!({ "code": code, "token": token })).await {
         Ok((200..=299, reply)) => tracing::info!(role = ?reply.get("role"), "pending invite redeemed"),
-        Ok((status, reply)) => tracing::warn!(status, reply = %reply, "pending invite not redeemed"),
+        // Not the reply: only its error code, which is auth's own vocabulary.
+        Ok((status, reply)) => {
+            let code = reply.get("error").and_then(|c| c.as_str()).unwrap_or("");
+            tracing::warn!(status, code, "pending invite not redeemed");
+        }
         Err(e) => {
             tracing::error!(error = %e, "redeeming a pending invite failed");
             trace::failed("auth_unreachable");
@@ -766,509 +776,143 @@ pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
     Ok(result)
 }
 
-/// Get the number of active players on the Ark server.
-#[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.ark_player_count", skip_all, err)]
-pub async fn ark_player_count() -> Result<i32, ServerFnError> {
-    use session::*;
+// ---- Ark, Enshrouded and admin: server functions over the same functions as the JSON API ----
 
-    let sess = get_session().ok_or_else(|| ServerFnError::new("Not authenticated"))?;
-    let token: Option<String> = sess
-        .get("opaque_token")
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let token = token.ok_or_else(|| ServerFnError::new("Not authenticated"))?;
-
-    #[derive(Serialize)]
-    struct Req {
-        token: String,
-    }
-
-    let resp = http_client()
-        .post(format!("{}/internal/ark/num_players", auth_url()))
-        .header("x-service-token", service_secret())
-        .json(&Req { token })
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        metrics::counter!("bff_ark_commands_total", "cmd" => "num_players", "status" => "error").increment(1);
-        return Err(ServerFnError::new("Ark request failed"));
-    }
-
-    let body: DockerRequestResponse = resp
-        .json()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    metrics::counter!("bff_ark_commands_total", "cmd" => "num_players", "status" => "success").increment(1);
-    Ok(match body.command_result {
-        Some(CommandResult::NumPlayers(n)) => n,
-        _ => -1,
-    })
-}
-
-/// Execute an Ark server command (start | stop | restart).
-#[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.ark_command", skip_all, err, fields(cmd = %cmd))]
-pub async fn ark_command(cmd: String) -> Result<CommandResult, ServerFnError> {
-    use session::*;
-
-    let sess = get_session().ok_or_else(|| ServerFnError::new("Not authenticated"))?;
+/// The session's username and token, for a server function that acts as the user (auth
+/// checks the token's permission).
+#[cfg(feature = "server")]
+async fn session_login() -> Result<(String, String), ServerFnError> {
+    let logged_out = || server_error(ApiError::logged_out());
+    let sess = session::get_session().ok_or_else(logged_out)?;
     let username: Option<String> = sess.get("username").await.ok().flatten();
-    let token: Option<String> = sess
-        .get("opaque_token")
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let token = token.ok_or_else(|| ServerFnError::new("Not authenticated"))?;
-    tracing::info!(username = ?username, cmd = %cmd, "ark command requested");
-
-    #[derive(Serialize)]
-    struct Req {
-        token: String,
-        cmd: String,
-    }
-
-    let cmd_label = cmd.clone();
-    let resp = http_client()
-        .post(format!("{}/internal/ark/command", auth_url()))
-        .header("x-service-token", service_secret())
-        .json(&Req { token, cmd })
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        metrics::counter!("bff_ark_commands_total", "cmd" => cmd_label, "status" => "error").increment(1);
-        return Err(ServerFnError::new("Ark command failed"));
-    }
-
-    let body: DockerRequestResponse = resp
-        .json()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    metrics::counter!("bff_ark_commands_total", "cmd" => cmd_label, "status" => "success").increment(1);
-    body.command_result
-        .ok_or_else(|| ServerFnError::new("No command result"))
+    let token: Option<String> = sess.get("opaque_token").await.ok().flatten();
+    username.zip(token).ok_or_else(logged_out)
 }
 
-// ---- Enshrouded server panel ----
-
-/// The session's token, for auth's calls that act as the user.
+/// The session's token, if its user has `manage_permissions`: auth's admin endpoints trust
+/// the website to check (as the JSON API's access layer does).
 #[cfg(feature = "server")]
-async fn session_token() -> Result<String, ServerFnError> {
-    let sess = session::get_session().ok_or_else(|| auth_error(401, "Not logged in"))?;
-    sess.get::<String>("opaque_token")
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
-        .ok_or_else(|| auth_error(401, "Not logged in"))
+async fn admin_token() -> Result<String, ServerFnError> {
+    let sess = session::get_session().ok_or_else(|| server_error(ApiError::logged_out()))?;
+    let viewer = viewer(&sess).await.map_err(|e| {
+        tracing::error!(error = %e, "reading the session failed");
+        server_error(ApiError::login_unavailable())
+    })?;
+    match viewer {
+        Viewer::User { token, permissions, .. }
+            if permissions.iter().any(|p| p.known() == Some(KnownPermission::ManagePermissions)) =>
+        {
+            Ok(token)
+        }
+        Viewer::User { .. } => Err(server_error(ApiError::forbidden())),
+        Viewer::Anonymous => Err(server_error(ApiError::logged_out())),
+        Viewer::Degraded { .. } => Err(server_error(ApiError::login_unavailable())),
+    }
 }
 
-/// What auth's `{"error": code}` from the Enshrouded endpoints means for the user.
-#[cfg(feature = "server")]
-fn enshrouded_error(status: u16, reply: &serde_json::Value) -> ServerFnError {
-    let message = match reply.get("error").and_then(|e| e.as_str()) {
-        Some("forbidden") => "You don't have access to the Enshrouded server.",
-        Some("too_soon") => "Someone just sent a command. Wait a moment and try again.",
-        Some("busy") => "A restart or update is already under way.",
-        Some("not_configured") => "The website can't control the server yet (no control password).",
-        Some("unreachable") => "The server's control port doesn't answer.",
-        _ => "Something went wrong. Try again later.",
-    };
-    auth_error(status, message)
+/// The number of players on the Ark server; -1 when it doesn't say (offline).
+#[server(prefix = "/bff")]
+pub async fn ark_player_count() -> Result<i32, ServerFnError> {
+    let (_, token) = session_login().await?;
+    let players = ark::players(&token).await.map_err(server_error)?;
+    Ok(players.count.and_then(|n| i32::try_from(n).ok()).unwrap_or(-1))
+}
+
+/// Starts, stops or restarts the Ark server.
+#[server(prefix = "/bff")]
+pub async fn ark_command(cmd: ArkCommand) -> Result<ArkOutcome, ServerFnError> {
+    let (username, token) = session_login().await?;
+    ark::command(&token, &username, cmd).await.map_err(server_error)
 }
 
 /// The Enshrouded server's state, players, and the latest commands.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.enshrouded_status", skip_all)]
 pub async fn enshrouded_status() -> Result<EnshroudedStatus, ServerFnError> {
-    trace::rejectable(async move {
-        #[derive(Serialize)]
-        struct Req {
-            token: String,
-        }
-        let token = session_token().await?;
-        let (status, reply) = auth_json("/internal/enshrouded/status", &Req { token })
-            .await
-            .map_err(|_| auth_error(502, "The website can't reach the server right now."))?;
-        if status != 200 {
-            return Err(enshrouded_error(status, &reply));
-        }
-        serde_json::from_value(reply).map_err(|e| ServerFnError::new(e.to_string()))
-    })
-    .await
+    let (_, token) = session_login().await?;
+    enshrouded::status(&token).await.map_err(server_error)
 }
 
-/// Restart (`restart`) or force-update the Enshrouded server: `update` waits until nobody is
-/// online, `update_now` disconnects players.
+/// Restarts or force-updates the Enshrouded server.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.enshrouded_command", skip_all, fields(cmd = %cmd))]
-pub async fn enshrouded_command(cmd: String) -> Result<(), ServerFnError> {
-    trace::rejectable(async move {
-        #[derive(Serialize)]
-        struct Req {
-            token: String,
-            cmd: String,
-        }
-        let token = session_token().await?;
-        let label = match cmd.as_str() {
-            "restart" => "restart",
-            "update_now" => "update_now",
-            _ => "update",
-        };
-        let (status, reply) = auth_json("/internal/enshrouded/command", &Req { token, cmd })
-            .await
-            .map_err(|_| auth_error(502, "The website can't reach the server right now."))?;
-        let outcome = if status == 200 { "success" } else { "error" };
-        metrics::counter!("bff_enshrouded_commands_total", "cmd" => label, "status" => outcome).increment(1);
-        if status != 200 {
-            return Err(enshrouded_error(status, &reply));
-        }
-        Ok(())
-    })
-    .await
+pub async fn enshrouded_command(cmd: EnshroudedCommand) -> Result<(), ServerFnError> {
+    let (_, token) = session_login().await?;
+    enshrouded::command(&token, cmd).await.map_err(server_error)
 }
 
-// ---- Admin RBAC server functions ----
-
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_users", skip_all, err)]
 pub async fn admin_list_users(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminUser>, ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    #[derive(Deserialize)]
-    struct RoleRef { id: i32, name: String }
-    #[derive(Deserialize)]
-    struct UserResp { id: i64, username: String, email: Option<String>, roles: Vec<RoleRef> }
-    #[derive(Deserialize)]
-    struct Paged { items: Vec<UserResp>, total: i64 }
-
-    let mut url = reqwest::Url::parse(&format!("{}/internal/admin/users", auth_url()))
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    url.query_pairs_mut()
-        .append_pair("page", &page.to_string())
-        .append_pair("limit", &limit.to_string())
-        .append_pair("search", &search);
-
-    let resp = http_client()
-        .get(url)
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to fetch users"));
-    }
-
-    let data: Paged = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(PagedResult {
-        total: data.total,
-        items: data.items.into_iter().map(|u| AdminUser {
-            id: u.id,
-            username: u.username,
-            email: u.email,
-            roles: u.roles.into_iter().map(|r| AdminUserRole { id: r.id, name: r.name }).collect(),
-        }).collect(),
-    })
+    admin_token().await?;
+    admin::users(&AdminPage { page, limit, search }).await.map_err(server_error)
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_roles", skip_all, err)]
 pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminRole>, ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    #[derive(Deserialize)]
-    struct PermRef { id: i32, name: String }
-    #[derive(Deserialize)]
-    struct RoleResp { id: i32, name: String, permissions: Vec<PermRef> }
-    #[derive(Deserialize)]
-    struct Paged { items: Vec<RoleResp>, total: i64 }
-
-    let mut url = reqwest::Url::parse(&format!("{}/internal/admin/roles", auth_url()))
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-    url.query_pairs_mut()
-        .append_pair("page", &page.to_string())
-        .append_pair("limit", &limit.to_string())
-        .append_pair("search", &search);
-
-    let resp = http_client()
-        .get(url)
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to fetch roles"));
-    }
-
-    let data: Paged = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(PagedResult {
-        total: data.total,
-        items: data.items.into_iter().map(|r| AdminRole {
-            id: r.id,
-            name: r.name,
-            permissions: r.permissions.into_iter().map(|p| AdminPermission { id: p.id, name: p.name }).collect(),
-        }).collect(),
-    })
+    admin_token().await?;
+    admin::roles(&AdminPage { page, limit, search }).await.map_err(server_error)
 }
 
-/// Returns all roles (names only, no permissions) for use in assignment dropdowns.
+/// Every role, without its permissions (for the pickers).
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_all_roles", skip_all, err)]
-pub async fn admin_list_all_roles() -> Result<Vec<AdminRole>, ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    #[derive(Deserialize)]
-    struct RoleResp { id: i32, name: String }
-
-    let resp = http_client()
-        .get(format!("{}/internal/admin/roles/all", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to fetch roles"));
-    }
-
-    let data: Vec<RoleResp> = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(data.into_iter().map(|r| AdminRole { id: r.id, name: r.name, permissions: vec![] }).collect())
+pub async fn admin_list_all_roles() -> Result<Vec<AdminRoleRef>, ServerFnError> {
+    admin_token().await?;
+    admin::all_roles().await.map_err(server_error)
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_permissions", skip_all, err)]
 pub async fn admin_list_permissions() -> Result<Vec<AdminPermission>, ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    #[derive(Deserialize)]
-    struct PermResp {
-        id: i32,
-        name: String,
-    }
-
-    let resp = http_client()
-        .get(format!("{}/internal/admin/permissions", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to fetch permissions"));
-    }
-
-    let data: Vec<PermResp> = resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))?;
-    Ok(data.into_iter().map(|p| AdminPermission { id: p.id, name: p.name }).collect())
+    admin_token().await?;
+    admin::permissions().await.map_err(server_error)
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_assign_user_role", skip_all, err, fields(user_id, role_id))]
 pub async fn admin_assign_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    let resp = http_client()
-        .post(format!("{}/internal/admin/users/{user_id}/roles/{role_id}", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to assign role"));
-    }
-    Ok(())
+    admin_token().await?;
+    admin::assign_user_role(user_id, role_id).await.map_err(server_error)
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_revoke_user_role", skip_all, err, fields(user_id, role_id))]
 pub async fn admin_revoke_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    let resp = http_client()
-        .delete(format!("{}/internal/admin/users/{user_id}/roles/{role_id}", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to revoke role"));
-    }
-    Ok(())
+    admin_token().await?;
+    admin::revoke_user_role(user_id, role_id).await.map_err(server_error)
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_assign_role_permission", skip_all, err, fields(role_id, permission_id))]
 pub async fn admin_assign_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    let resp = http_client()
-        .post(format!("{}/internal/admin/roles/{role_id}/permissions/{permission_id}", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to assign permission"));
-    }
-    Ok(())
+    admin_token().await?;
+    admin::assign_role_permission(role_id, permission_id).await.map_err(server_error)
 }
 
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_revoke_role_permission", skip_all, err, fields(role_id, permission_id))]
 pub async fn admin_revoke_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    let resp = http_client()
-        .delete(format!("{}/internal/admin/roles/{role_id}/permissions/{permission_id}", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to revoke permission"));
-    }
-    Ok(())
+    admin_token().await?;
+    admin::revoke_role_permission(role_id, permission_id).await.map_err(server_error)
 }
-
-// ---- Admin invite links ----
 
 /// The latest invite links, newest first.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_list_invites", skip_all, err)]
 pub async fn admin_list_invites() -> Result<Vec<AdminInvite>, ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    let resp = http_client()
-        .get(format!("{}/internal/admin/invites", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to fetch invites"));
-    }
-    resp.json().await.map_err(|e| ServerFnError::new(e.to_string()))
+    admin_token().await?;
+    admin::invites().await.map_err(server_error)
 }
 
 /// Makes an invite link that gives `role_id`, working for `days` days and for up
 /// to `max_uses` people (`None`: any number). The reply's `link` is shown only now.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_create_invite", skip_all, err, fields(role_id, days))]
 pub async fn admin_create_invite(
     role_id: i32,
     days: i64,
     max_uses: Option<i32>,
     note: Option<String>,
 ) -> Result<AdminInvite, ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-    let sess = get_session().ok_or_else(|| ServerFnError::new("Not authenticated"))?;
-    let token: String = sess
-        .get("opaque_token")
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| ServerFnError::new("Not authenticated"))?;
-
-    let body = serde_json::json!({
-        "token": token,
-        "role_id": role_id,
-        "days": days,
-        "max_uses": max_uses,
-        "note": note,
-    });
-    let resp = http_client()
-        .post(format!("{}/internal/admin/invites", auth_url()))
-        .header("x-service-token", service_secret())
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    match resp.status() {
-        s if s.is_success() => resp.json().await.map_err(|e| ServerFnError::new(e.to_string())),
-        reqwest::StatusCode::BAD_REQUEST => {
-            let reply: serde_json::Value = resp.json().await.unwrap_or_default();
-            Err(ServerFnError::new(if reply.get("error").and_then(|e| e.as_str()) == Some("admin_role") {
-                "Links can't give a role with admin rights: give that role in the Users tab instead."
-            } else {
-                "Check the fields: 1 to 365 days, 1 to 1000 people, and a note of at most 100 characters."
-            }))
-        }
-        reqwest::StatusCode::NOT_FOUND => Err(ServerFnError::new("That role no longer exists.")),
-        s => Err(ServerFnError::new(format!("Failed to make the invite ({s})"))),
-    }
+    let token = admin_token().await?;
+    admin::create_invite(&token, &NewInvite { role_id, days, max_uses, note }).await.map_err(server_error)
 }
 
 /// Stops an invite link from letting anyone else in. People who already joined keep the role.
 #[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.admin_revoke_invite", skip_all, err, fields(invite_id))]
 pub async fn admin_revoke_invite(invite_id: i32) -> Result<(), ServerFnError> {
-    use session::*;
-
-    if !check_permission("manage_permissions".to_string()).await? {
-        return Err(ServerFnError::new("Forbidden"));
-    }
-
-    let resp = http_client()
-        .delete(format!("{}/internal/admin/invites/{invite_id}", auth_url()))
-        .header("x-service-token", service_secret())
-        .send()
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    if !resp.status().is_success() {
-        return Err(ServerFnError::new("Failed to revoke the invite"));
-    }
-    Ok(())
+    admin_token().await?;
+    admin::revoke_invite(invite_id).await.map_err(server_error)
 }
 
 #[cfg(all(test, feature = "server"))]

@@ -362,6 +362,16 @@ impl opentelemetry::propagation::Extractor for HeaderExtractor<'_> {
     }
 }
 
+/// The frame message for the frontend: what was seen in frame `seq`, read in `ms`.
+fn frame_message(dets: &[Detection], ms: u128, seq: u64) -> String {
+    serde_json::json!({"type": "frame", "detections": dets, "frame_ms": ms, "frame_seq": seq}).to_string()
+}
+
+/// The message for a frame that couldn't be read.
+fn error_message(e: &str) -> String {
+    serde_json::json!({"type": "error", "error": e}).to_string()
+}
+
 /// The roll message for the frontend: the roll event plus the model that read it, the
 /// frame it settled on, and the trace context of the span that sends it (`ws.send`, a
 /// PRODUCER span under `roll.settle`) as `_trace`, so the frontend's spans for the roll
@@ -458,10 +468,7 @@ async fn run_session<S>(
         let unit = match result {
             Ok(dets) => {
                 let ms = times.done.duration_since(times.dequeued).as_millis();
-                replies.push(
-                    serde_json::json!({"type": "frame", "detections": dets, "frame_ms": ms, "frame_seq": seq})
-                        .to_string(),
-                );
+                replies.push(frame_message(&dets, ms, seq));
                 let detections = dets.len();
                 let obs: Vec<Observation> = dets
                     .into_iter()
@@ -479,7 +486,7 @@ async fn run_session<S>(
             }
             Err(e) => {
                 let unit = session.frame(seq, &times, Outcome::Failed(&e));
-                replies.push(serde_json::json!({"type": "error", "error": e}).to_string());
+                replies.push(error_message(&e));
                 unit
             }
         };
@@ -868,5 +875,50 @@ mod tests {
             message,
             serde_json::json!({"type": "roll", "roll_id": "r1", "dice": [], "total": null, "complete": false, "ts": 7, "model": "m", "frame_seq": 3})
         );
+    }
+
+    /// The messages the frontend passes on to browsers are the ones in contracts/arcane/,
+    /// whose types the frontend's API document declares (`ArcaneServerMsg`); its own test
+    /// reads the same files. A change here fails one side or the other until both agree.
+    #[test]
+    fn messages_are_the_contract_fixtures() {
+        use crate::roll::RolledDie;
+        let fixture = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap();
+        let message = |text: String| serde_json::from_str::<serde_json::Value>(&text).unwrap();
+
+        let die = Detection {
+            x1: 0.25,
+            y1: 0.5,
+            x2: 0.375,
+            y2: 0.625,
+            yolo_conf: 0.875,
+            yolo_class: 0,
+            dice_class: 16,
+            dice_conf: 0.75,
+            value: class_value(16),
+            confident: true,
+            probs: vec![0.5; 21],
+        };
+        let frame = frame_message(&[die], 42, 6);
+        assert_eq!(message(frame), fixture(include_str!("../../../contracts/arcane/frame.json")));
+
+        let read = RolledDie { value: Some("16"), conf: 0.75, bbox: [0.25, 0.5, 0.375, 0.625] };
+        let unread = RolledDie { value: None, conf: 0.5, bbox: [0.5, 0.5, 0.625, 0.625] };
+        let roll = RollEvent {
+            kind: "roll",
+            roll_id: "18f3a2b-0badf00d".into(),
+            dice: vec![read.clone()],
+            total: Some(16),
+            complete: true,
+            ts: 1727250000000,
+        };
+        let complete = roll_message(&roll, "yolo26s+dice_head_resnet18", 6, None);
+        assert_eq!(message(complete), fixture(include_str!("../../../contracts/arcane/roll.json")));
+        let partial = RollEvent { dice: vec![read, unread], total: None, complete: false, ..roll };
+        let partial = roll_message(&partial, "yolo26s+dice_head_resnet18", 9, None);
+        assert_eq!(message(partial), fixture(include_str!("../../../contracts/arcane/roll_unread.json")));
+
+        let error = error_message("the frame isn't a JPEG or PNG image");
+        assert_eq!(message(error), fixture(include_str!("../../../contracts/arcane/error.json")));
     }
 }
