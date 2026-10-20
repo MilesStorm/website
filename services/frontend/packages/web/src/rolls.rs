@@ -28,7 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::Extension;
 use aide::NoApi;
-use api_types::{ApiError, ArcaneMe, ErrorCode, KnownPermission};
+use api_types::{Access, ApiError, ArcaneMe, ErrorCode, KnownPermission};
 use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -432,15 +432,7 @@ impl RollHub {
     pub async fn still_allowed(&self, session_id: Option<Id>, user: &str) -> bool {
         let Some(id) = session_id else { return false };
         match self.sessions.load(&id).await {
-            Ok(Some(record)) => {
-                let token = record.data.get("opaque_token").and_then(|v| v.as_str());
-                let name = record.data.get("username").and_then(|v| v.as_str());
-                match (token, name) {
-                    (Some(token), Some(name)) if name == user => api::has_arcane_permission(token).await,
-                    _ => false,
-                }
-            }
-            Ok(None) => false,
+            Ok(record) => record_allowed(record.as_ref().map(|r| &r.data), user).await,
             Err(e) => {
                 // A Redis hiccup shouldn't drop everyone; the next check decides.
                 tracing::warn!(error = %e, "arcane session re-check failed");
@@ -448,6 +440,23 @@ impl RollHub {
                 true
             }
         }
+    }
+}
+
+/// [`RollHub::still_allowed`] for the stored session `data` (`None`: gone): its viewer, built
+/// as for a request ([`api::login_viewer`]), with the `/api/arcane/*` rule. Auth not answering
+/// (`Degraded`) keeps the connection, as a Redis hiccup does; the next check decides.
+pub(crate) async fn record_allowed(data: Option<&HashMap<String, serde_json::Value>>, user: &str) -> bool {
+    let Some(data) = data else { return false };
+    let token = data.get("opaque_token").and_then(|v| v.as_str()).map(str::to_string);
+    let name = data.get("username").and_then(|v| v.as_str());
+    if name != Some(user) {
+        return false;
+    }
+    let Some(viewer) = api::login_viewer(user, token).await else { return false };
+    match json_api::allowed(Access::Perm(KnownPermission::Arcane), &Viewer(viewer)) {
+        Ok(()) => true,
+        Err(e) => e.0.error == ErrorCode::Unavailable,
     }
 }
 
@@ -510,26 +519,6 @@ pub fn is_roll(text: &str) -> bool {
     text.contains("\"roll\"")
         && serde_json::from_str::<serde_json::Value>(text)
             .is_ok_and(|v| v.get("type").and_then(|t| t.as_str()) == Some("roll"))
-}
-
-/// Why a session may not use Arcane.
-pub enum Denied {
-    LoggedOut,
-    NoPermission,
-}
-
-/// The session's username, if it is logged in and holds the `arcane` permission.
-pub async fn arcane_user(session: &tower_sessions::Session) -> Result<String, Denied> {
-    let token: Option<String> = session.get("opaque_token").await.ok().flatten();
-    let username: Option<String> = session.get("username").await.ok().flatten();
-    let (Some(token), Some(username)) = (token, username) else {
-        return Err(Denied::LoggedOut);
-    };
-    if api::has_arcane_permission(&token).await {
-        Ok(username)
-    } else {
-        Err(Denied::NoPermission)
-    }
 }
 
 /// Browsers always send `Origin` on WebSocket handshakes; the page and the socket are
@@ -721,6 +710,28 @@ pub async fn arcane_rolls(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A camera connection's re-check: its stored session's viewer, by the stand-in auth's
+    /// tokens (`json_api::tests`).
+    #[tokio::test]
+    async fn a_connection_stays_through_an_auth_blip_and_ends_on_a_revoked_permission() {
+        let _auth = crate::json_api::tests::Site::serving(axum::Router::new()).await;
+        let stored = |token: &str| {
+            HashMap::from([
+                ("opaque_token".to_string(), serde_json::json!(token)),
+                ("username".to_string(), serde_json::json!(format!("user-{token}"))),
+            ])
+        };
+        assert!(record_allowed(Some(&stored("all")), "user-all").await);
+        // Auth not answering: kept, until a check that hears from it.
+        assert!(record_allowed(Some(&stored("down")), "user-down").await);
+        // The permission taken away, and a token auth dropped (a reset password).
+        assert!(!record_allowed(Some(&stored("none")), "user-none").await);
+        assert!(!record_allowed(Some(&stored("dead")), "user-dead").await);
+        // Logged out, or another account's session now.
+        assert!(!record_allowed(None, "user-all").await);
+        assert!(!record_allowed(Some(&stored("all")), "user-other").await);
+    }
 
     fn headers(origin: Option<&str>, host: &str) -> HeaderMap {
         let mut h = HeaderMap::new();

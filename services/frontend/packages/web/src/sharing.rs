@@ -93,12 +93,15 @@ fn request() -> Result<(tower_sessions::Session, Option<crate::rolls::RollHub>),
     Ok((session.ok_or_else(|| ServerFnError::new("not logged in"))?, hub))
 }
 
-/// For a server function: the session's token, if it holds the `arcane` permission.
+/// For a server function: the session's token, if it holds the `arcane` permission (the
+/// viewer and rule of the `/api/arcane/*` routes).
 #[cfg(not(target_arch = "wasm32"))]
 async fn arcane_token() -> Result<String, ServerFnError> {
     let (session, _) = request()?;
-    crate::rolls::arcane_user(&session).await.map_err(|_| ServerFnError::new("not allowed"))?;
-    Ok(session.get("opaque_token").await.ok().flatten().unwrap_or_default())
+    let viewer = api::viewer(&session).await.map(crate::json_api::Viewer).map_err(|_| ServerFnError::new("not allowed"))?;
+    crate::json_api::allowed(api_types::Access::Perm(api_types::KnownPermission::Arcane), &viewer)
+        .and_then(|()| viewer.token().map(str::to_string))
+        .map_err(|_| ServerFnError::new("not allowed"))
 }
 
 #[server(prefix = "/bff")]

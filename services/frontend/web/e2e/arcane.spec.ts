@@ -12,8 +12,9 @@ test.use({
 /** The camera page, connected and reading frames. */
 async function reading(page: Page) {
   await page.goto('/arcane');
-  // The status shows the dice server's reading time once frames are answered.
-  await expect(page.getByRole('status', { name: 'Connection' })).toHaveText('42ms');
+  await expect(page.getByRole('status', { name: 'Connection' })).toHaveText('Connected');
+  // The badge shows the dice server's reading time once frames are answered.
+  await expect(page.getByText('42ms', { exact: true })).toBeVisible();
 }
 
 if (!STAGING) {

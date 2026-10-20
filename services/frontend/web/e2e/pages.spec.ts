@@ -4,6 +4,17 @@
 import { expect, test } from '@playwright/test';
 import { PAGES, STAGING, expectAccessible, logIn, type Access, type Who } from './site';
 
+// No page gets a camera: on /arcane the browser refuses it, so no frame goes anywhere (staging's
+// ai_pipeline included).
+test.use({ permissions: [] });
+test.beforeEach(async ({ context }) => {
+  await context.addInitScript(() => {
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException('Denied by the test', 'NotAllowedError'));
+    }
+  });
+});
+
 // Auth being down can't be arranged on staging.
 const VIEWERS: Who[] = STAGING ? ['anonymous', 'plain', 'all'] : ['anonymous', 'plain', 'all', 'down'];
 

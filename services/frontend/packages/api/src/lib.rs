@@ -379,19 +379,28 @@ pub enum Viewer {
 /// token auth no longer knows is cleared. Err when the session can't be read.
 #[cfg(feature = "server")]
 pub async fn viewer(sess: &tower_sessions::Session) -> Result<Viewer, String> {
-    use session::{auth_url, service_secret};
-
     let username: Option<String> = sess.get("username").await.map_err(|e| e.to_string())?;
     let Some(username) = username else {
         return Ok(Viewer::Anonymous);
     };
+    let token: Option<String> = sess.get("opaque_token").await.ok().flatten();
+    Ok(match login_viewer(&username, token).await {
+        Some(viewer) => viewer,
+        None => token_gone(sess, &username).await,
+    })
+}
+
+/// Who a session logged in as `username` with `token` is, by one call to auth: `None` when the
+/// login is over (no token, or auth no longer knows it), so the session must be cleared. Shared
+/// by [`viewer`] and the long-lived connections' re-check, which reads a stored session.
+#[cfg(feature = "server")]
+pub async fn login_viewer(username: &str, token: Option<String>) -> Option<Viewer> {
+    use session::{auth_url, service_secret};
 
     // Auth drops every token of an account when its password is reset or it is
     // deleted: then this session is over too. Other failures leave it alone.
-    let token: Option<String> = sess.get("opaque_token").await.ok().flatten();
-    let Some(token) = token else {
-        return Ok(token_gone(sess, &username).await);
-    };
+    let token = token?;
+    let username = username.to_string();
     #[derive(Serialize)]
     struct Req<'a> {
         token: &'a str,
@@ -407,7 +416,7 @@ pub async fn viewer(sess: &tower_sessions::Session) -> Result<Viewer, String> {
         .json(&Req { token: &token })
         .send()
         .await;
-    Ok(match resp {
+    Some(match resp {
         Ok(r) if r.status().is_success() => match r.json::<Resp>().await {
             Ok(data) => Viewer::User { username, token, permissions: data.permissions },
             Err(e) => {
@@ -419,10 +428,9 @@ pub async fn viewer(sess: &tower_sessions::Session) -> Result<Viewer, String> {
         // or any other failure must not log everyone out.
         Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
             if r.text().await.is_ok_and(|b| b == "Invalid or expired token") {
-                token_gone(sess, &username).await
-            } else {
-                Viewer::Degraded { username }
+                return None;
             }
+            Viewer::Degraded { username }
         }
         Ok(r) => {
             tracing::warn!(status = %r.status(), "checking the session's token failed");
@@ -498,52 +506,6 @@ pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
         Viewer::User { permissions, .. } => permissions.iter().map(|p| p.name().to_string()).collect(),
         Viewer::Anonymous | Viewer::Degraded { .. } => vec![],
     })
-}
-
-/// Check whether a raw opaque token grants the `arcane` permission.
-/// Used by Axum handlers that have direct session access (e.g. the WebSocket proxy)
-/// but are outside the Dioxus server function context.
-#[cfg(feature = "server")]
-#[tracing::instrument(name = "bff.has_arcane_permission", skip_all)]
-pub async fn has_arcane_permission(token: &str) -> bool {
-    use session::{auth_url, service_secret};
-
-    #[derive(Serialize)]
-    struct Req<'a> {
-        token: &'a str,
-    }
-    #[derive(Deserialize)]
-    struct Resp {
-        permissions: Vec<String>,
-    }
-
-    let result = http_client()
-        .post(format!("{}/internal/token/introspect", auth_url()))
-        .with_extension(trace::WRONG_TOKEN_OK)
-        .header("x-service-token", service_secret())
-        .json(&Req { token })
-        .send()
-        .await;
-
-    match result {
-        Ok(r) if r.status().is_success() => r
-            .json::<Resp>()
-            .await
-            .map(|data| data.permissions.iter().any(|p| p == "arcane"))
-            .unwrap_or(false),
-        // The token is gone (logged out elsewhere): an answer, not a failure.
-        Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => false,
-        Ok(r) => {
-            tracing::warn!(status = %r.status(), "arcane permission introspect returned non-success");
-            trace::failed("auth_status");
-            false
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "arcane permission introspect request failed");
-            trace::failed("auth_unreachable");
-            false
-        }
-    }
 }
 
 /// Whether the token's user shares roll pictures for training the dice reader

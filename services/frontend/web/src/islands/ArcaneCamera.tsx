@@ -22,7 +22,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** The dice reader: the camera's frames go to the server over `/ws/arcane` (looked up on the
  * global object when it connects, so the tracing script's wrapper gives the connection its
  * `camera session` span), the answers are drawn over the video, and a settled roll is shown.
- * Leaving the page stops the camera and closes the connection. */
+ * Leaving the page (or hiding it into the back/forward cache) stops the camera and closes the
+ * connection; the server closing it stops the camera, with a Reconnect button. */
 export function ArcaneCamera() {
   const video = useRef<HTMLVideoElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
@@ -38,12 +39,35 @@ export function ArcaneCamera() {
   const [debugText, setDebugText] = useState('');
   const [lastRoll, setLastRoll] = useState<string | null>(null);
   const [timings, setTimings] = useState('');
+  // Bumped by Reconnect: a new session, camera and connection.
+  const [round, setRound] = useState(0);
 
   useEffect(() => {
     let left = false;
     let stream: MediaStream | null = null;
     let socket: WebSocket | null = null;
     const set = (c: Connection) => !left && setConnection(c);
+    const stopCamera = () => {
+      stream?.getTracks().forEach((t) => t.stop());
+      if (video.current) video.current.srcObject = null;
+    };
+    /** Stops the camera and closes the connection: the page is left (unmounted, or hidden into
+     * the back/forward cache). */
+    const leave = () => {
+      left = true;
+      stopCamera();
+      if (socket) {
+        socket.onmessage = null;
+        socket.close();
+      }
+    };
+    // Back to a page whose camera was stopped: start over, as a new page.
+    const shown = (e: PageTransitionEvent) => {
+      if (e.persisted) location.reload();
+    };
+    window.addEventListener('pagehide', leave);
+    window.addEventListener('pageshow', shown);
+    setConnection({ kind: 'connecting' });
 
     void (async () => {
       const v = video.current;
@@ -77,8 +101,17 @@ export function ArcaneCamera() {
         ws.addEventListener('open', r, { once: true });
         ws.addEventListener('close', r, { once: true });
       });
-      if (ws.readyState !== WebSocket.OPEN) return set({ kind: 'disconnected' });
+      if (ws.readyState !== WebSocket.OPEN) {
+        stopCamera();
+        return set({ kind: 'disconnected' });
+      }
       set({ kind: 'connected' });
+      // The server closed it: the camera stops too, until Reconnect.
+      ws.addEventListener('close', () => {
+        if (left) return;
+        stopCamera();
+        set({ kind: 'disconnected' });
+      });
 
       // The latest answer, for the draw; whether a frame awaits its answer, and since when.
       let latest: Detection[] = [];
@@ -118,10 +151,7 @@ export function ArcaneCamera() {
         const since = performance.now() - lastSent;
         if (since < CAMERA_FRAME_MS) await sleep(Math.ceil(CAMERA_FRAME_MS - since));
         if (left) break;
-        if (ws.readyState !== WebSocket.OPEN) {
-          set({ kind: 'disconnected' });
-          break;
-        }
+        if (ws.readyState !== WebSocket.OPEN) break;
         capCtx.drawImage(v, 0, 0);
         const encodeStarted = performance.now();
         // The JPEG's bytes as they are (a data URL would be base64, decoded again here).
@@ -139,15 +169,11 @@ export function ArcaneCamera() {
     })();
 
     return () => {
-      left = true;
-      stream?.getTracks().forEach((t) => t.stop());
-      if (video.current) video.current.srcObject = null;
-      if (socket) {
-        socket.onmessage = null;
-        socket.close();
-      }
+      window.removeEventListener('pagehide', leave);
+      window.removeEventListener('pageshow', shown);
+      leave();
     };
-  }, []);
+  }, [round]);
 
   const status =
     connection.kind === 'connecting' ? (
@@ -165,9 +191,7 @@ export function ArcaneCamera() {
       <div className="relative w-full max-w-2xl">
         <video ref={video} className="w-full rounded-xl bg-muted" autoPlay playsInline muted aria-label="Camera" />
         <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full rounded-xl" aria-hidden="true" />
-        <div className="absolute top-2 left-2" role="status" aria-label="Connection">
-          {status}
-        </div>
+        <div className="absolute top-2 left-2">{status}</div>
         <Button
           size="sm"
           variant="secondary"
@@ -178,6 +202,19 @@ export function ArcaneCamera() {
           {debug ? '✕ debug' : 'debug'}
         </Button>
       </div>
+      {/* Read out when the connection changes, not with every frame's time. */}
+      <p className="sr-only" role="status" aria-label="Connection">
+        {connection.kind === 'connecting'
+          ? 'Connecting'
+          : connection.kind === 'connected'
+            ? 'Connected'
+            : connection.kind === 'disconnected'
+              ? 'Disconnected'
+              : connection.message}
+      </p>
+      {connection.kind === 'disconnected' && (
+        <Button onClick={() => setRound((n) => n + 1)}>Reconnect</Button>
+      )}
       <p className="w-full max-w-2xl text-center text-xs text-muted-foreground">
         Your latest roll's picture is kept for 10 minutes so you can flag it as wrong from the browser extension. It's
         only saved for training if you flag it or turn on sharing in your profile.

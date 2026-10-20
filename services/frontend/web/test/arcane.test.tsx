@@ -85,33 +85,58 @@ class FakeSocket extends EventTarget {
   answer(text: string) {
     this.onmessage?.(new MessageEvent('message', { data: text }));
   }
+  /** The server ends the connection. */
+  hangUp() {
+    this.readyState = 3;
+    this.dispatchEvent(new Event('close'));
+  }
 }
+
+/** The page's browser: a camera whose tracks are kept, canvases, and the fake socket. */
+function browserWith() {
+  const tracks: { stop: ReturnType<typeof vi.fn> }[] = [];
+  const getUserMedia = vi.fn(async () => {
+    const track = { stop: vi.fn() };
+    tracks.push(track);
+    return { getTracks: () => [track] };
+  });
+  vi.stubGlobal('location', { ...at('https://milesstorm.test/arcane').location, reload: vi.fn() });
+  vi.stubGlobal('WebSocket', FakeSocket);
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+  const ctx = { clearRect() {}, drawImage() {}, strokeRect() {}, fillRect() {}, fillText() {} };
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((done) => done(new Blob(['jpeg'])));
+  return { tracks, getUserMedia };
+}
+
+/** Waits until the page has a new connection with a frame sent on it. */
+async function connected() {
+  const before = FakeSocket.last;
+  await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled());
+  const video = screen.getByLabelText('Camera') as HTMLVideoElement;
+  act(() => void video.dispatchEvent(new Event('loadedmetadata')));
+  await waitFor(() => expect(FakeSocket.last !== before && (FakeSocket.last?.sent.length ?? 0) > 0).toBe(true));
+  return FakeSocket.last!;
+}
+
+const announced = () => screen.getByRole('status', { name: 'Connection' }).textContent;
 
 describe('the camera page', () => {
   it('sends the camera’s frames, shows the answers and the roll, and lets go when left', async () => {
-    const page = at('https://milesstorm.test/arcane');
-    vi.stubGlobal('location', page.location);
-    vi.stubGlobal('WebSocket', FakeSocket);
-    const track = { stop: vi.fn() };
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) } });
-    const ctx = { clearRect() {}, drawImage() {}, strokeRect() {}, fillRect() {}, fillText() {} };
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
-    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((done) => done(new Blob(['jpeg'])));
-
+    const { tracks, getUserMedia } = browserWith();
     const { ArcaneCamera } = await import('@/islands/ArcaneCamera');
     const { unmount } = render(<ArcaneCamera />);
     expect(screen.getByText('connecting')).toBeTruthy();
-    const video = screen.getByLabelText('Camera') as HTMLVideoElement;
-    await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ video: { facingMode: { ideal: 'environment' } } }));
-    act(() => void video.dispatchEvent(new Event('loadedmetadata')));
-    await waitFor(() => expect(FakeSocket.last?.sent.length).toBeGreaterThan(0));
-    const socket = FakeSocket.last!;
+    const socket = await connected();
+    expect(getUserMedia).toHaveBeenCalledWith({ video: { facingMode: { ideal: 'environment' } } });
     expect(socket.url).toBe('wss://milesstorm.test/ws/arcane');
     expect(socket.binaryType).toBe('arraybuffer');
     expect(socket.sent[0]).toBeInstanceOf(Blob);
 
     act(() => socket.answer(fixture('frame')));
     expect(await screen.findByText('42ms')).toBeTruthy();
+    // Read out: the connection, not each frame's time.
+    expect(announced()).toBe('Connected');
     act(() => socket.answer(fixture('roll_unread')));
     expect(await screen.findByText('16 + ?')).toBeTruthy();
 
@@ -121,8 +146,38 @@ describe('the camera page', () => {
     expect(await screen.findByText("server: the frame isn't a JPEG or PNG image")).toBeTruthy();
 
     unmount();
-    expect(track.stop).toHaveBeenCalled();
+    expect(tracks[0]!.stop).toHaveBeenCalled();
     expect(socket.closed).toBe(true);
+  });
+
+  it('stops the camera when the server disconnects, and reconnects on the button', async () => {
+    const { tracks } = browserWith();
+    const { ArcaneCamera } = await import('@/islands/ArcaneCamera');
+    render(<ArcaneCamera />);
+    const first = await connected();
+    act(() => first.hangUp());
+    expect(await screen.findByText('disconnected')).toBeTruthy();
+    expect(announced()).toBe('Disconnected');
+    expect(tracks[0]!.stop).toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    const second = await connected();
+    expect(second).not.toBe(first);
+    expect(tracks.length).toBe(2);
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+  });
+
+  it('lets go when the page is hidden into the back/forward cache, and starts over when back', async () => {
+    const { tracks } = browserWith();
+    const { ArcaneCamera } = await import('@/islands/ArcaneCamera');
+    render(<ArcaneCamera />);
+    const socket = await connected();
+    act(() => void window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+    expect(tracks[0]!.stop).toHaveBeenCalled();
+    expect(socket.closed).toBe(true);
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+    expect(location.reload).not.toHaveBeenCalled();
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    expect(location.reload).toHaveBeenCalledOnce();
   });
 
   it('says when the camera is refused', async () => {
@@ -131,6 +186,6 @@ describe('the camera page', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as CanvasRenderingContext2D);
     const { ArcaneCamera } = await import('@/islands/ArcaneCamera');
     render(<ArcaneCamera />);
-    expect(await screen.findByText('camera permission denied')).toBeTruthy();
+    await waitFor(() => expect(announced()).toBe('camera permission denied'));
   });
 });
