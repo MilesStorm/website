@@ -18,6 +18,11 @@ test('the panel shows the server, in light and dark', async ({ context, page }) 
 });
 
 if (!STAGING) {
+  // The cookie notice sits over the bottom of the page, where the controls are: accepted already.
+  test.beforeEach(async ({ context }) => {
+    await context.addInitScript(() => localStorage.setItem('ms.cookie-consent', 'accepted'));
+  });
+
   test('a restart asks first, then shows in the recent commands', async ({ context, page }) => {
     await logIn(context, 'all', true);
     await page.goto('/enshrouded');
