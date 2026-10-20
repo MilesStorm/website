@@ -2535,7 +2535,9 @@
           "/reset-password",
           "/verify-email",
           "/delete-account",
-          "/invite"
+          "/invite",
+          "/profile",
+          "/ark"
         ]
       },
       "PasswordReset": {
@@ -2832,6 +2834,18 @@
       "access": "public",
       "file": "invite.html",
       "path": "/invite"
+    },
+    {
+      "access": "logged_in",
+      "file": "profile.html",
+      "path": "/profile"
+    },
+    {
+      "access": {
+        "perm": "llama"
+      },
+      "file": "ark.html",
+      "path": "/ark"
     }
   ]
 }

@@ -30,11 +30,14 @@ export const USERS = {
   down: { username: 'tester-down', password: 'right' },
 };
 
-/** Logs `context` in as `who`. The API call carries no Origin (it isn't a page's), so the
+/** Logs `context` in as `who` (with `fresh`, as a new stand-in account of that kind). The API call carries no Origin (it isn't a page's), so the
  * server's same-origin rule lets it through over plain HTTP too. */
-export async function logIn(context: BrowserContext, who: Who): Promise<void> {
+export async function logIn(context: BrowserContext, who: Who, fresh = false): Promise<void> {
   if (who === 'anonymous') return;
-  const res = await context.request.post('/api/session/login', { data: USERS[who] });
+  const user = { ...USERS[who] };
+  // A stand-in account of its own (fake-upstreams.mjs), for a test that changes it.
+  if (fresh) user.username += `-${Math.random().toString(36).slice(2, 10)}`;
+  const res = await context.request.post('/api/session/login', { data: user });
   expect(res.status(), await res.text()).toBe(200);
 }
 

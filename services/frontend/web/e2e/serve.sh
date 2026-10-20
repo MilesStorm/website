@@ -16,7 +16,6 @@ REDIS_PORT=${REDIS_PORT:-6390}
 stop() {
   docker rm -f frontend-e2e frontend-e2e-redis frontend-e2e-tls >/dev/null 2>&1 || true
   if [[ -f .fake.pid ]]; then kill "$(cat .fake.pid)" 2>/dev/null || true; rm -f .fake.pid; fi
-  rm -rf .status
 }
 if [[ ${1:-} == stop ]]; then stop; exit 0; fi
 stop
@@ -38,10 +37,6 @@ docker run -d --rm --name frontend-e2e-tls --network host caddy:2.10.2-alpine \
 
 for _ in $(seq 60); do
   if curl -fsSk -o /dev/null "https://localhost:$TLS_PORT/api/session" 2>/dev/null; then
-    # The status pages as built, for pages.spec.ts (no page in PAGES is guarded yet).
-    rm -rf .status && mkdir .status
-    docker cp frontend-e2e:/app/web/403.html .status/403.html >/dev/null
-    docker cp frontend-e2e:/app/web/503.html .status/503.html >/dev/null
     echo "serving on https://localhost:$TLS_PORT"
     exit 0
   fi

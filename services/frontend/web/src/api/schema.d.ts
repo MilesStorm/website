@@ -2356,7 +2356,7 @@ export interface components {
          *     doesn't exist) fails.
          * @enum {string}
          */
-        PagePath: "/" | "/asshole" | "/account-deleted" | "/login" | "/register" | "/forgot-password" | "/reset-password" | "/verify-email" | "/delete-account" | "/invite";
+        PagePath: "/" | "/asshole" | "/account-deleted" | "/login" | "/register" | "/forgot-password" | "/reset-password" | "/verify-email" | "/delete-account" | "/invite" | "/profile" | "/ark";
         /** @description `POST /api/password/reset`. */
         PasswordReset: {
             code: string;

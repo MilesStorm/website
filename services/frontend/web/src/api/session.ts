@@ -38,3 +38,17 @@ export function sameViewer(a: Bootstrap, b: Bootstrap): boolean {
   const key = (x: Bootstrap) => (x.viewer ? `${x.viewer.username}:${x.viewer.permissions.join(' ')}` : '');
   return key(a) === key(b);
 }
+
+const VIEWER_CHANGED = 'ms:viewer';
+
+/** Tells this page's other islands (the user menu) that the viewer's name or picture changed. */
+export function viewerChanged(viewer: Viewer): void {
+  window.dispatchEvent(new CustomEvent<Viewer>(VIEWER_CHANGED, { detail: viewer }));
+}
+
+/** Calls `then` on every change [`viewerChanged`] announces; the result stops listening. */
+export function onViewerChange(then: (viewer: Viewer) => void): () => void {
+  const listener = (e: Event) => then((e as CustomEvent<Viewer>).detail);
+  window.addEventListener(VIEWER_CHANGED, listener);
+  return () => window.removeEventListener(VIEWER_CHANGED, listener);
+}

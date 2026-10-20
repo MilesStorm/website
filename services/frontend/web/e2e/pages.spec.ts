@@ -1,7 +1,6 @@
 // Every page for every kind of viewer, as its access in PAGES says: served by the server from
 // Astro's build with the viewer on <html> before any script runs, and accessible; or a redirect
 // (to log in, or home from a guest-only page), the 403 page or the 503 page.
-import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { PAGES, STAGING, expectAccessible, logIn, type Access, type Who } from './site';
 
@@ -42,28 +41,12 @@ for (const who of VIEWERS) {
       expect(html).toMatch(/<script id="bootstrap" type="application\/json">/);
       await expect(page.locator('html')).toHaveAttribute('data-session', who === 'anonymous' ? 'out' : 'in');
       await expect(page.getByRole('main')).toBeVisible();
-      await expectAccessible(page);
-    });
-  }
-}
-
-// The 403 and 503 pages as the image has them (e2e/serve.sh copies them out of it), shown at the
-// server's address so their styles and scripts come from the server. They are checked here as
-// well as above because no page in PAGES needs a login or a permission yet, so no request
-// reaches them; the first such row (PR 6, the profile) replaces this with real requests.
-if (!STAGING) {
-  for (const [file, heading] of [
-    ['403.html', "You don't have access to this page"],
-    ['503.html', "Can't check your access right now"],
-  ]) {
-    test(`the status page ${file} is accessible`, async ({ page }) => {
-      const body = readFileSync(new URL(`.status/${file}`, import.meta.url), 'utf8');
-      await page.route('**/status-page', (route) =>
-        route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body }),
-      );
-      await page.goto('/status-page');
-      await expect(page.getByRole('heading', { name: heading })).toBeVisible();
-      await expect(page.getByRole('link', { name: 'Go home' })).toBeVisible();
+      // The status pages, through a real request: the guard's answer, spliced like any page.
+      if (want.status === 403) await expect(page.getByRole('heading', { name: "You don't have access to this page" })).toBeVisible();
+      if (want.status === 503) {
+        await expect(page.getByRole('heading', { name: "Can't check your access right now" })).toBeVisible();
+        expect(res?.headers()['retry-after']).toBe('30');
+      }
       await expectAccessible(page);
     });
   }

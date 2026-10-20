@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { bffUrl, client } from '@/api/client';
-import { readBootstrap, type Viewer } from '@/api/session';
+import { onViewerChange, readBootstrap, type Viewer } from '@/api/session';
 import defaultPicture from '@/assets/default-profile.png';
 
 /** The logged-in user's menu: their name and picture, the profile, logging out. */
@@ -19,6 +19,7 @@ export function UserMenu() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   useEffect(() => {
     void readBootstrap().then((b) => setViewer(b.viewer));
+    return onViewerChange(setViewer);
   }, []);
   if (!viewer) return <span className="block size-9" aria-hidden="true" />;
 
