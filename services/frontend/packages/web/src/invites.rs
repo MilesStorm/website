@@ -121,7 +121,7 @@ pub async fn open_invite(code: String) -> Result<Opened, ServerFnError> {
 pub async fn after_login_path() -> Result<String, ServerFnError> {
     let (session, _) = crate::emails::server::request()?;
     Ok(match session {
-        Some(s) => crate::json_api::next_page(&s, None).await,
+        Some(s) => crate::json_api::next_page(&s, None).await.href(),
         None => "/".into(),
     })
 }

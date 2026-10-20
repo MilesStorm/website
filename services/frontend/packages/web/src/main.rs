@@ -744,7 +744,7 @@ async fn oauth_start(
     use axum::response::{IntoResponse, Redirect};
 
     if provider != "github" && provider != "google" {
-        return Redirect::to("/login?error=unknown_provider").into_response();
+        return Redirect::to(&api_types::OAuthError::UnknownProvider.login_page()).into_response();
     }
     let next = params.get("next").and_then(|next| match next.parse::<api_types::PagePath>() {
         Ok(page) => Some(page),
@@ -759,11 +759,11 @@ async fn oauth_start(
         Ok((auth_url, state)) => {
             if let Err(e) = session.insert(OAUTH_CSRF_KEY, &state).await {
                 tracing::error!(error = %e, %provider, "oauth_start: failed to write CSRF state");
-                return Redirect::to("/login?error=session_failed").into_response();
+                return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             if let Err(e) = session.insert(OAUTH_PROVIDER_KEY, &provider).await {
                 tracing::error!(error = %e, %provider, "oauth_start: failed to write provider");
-                return Redirect::to("/login?error=session_failed").into_response();
+                return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             // An earlier start's page goes either way.
             let stored = match next {
@@ -772,13 +772,13 @@ async fn oauth_start(
             };
             if let Err(e) = stored {
                 tracing::error!(error = %e, %provider, "oauth_start: failed to write next");
-                return Redirect::to("/login?error=session_failed").into_response();
+                return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             Redirect::to(&auth_url).into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, %provider, "oauth_start: api::start_oauth failed");
-            Redirect::to("/login?error=start_failed").into_response()
+            Redirect::to(&api_types::OAuthError::StartFailed.login_page()).into_response()
         }
     }
 }
@@ -795,10 +795,10 @@ async fn oauth_callback(
     use axum::response::{IntoResponse, Redirect};
 
     let Some(code) = params.get("code").cloned() else {
-        return Redirect::to("/login?error=missing_code").into_response();
+        return Redirect::to(&api_types::OAuthError::MissingCode.login_page()).into_response();
     };
     let Some(state) = params.get("state").cloned() else {
-        return Redirect::to("/login?error=missing_state").into_response();
+        return Redirect::to(&api_types::OAuthError::MissingState.login_page()).into_response();
     };
 
     let expected_state: Option<String> = session.get(OAUTH_CSRF_KEY).await.ok().flatten();
@@ -810,34 +810,32 @@ async fn oauth_callback(
 
     if expected_state.as_deref() != Some(&state) || expected_provider.as_deref() != Some(&provider)
     {
-        return Redirect::to("/login?error=csrf_mismatch").into_response();
+        return Redirect::to(&api_types::OAuthError::CsrfMismatch.login_page()).into_response();
     }
 
     match api::exchange_oauth_code(&provider, &code).await {
         Ok((token, username)) => {
             if api::fresh_session_id(&session).await.is_err() {
-                return Redirect::to("/login?error=session_failed").into_response();
+                return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             if let Err(e) = session.insert("opaque_token", &token).await {
                 tracing::error!(error = %e, %provider, "oauth_callback: failed to write opaque_token");
-                return Redirect::to("/login?error=session_failed").into_response();
+                return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             if let Err(e) = session.insert("username", username).await {
                 tracing::error!(error = %e, %provider, "oauth_callback: failed to write username");
-                return Redirect::to("/login?error=session_failed").into_response();
+                return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
-            // Came from an invite link: back to it (the invite was just redeemed). Only this
-            // login's: an earlier login's invite page, never taken, is dropped first.
-            let _ = session.remove::<String>(api::INVITE_RETURN_KEY).await;
+            // Came from an invite link: back to it (the invite was just redeemed).
             api::redeem_pending_invite(&session, &token).await;
-            Redirect::to(&json_api::next_page(&session, next).await).into_response()
+            Redirect::to(&json_api::next_page(&session, next).await.href()).into_response()
         }
         Err(e) if e.contains("email_exists") || e.contains("Email already in use") => {
-            Redirect::to("/login?error=email_exists").into_response()
+            Redirect::to(&api_types::OAuthError::EmailExists.login_page()).into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, %provider, "oauth_callback: exchange_oauth_code failed");
-            Redirect::to("/login?error=exchange_failed").into_response()
+            Redirect::to(&api_types::OAuthError::ExchangeFailed.login_page()).into_response()
         }
     }
 }
@@ -1139,7 +1137,7 @@ mod tests {
             "%2F%2Fevil.com",
             "/asshole/",
             "/api/session",
-            "/login",
+            "/Login",
             "javascript:alert(1)",
             "/asshole%0d%0aLocation:%20https://evil.com",
         ] {
@@ -1170,7 +1168,7 @@ mod tests {
         site.json(Method::POST, "/api/invites/open", serde_json::json!({"code": "join"})).await;
         let login = site.json(Method::POST, "/api/session/login", serde_json::json!({"username": "tester", "password": "right"})).await;
         assert_eq!(login.status, StatusCode::OK);
-        assert_eq!(site.session_data().await[api::INVITE_RETURN_KEY], "/invite#join");
+        assert_eq!(site.session_data().await[api::INVITE_RETURN_KEY], "join");
         assert_eq!(round_trip(&mut site, "?next=/asshole").await, "/asshole");
     }
 }

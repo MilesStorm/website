@@ -18,7 +18,7 @@ if [[ ${1:-} == stop ]]; then stop; exit 0; fi
 stop
 
 docker run -d --rm --name frontend-e2e-redis --network host redis:7-alpine --port "$REDIS_PORT" >/dev/null
-FAKE_PORT=$FAKE_PORT node fake-upstreams.mjs > fake.log 2>&1 &
+FAKE_PORT=$FAKE_PORT SITE_URL="http://localhost:$E2E_PORT" node fake-upstreams.mjs > fake.log 2>&1 &
 echo $! > .fake.pid
 docker run -d --rm --name frontend-e2e --network host \
   -e IP=127.0.0.1 -e PORT="$E2E_PORT" -e FRONTEND_UI=astro -e GIT_SHA=e2e0000 \

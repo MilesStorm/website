@@ -5,7 +5,18 @@ import type { components } from '@/api/schema';
 
 export type PagePath = components['schemas']['PagePath'];
 
-export const PAGE_PATHS = ['/', '/asshole', '/account-deleted'] as const satisfies readonly PagePath[];
+export const PAGE_PATHS = [
+  '/',
+  '/asshole',
+  '/account-deleted',
+  '/login',
+  '/register',
+  '/forgot-password',
+  '/reset-password',
+  '/verify-email',
+  '/delete-account',
+  '/invite',
+] as const satisfies readonly PagePath[];
 
 // Fails to compile when a page is missing from PAGE_PATHS.
 type Missing = Exclude<PagePath, (typeof PAGE_PATHS)[number]>;
@@ -13,7 +24,7 @@ const complete: [Missing] extends [never] ? true : Missing = true;
 void complete;
 
 /** Pages the Dioxus app still serves. Each moves into `PagePath` with the PR that rebuilds it. */
-export type DioxusPage = '/login' | '/register' | '/profile' | '/ark' | '/enshrouded' | '/arcane' | '/admin';
+export type DioxusPage = '/profile' | '/ark' | '/enshrouded' | '/arcane' | '/admin';
 
 /** Where a link on the site may go. */
 export type Href = PagePath | DioxusPage;

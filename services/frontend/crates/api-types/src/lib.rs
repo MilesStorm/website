@@ -223,6 +223,16 @@ pages! {
     Home => "/", "index.html", Access::Public;
     Asshole => "/asshole", "asshole.html", Access::Public;
     AccountDeleted => "/account-deleted", "account-deleted.html", Access::Public;
+    Login => "/login", "login.html", Access::GuestOnly;
+    Register => "/register", "register.html", Access::GuestOnly;
+    ForgotPassword => "/forgot-password", "forgot-password.html", Access::GuestOnly;
+    // An emailed link's code alone authorizes these (it is in the fragment, never sent to the
+    // server in the URL), so they work logged out or logged in as anyone.
+    ResetPassword => "/reset-password", "reset-password.html", Access::Public;
+    VerifyEmail => "/verify-email", "verify-email.html", Access::Public;
+    DeleteAccount => "/delete-account", "delete-account.html", Access::Public;
+    // Joins when logged in, else keeps the invite for after logging in.
+    Invite => "/invite", "invite.html", Access::Public;
 }
 
 /// Pages without a path of their own, answered with a status: an unknown path (404), a page the
@@ -262,6 +272,66 @@ pub struct Registration {
     pub username: String,
     pub email: String,
     pub password: String,
+}
+
+/// `POST /api/session/after-login`: the page the login page was opened for (its `?next=`), if
+/// it is one of the site's.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AfterLogin {
+    pub next: Option<PagePath>,
+}
+
+/// Where to go after logging in: the invite page a login redeemed (its code as the fragment),
+/// else the page asked for, else `/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NextPage {
+    pub path: PagePath,
+    /// Without the `#`.
+    pub fragment: Option<String>,
+}
+
+impl NextPage {
+    /// The address to navigate to.
+    pub fn href(&self) -> String {
+        match &self.fragment {
+            Some(fragment) => format!("{}#{fragment}", self.path.as_str()),
+            None => self.path.as_str().to_owned(),
+        }
+    }
+}
+
+/// Why an OAuth login came back to `/login?error=<code>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthError {
+    UnknownProvider,
+    SessionFailed,
+    StartFailed,
+    MissingCode,
+    MissingState,
+    CsrfMismatch,
+    EmailExists,
+    ExchangeFailed,
+}
+
+impl OAuthError {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnknownProvider => "unknown_provider",
+            Self::SessionFailed => "session_failed",
+            Self::StartFailed => "start_failed",
+            Self::MissingCode => "missing_code",
+            Self::MissingState => "missing_state",
+            Self::CsrfMismatch => "csrf_mismatch",
+            Self::EmailExists => "email_exists",
+            Self::ExchangeFailed => "exchange_failed",
+        }
+    }
+
+    /// The login page that says so.
+    pub fn login_page(self) -> String {
+        format!("/login?error={}", self.as_str())
+    }
 }
 
 /// A login or registration that succeeded.
@@ -932,6 +1002,32 @@ mod tests {
         assert_eq!(serde_json::to_value(Access::Perm(KnownPermission::Arcane)).unwrap(), json!({"perm": "arcane"}));
         assert_eq!(serde_json::to_value(Access::LoggedIn).unwrap(), json!("logged_in"));
         assert_eq!(serde_json::to_value(Access::GuestOnly).unwrap(), json!("guest_only"));
+    }
+
+    #[test]
+    fn oauth_errors_are_their_query_values() {
+        for e in [
+            OAuthError::UnknownProvider,
+            OAuthError::SessionFailed,
+            OAuthError::StartFailed,
+            OAuthError::MissingCode,
+            OAuthError::MissingState,
+            OAuthError::CsrfMismatch,
+            OAuthError::EmailExists,
+            OAuthError::ExchangeFailed,
+        ] {
+            assert_eq!(serde_json::to_value(e).unwrap(), json!(e.as_str()));
+        }
+        assert_eq!(OAuthError::EmailExists.login_page(), "/login?error=email_exists");
+    }
+
+    #[test]
+    fn a_next_page_is_its_path_and_fragment() {
+        assert_eq!(NextPage { path: PagePath::Invite, fragment: Some("abc".into()) }.href(), "/invite#abc");
+        assert_eq!(NextPage { path: PagePath::Home, fragment: None }.href(), "/");
+        let read: AfterLogin = serde_json::from_value(json!({"next": "/asshole"})).unwrap();
+        assert_eq!(read.next, Some(PagePath::Asshole));
+        assert!(serde_json::from_value::<AfterLogin>(json!({"next": "https://evil.com"})).is_err());
     }
 
     #[test]

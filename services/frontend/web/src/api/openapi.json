@@ -122,6 +122,43 @@
         }
       }
     },
+    "/api/session/after-login": {
+      "post": {
+        "requestBody": {
+          "description": "`POST /api/session/after-login`: the page the login page was opened for (its `?next=`), if\nit is one of the site's.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AfterLogin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "default": {
+            "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Where to go after logging in: the invite page a login redeemed (its code as the fragment),\nelse the page asked for, else `/`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NextPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/email/confirm": {
       "post": {
         "requestBody": {
@@ -1609,6 +1646,25 @@
           "name"
         ]
       },
+      "AfterLogin": {
+        "description": "`POST /api/session/after-login`: the page the login page was opened for (its `?next=`), if\nit is one of the site's.",
+        "type": "object",
+        "properties": {
+          "next": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PagePath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "next"
+        ]
+      },
       "ApiError": {
         "description": "Every error the API answers: `{\"error\": \"logged_out\", \"message\": \"...\"}` with a 4xx or 5xx\nstatus. `message` is for the user. A 5xx message never carries the internal error, which\ngoes only to the log.",
         "type": "object",
@@ -2385,6 +2441,40 @@
           "note"
         ]
       },
+      "NextPage": {
+        "description": "Where to go after logging in: the invite page a login redeemed (its code as the fragment),\nelse the page asked for, else `/`.",
+        "type": "object",
+        "properties": {
+          "fragment": {
+            "description": "Without the `#`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "$ref": "#/components/schemas/PagePath"
+          }
+        },
+        "required": [
+          "path",
+          "fragment"
+        ]
+      },
+      "OAuthError": {
+        "description": "Why an OAuth login came back to `/login?error=<code>`.",
+        "type": "string",
+        "enum": [
+          "unknown_provider",
+          "session_failed",
+          "start_failed",
+          "missing_code",
+          "missing_state",
+          "csrf_mismatch",
+          "email_exists",
+          "exchange_failed"
+        ]
+      },
       "Opened": {
         "description": "What opening an invite link did.",
         "oneOf": [
@@ -2438,7 +2528,14 @@
         "enum": [
           "/",
           "/asshole",
-          "/account-deleted"
+          "/account-deleted",
+          "/login",
+          "/register",
+          "/forgot-password",
+          "/reset-password",
+          "/verify-email",
+          "/delete-account",
+          "/invite"
         ]
       },
       "PasswordReset": {
@@ -2700,6 +2797,41 @@
       "access": "public",
       "file": "account-deleted.html",
       "path": "/account-deleted"
+    },
+    {
+      "access": "guest_only",
+      "file": "login.html",
+      "path": "/login"
+    },
+    {
+      "access": "guest_only",
+      "file": "register.html",
+      "path": "/register"
+    },
+    {
+      "access": "guest_only",
+      "file": "forgot-password.html",
+      "path": "/forgot-password"
+    },
+    {
+      "access": "public",
+      "file": "reset-password.html",
+      "path": "/reset-password"
+    },
+    {
+      "access": "public",
+      "file": "verify-email.html",
+      "path": "/verify-email"
+    },
+    {
+      "access": "public",
+      "file": "delete-account.html",
+      "path": "/delete-account"
+    },
+    {
+      "access": "public",
+      "file": "invite.html",
+      "path": "/invite"
     }
   ]
 }

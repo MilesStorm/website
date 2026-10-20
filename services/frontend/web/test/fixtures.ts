@@ -26,3 +26,30 @@ export function splice(bootstrap: Bootstrap): void {
   document.documentElement.dataset.session = bootstrap.viewer ? 'in' : 'out';
   document.documentElement.dataset.perms = bootstrap.viewer?.permissions.join(' ') ?? '';
 }
+
+type Route = (body: unknown) => Response;
+
+/** A stand-in server for `fetch`: answers `METHOD /path` from `routes` (404 otherwise), and keeps
+ * every request it got with its JSON body. */
+export function server(routes: Record<string, Route>) {
+  const calls: { route: string; body: unknown }[] = [];
+  const fetch = async (request: Request) => {
+    const route = `${request.method} ${new URL(request.url).pathname}`;
+    const text = await request.text();
+    const body: unknown = text ? JSON.parse(text) : null;
+    calls.push({ route, body });
+    return routes[route]?.(body) ?? json({ error: 'not_found', message: 'There is no such API.' }, 404);
+  };
+  return { fetch, calls };
+}
+
+/** `location` for an island: the page's address, and `assign` recorded. */
+export function at(path: string) {
+  const url = new URL(path, 'http://localhost');
+  const assign = (href: string) => assigned.push(href);
+  const assigned: string[] = [];
+  return {
+    location: { origin: url.origin, pathname: url.pathname, search: url.search, hash: url.hash, assign },
+    assigned,
+  };
+}

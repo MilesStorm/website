@@ -178,6 +178,41 @@ service = "frontend"
 name = "GET /account-deleted"
 reason = "childless only for a request without a session: no session load or introspect"
 
+[[leaf]]
+service = "frontend"
+name = "GET /login"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /register"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /forgot-password"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /reset-password"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /verify-email"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /delete-account"
+reason = "childless only for a request without a session: no session load or introspect"
+
+[[leaf]]
+service = "frontend"
+name = "GET /invite"
+reason = "childless only for a request without a session: no session load or introspect"
+
 # A page's path with a trailing slash: a redirect to the page, one entry per page as above.
 [[leaf]]
 service = "frontend"
@@ -187,4 +222,39 @@ reason = "a redirect to the page without the slash: nothing of ours inside"
 [[leaf]]
 service = "frontend"
 name = "GET /account-deleted/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /login/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /register/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /forgot-password/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /reset-password/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /verify-email/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /delete-account/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /invite/"
 reason = "a redirect to the page without the slash: nothing of ours inside"

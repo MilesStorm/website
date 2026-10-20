@@ -188,6 +188,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/session/after-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /**
+             * @description `POST /api/session/after-login`: the page the login page was opened for (its `?next=`), if
+             *     it is one of the site's.
+             */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AfterLogin"];
+                };
+            };
+            responses: {
+                /**
+                 * @description Where to go after logging in: the invite page a login redeemed (its code as the fragment),
+                 *     else the page asked for, else `/`.
+                 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NextPage"];
+                    };
+                };
+                /**
+                 * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
+                 *     status. `message` is for the user. A 5xx message never carries the internal error, which
+                 *     goes only to the log.
+                 */
+                default: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/email/confirm": {
         parameters: {
             query?: never;
@@ -1966,6 +2025,13 @@ export interface components {
             name: string;
         };
         /**
+         * @description `POST /api/session/after-login`: the page the login page was opened for (its `?next=`), if
+         *     it is one of the site's.
+         */
+        AfterLogin: {
+            next: components["schemas"]["PagePath"] | null;
+        };
+        /**
          * @description Every error the API answers: `{"error": "logged_out", "message": "..."}` with a 4xx or 5xx
          *     status. `message` is for the user. A 5xx message never carries the internal error, which
          *     goes only to the log.
@@ -2259,6 +2325,20 @@ export interface components {
             /** Format: int32 */
             role_id: number;
         };
+        /**
+         * @description Where to go after logging in: the invite page a login redeemed (its code as the fragment),
+         *     else the page asked for, else `/`.
+         */
+        NextPage: {
+            /** @description Without the `#`. */
+            fragment: string | null;
+            path: components["schemas"]["PagePath"];
+        };
+        /**
+         * @description Why an OAuth login came back to `/login?error=<code>`.
+         * @enum {string}
+         */
+        OAuthError: "unknown_provider" | "session_failed" | "start_failed" | "missing_code" | "missing_state" | "csrf_mismatch" | "email_exists" | "exchange_failed";
         /** @description What opening an invite link did. */
         Opened: {
             group_label: string;
@@ -2276,7 +2356,7 @@ export interface components {
          *     doesn't exist) fails.
          * @enum {string}
          */
-        PagePath: "/" | "/asshole" | "/account-deleted";
+        PagePath: "/" | "/asshole" | "/account-deleted" | "/login" | "/register" | "/forgot-password" | "/reset-password" | "/verify-email" | "/delete-account" | "/invite";
         /** @description `POST /api/password/reset`. */
         PasswordReset: {
             code: string;
