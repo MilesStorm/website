@@ -1,0 +1,23 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import { Card, CardAction, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ModeToggle } from '@/islands/ModeToggle';
+import { Profile } from '@/islands/Profile';
+---
+
+<Layout title="Profile">
+  <main class="mx-auto flex max-w-4xl flex-col gap-6 px-4 pt-10 pb-16">
+    <h1 class="text-2xl font-bold">Profile</h1>
+    <Profile client:only="react">
+      <Skeleton slot="fallback" className="h-64 w-full rounded-xl" />
+    </Profile>
+    <Card>
+      <CardHeader>
+        <CardTitle><h2>Site theme</h2></CardTitle>
+        <CardDescription>Saved in this browser.</CardDescription>
+        <CardAction><ModeToggle client:load /></CardAction>
+      </CardHeader>
+    </Card>
+  </main>
+</Layout>

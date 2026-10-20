@@ -9,4 +9,3 @@ test-results/
 playwright-report/
 e2e/.fake.pid
 e2e/fake.log
-e2e/.status/

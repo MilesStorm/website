@@ -18,7 +18,7 @@ export function VerifyEmail() {
     void attempt(client.POST('/api/email/confirm', { body: { code } })).then(setResult);
   }, []);
 
-  if (!result) return <Skeleton className="h-16 w-full" aria-label="Confirming" />;
+  if (!result) return <Skeleton className="h-16 w-full" role="status" aria-label="Confirming" />;
   if (!result.ok) {
     return (
       <div className="flex flex-col gap-4">

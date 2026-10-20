@@ -29,7 +29,7 @@ export function InviteOpen() {
     });
   }, []);
 
-  if (!opened) return <Skeleton className="h-24 w-full" aria-label="Opening the invite" />;
+  if (!opened) return <Skeleton className="h-24 w-full" role="status" aria-label="Opening the invite" />;
   if (!opened.ok) {
     return (
       <div className="flex flex-col gap-4">

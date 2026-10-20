@@ -233,6 +233,8 @@ pages! {
     DeleteAccount => "/delete-account", "delete-account.html", Access::Public;
     // Joins when logged in, else keeps the invite for after logging in.
     Invite => "/invite", "invite.html", Access::Public;
+    Profile => "/profile", "profile.html", Access::LoggedIn;
+    Ark => "/ark", "ark.html", Access::Perm(KnownPermission::Llama);
 }
 
 /// Pages without a path of their own, answered with a status: an unknown path (404), a page the

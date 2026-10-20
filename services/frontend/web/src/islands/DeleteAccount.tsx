@@ -27,7 +27,7 @@ export function DeleteAccount() {
     setBusy(false);
   };
 
-  if (!account) return <Skeleton className="h-24 w-full" aria-label="Checking the link" />;
+  if (!account) return <Skeleton className="h-24 w-full" role="status" aria-label="Checking the link" />;
   if (!account.ok) {
     return (
       <div className="flex flex-col gap-4">

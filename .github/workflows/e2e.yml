@@ -2,7 +2,8 @@ name: e2e
 
 # The built image, as it runs, in a browser: every page for every kind of viewer, the navbar
 # without JavaScript, theme and cookie notice, and axe (no serious or critical violations).
-# Auth and SurrealDB are stand-ins (services/frontend/web/e2e/fake-upstreams.mjs). A required
+# Auth and Ark are stand-ins (services/frontend/web/e2e/fake-upstreams.mjs); SurrealDB is a real
+# one in memory (e2e/serve.sh). A required
 # check.
 #
 # A workflow of its own, with no pull_request trigger: the only `e2e` on a commit is this run's,
@@ -61,7 +62,7 @@ jobs:
             sh -c 'npm ci --ignore-scripts --no-audit --no-fund && npx playwright test'
       - name: Server, proxy and stand-in logs
         if: failure()
-        run: docker logs frontend-e2e; docker logs frontend-e2e-tls; cat e2e/fake.log
+        run: docker logs frontend-e2e; docker logs frontend-e2e-tls; docker logs frontend-e2e-surreal; cat e2e/fake.log
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

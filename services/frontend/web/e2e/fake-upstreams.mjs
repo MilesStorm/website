@@ -1,8 +1,12 @@
 // Stand-ins for what the server calls, for the end-to-end tests against the built image: auth
-// (login, the token check, profiles, Ark), and SurrealDB (no pictures stored). Test code only:
+// (login, the token check, profiles, emails, invites, roll-sharing consent) and Ark. SurrealDB is
+// a real one (e2e/serve.sh). Test code only:
 // it runs on the CI runner beside the container, never in an image.
 //
-// Accounts: `tester-none`, `tester-all` and `tester-down`, password `right`. Their tokens are
+// Accounts: `tester-none`, `tester-all` and `tester-down`, password `right`, and any
+// `tester-<kind>-<suffix>` of those kinds (a fresh account for a test that changes it, so tests
+// running at once don't meet). A token is the name after `tester-`; its kind is the part before
+// the first `-`. The kinds' tokens are
 // `none` (no permissions), `all` (every permission the site knows, plus one it doesn't) and
 // `down`, whose check fails as if auth were down: logged in, with no permissions known. A new
 // account gets token `none`.
@@ -14,27 +18,59 @@ import { createServer } from 'node:http';
 
 const port = Number(process.env.FAKE_PORT ?? 4010);
 const site = process.env.SITE_URL ?? 'https://localhost:8443';
+/** Display names set, and the roll-sharing choice, by token. */
+const names = {};
+const sharing = {};
+
+/** User ids, by token, given out as accounts are first seen. */
+const userIds = { all: 1, none: 2 };
+let nextUserId = 3;
+const userId = (token) => (userIds[token] ??= nextUserId++);
+/** A known token's profile; a new account (token `none`, any username) shares `none`'s. */
+const profile = (token) => ({
+  user_id: userId(token),
+  username: `tester-${token}`,
+  display_name: token in names ? names[token] : token === 'all' ? 'Tess All' : null,
+  email: `${token}@example.test`,
+  // The `all` kind's address is confirmed (a deletion goes by email), `none`'s isn't.
+  email_verified: kind(token) === 'all',
+});
+
 const PERMISSIONS = { all: ['llama', 'enshrouded', 'arcane', 'manage_permissions', 'brand_new'], none: [] };
+const kind = (token) => String(token).split('-')[0];
+const known = (token) => kind(token) in PERMISSIONS;
 
 const routes = {
   'POST /internal/token/exchange': ({ username, password }) =>
-    password === 'right' && ['tester-none', 'tester-all', 'tester-down'].includes(username)
+    password === 'right' && /^tester-(none|all|down)(-[a-z0-9]+)?$/.test(username)
       ? [200, { token: username.slice('tester-'.length), username }]
       : [401, 'Invalid credentials'],
   'POST /internal/token/introspect': ({ token }) =>
-    token === 'down'
+    kind(token) === 'down'
       ? [500, {}]
-      : token in PERMISSIONS
-        ? [200, { permissions: PERMISSIONS[token] }]
+      : known(token)
+        ? [200, { permissions: PERMISSIONS[kind(token)] }]
         : [401, 'Invalid or expired token'],
-  'POST /internal/profile': ({ token }) =>
-    token in PERMISSIONS
-      ? [200, { user_id: token === 'all' ? 1 : 2, username: `tester-${token}`, display_name: token === 'all' ? 'Tess All' : null, email: `${token}@example.test`, email_verified: true }]
-      : [401, {}],
+  'POST /internal/profile': ({ token }) => (known(token) ? [200, profile(token)] : [401, {}]),
+  'POST /internal/profile/display_name': ({ token, display_name }) => {
+    if (!known(token)) return [401, {}];
+    if ((display_name ?? '').length > 40) return [400, {}];
+    names[token] = display_name || null;
+    return [200, profile(token)];
+  },
+  'POST /internal/email/verify/send': ({ token }) =>
+    known(token) ? [200, { email: `${token}@example.test` }] : [401, { error: 'logged_out' }],
+  'POST /internal/account/delete/request': ({ token }) =>
+    known(token) ? [200, { email: `${token}@example.test` }] : [401, { error: 'logged_out' }],
+  'POST /internal/dataset/consent': ({ token }) => [200, { share: !!sharing[token] }],
+  'POST /internal/dataset/consent/set': ({ token, share }) => {
+    sharing[token] = share;
+    return [200, {}];
+  },
   'POST /internal/ark/num_players': ({ token }) =>
-    token === 'all' ? [200, { restart_result: '', command_result: { NumPlayers: 3 } }] : [403, {}],
+    kind(token) === 'all' ? [200, { restart_result: '', command_result: { NumPlayers: 3 } }] : [403, {}],
   'POST /internal/ark/command': ({ token }) =>
-    token === 'all' ? [200, { restart_result: '', command_result: 'Started' }] : [403, {}],
+    kind(token) === 'all' ? [200, { restart_result: '', command_result: 'Started' }] : [403, {}],
   'POST /internal/register': ({ username }) =>
     username === 'taken' ? [409, 'User already exists'] : [200, { token: 'none', username }],
   'POST /internal/oauth/start': ({ provider }) =>
@@ -51,10 +87,7 @@ const routes = {
   'POST /internal/account/delete/confirm': () => [200, {}],
   'POST /internal/invite/check': ({ code }) => (code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}]),
   'POST /internal/invite/redeem': ({ code, token }) =>
-    !(token in PERMISSIONS) ? [401, {}] : code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}],
-  // SurrealDB: signed in, and nothing stored.
-  'POST /signin': () => [200, { code: 200, token: 'surreal-token' }],
-  'POST /rpc': ({ id }) => [200, { id, result: [{ status: 'OK', result: null }] }],
+    !known(token) ? [401, {}] : code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}],
 };
 
 createServer((req, res) => {
