@@ -15,9 +15,13 @@ export function href(page: Schemas['NextPage']): string {
   return page.fragment === null ? page.path : `${page.path}#${page.fragment}`;
 }
 
-/** Asks the server where to go now and goes there. If it can't answer, `next` (or `/`). */
+/** Asks the server where to go now and goes there. If it can't answer (an error, or no answer
+ * at all), `next` (or `/`): the login itself has worked. */
 export async function landAfterLogin(next: PagePath | null): Promise<void> {
-  const { data } = await client.POST('/api/session/after-login', { body: { next } });
+  const data = await client.POST('/api/session/after-login', { body: { next } }).then(
+    (r) => r.data,
+    () => undefined,
+  );
   location.assign(bffUrl(data ? href(data) : (next ?? '/')));
 }
 

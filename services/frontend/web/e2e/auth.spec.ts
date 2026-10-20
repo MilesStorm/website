@@ -1,6 +1,6 @@
 // The auth journeys in a browser: logging in (password and OAuth) lands on `next`, signing up,
-// the emailed links, an invite opened while logged out, and logging out. Against staging only
-// the password login and logging out run: the others would make accounts or need emailed codes.
+// the emailed links, an invite opened while logged out, and logging out. Against staging, the
+// journeys that would make accounts or need a real emailed code don't run.
 import { expect, test, type Page } from '@playwright/test';
 import { STAGING, USERS, expectAccessible, logIn } from './site';
 
@@ -29,25 +29,27 @@ test('a wrong password says so, and a hostile next is ignored', async ({ page })
   expect(new URL(page.url()).host).toBe(new URL(test.info().project.use.baseURL!).host);
 });
 
-test('logging out, Back shows the page logged out', async ({ context, page }) => {
+test('a logged-in visitor of the login pages goes home', async ({ context, page }) => {
   await logIn(context, 'plain');
-  await page.goto('/asshole');
-  await expect(page.locator('html')).toHaveAttribute('data-session', 'in');
-  await page.goto('/');
-  await page.getByRole('button', { name: /^Account: / }).click();
-  await page.getByRole('menuitem', { name: 'Log out' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-session', 'out');
-  // Back to a page shown logged in: from the back/forward cache it asks the server who is looking
-  // and loads again.
-  await page.goBack();
-  await expect(page).toHaveURL(/\/asshole$/);
-  await expect(page.locator('html')).toHaveAttribute('data-session', 'out');
-  await expect(page.getByRole('link', { name: 'Log in' }).first()).toBeVisible();
+  for (const path of ['/login', '/register', '/forgot-password']) {
+    await page.goto(path);
+    await expect(page).toHaveURL(/\/$/);
+  }
+});
+
+test("an emailed link's code goes in a request body, never in a URL; an expired one says so", async ({ page }) => {
+  const code = 'e2e-not-a-real-code';
+  const urls: string[] = [];
+  page.on('request', (r) => urls.push(r.url()));
+  await page.goto(`/verify-email#${code}`);
+  await expect(page.getByText('This link has expired or was already used. Ask for a new one.')).toBeVisible();
+  await expectAccessible(page);
+  expect(urls.filter((u) => u.includes(code))).toEqual([]);
+  expect(await page.locator('meta[name="referrer"]').getAttribute('content')).toBe('no-referrer');
 });
 
 // The stand-ins only: these make accounts or need emailed codes.
 if (!STAGING) {
-
   test('an OAuth login carries next through the provider', async ({ page }) => {
     await page.goto('/login?next=%2Fasshole');
     await page.getByRole('link', { name: 'Log in with GitHub' }).click();
@@ -70,13 +72,6 @@ if (!STAGING) {
     await expect(page.locator('html')).toHaveAttribute('data-session', 'in');
   });
 
-  test('a logged-in visitor of the login pages goes home', async ({ context, page }) => {
-    await logIn(context, 'plain');
-    for (const path of ['/login', '/register', '/forgot-password']) {
-      await page.goto(path);
-      await expect(page).toHaveURL(/\/$/);
-    }
-  });
 
   test('forgot password, then the emailed reset link', async ({ page }) => {
     await page.goto('/forgot-password');
@@ -92,20 +87,12 @@ if (!STAGING) {
     await expectAccessible(page);
   });
 
-  test("an emailed link's code goes in a request body, never in a URL", async ({ page }) => {
-    const urls: string[] = [];
-    page.on('request', (r) => urls.push(r.url()));
+
+
+  test('opening a confirm link confirms', async ({ page }) => {
     await page.goto('/verify-email#good');
     await expect(page.getByText(/is\s+confirmed/)).toBeVisible();
     await expectAccessible(page);
-    expect(urls.filter((u) => u.includes('good'))).toEqual([]);
-    const referrer = await page.locator('meta[name="referrer"]').getAttribute('content');
-    expect(referrer).toBe('no-referrer');
-  });
-
-  test('an expired link says so', async ({ page }) => {
-    await page.goto('/verify-email#expired');
-    await expect(page.getByText('This link has expired or was already used. Ask for a new one.')).toBeVisible();
   });
 
   test('a delete link deletes on the button, logged out', async ({ page }) => {

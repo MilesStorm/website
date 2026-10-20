@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { FormAlert } from '@/components/FormAlert';
@@ -48,9 +47,8 @@ export function DeleteAccount() {
       </p>
       <FormAlert message={error} />
       <div className="flex flex-col gap-2 sm:flex-row-reverse">
-        {/* Not shadcn's destructive variant: its tinted red text is under WCAG's contrast minimum. */}
-        <Button className="sm:flex-1" disabled={busy} onClick={() => void remove()}>
-          <Trash2 aria-hidden="true" /> Delete my account
+        <Button variant="destructive" className="sm:flex-1" disabled={busy} onClick={() => void remove()}>
+          Delete my account
         </Button>
         <a href="/" className={buttonVariants({ variant: 'outline', className: 'sm:flex-1' })}>
           Keep my account

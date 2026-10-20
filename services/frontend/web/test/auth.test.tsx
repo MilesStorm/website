@@ -80,6 +80,20 @@ describe('logging in', () => {
   });
 });
 
+describe('landing after a login', () => {
+  it('goes to next when the server gives no answer', async () => {
+    const page = at('/login?next=%2Fasshole');
+    vi.stubGlobal('location', page.location);
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const { landAfterLogin } = await import('@/lib/login');
+    await landAfterLogin('/asshole');
+    await landAfterLogin(null);
+    expect(page.assigned).toEqual(['/asshole', '/']);
+  });
+});
+
 describe('signing up', () => {
   it('marks a taken email on its field, and lands like a login', async () => {
     let taken = true;

@@ -48,4 +48,5 @@ for _ in $(seq 60); do
   sleep 1
 done
 docker logs frontend-e2e
+docker logs frontend-e2e-tls
 exit 1
