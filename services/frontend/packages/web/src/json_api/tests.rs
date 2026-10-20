@@ -346,6 +346,7 @@ fn stand_in_panels(auth: Arc<Auth>) -> axum::Router {
 pub(crate) struct Site {
     app: axum::Router,
     pub(crate) auth: Arc<Auth>,
+    store: MemoryStore,
     cookie: Option<String>,
     _env: tokio::sync::MutexGuard<'static, ()>,
 }
@@ -376,10 +377,9 @@ impl Site {
             session.insert("opaque_token", &token).await.unwrap();
             session.insert("username", format!("user-{token}")).await.unwrap();
         };
-        let app = app
-            .route("/test/seed", post(seed))
-            .layer(SessionManagerLayer::new(MemoryStore::default()).with_secure(false));
-        Self { app, auth, cookie: None, _env: env }
+        let store = MemoryStore::default();
+        let app = app.route("/test/seed", post(seed)).layer(SessionManagerLayer::new(store.clone()).with_secure(false));
+        Self { app, auth, store, cookie: None, _env: env }
     }
 
     async fn logged_in(token: &str) -> Self {
@@ -420,6 +420,14 @@ impl Site {
         let url = std::env::var("AUTH_SERVICE_URL").unwrap();
         crate::dataset::install_for_tests(Some(crate::dataset::Dataset::for_tests(url, "pw")));
         self
+    }
+
+    /// What the browser's session holds in the store now (empty without one).
+    pub(crate) async fn session_data(&self) -> HashMap<String, Value> {
+        use tower_sessions::SessionStore as _;
+        let Some(id) = self.cookie.as_deref().and_then(|c| c.split_once('=')) else { return HashMap::new() };
+        let id = id.1.parse().expect("a session ID");
+        self.store.load(&id).await.unwrap().map(|r| r.data).unwrap_or_default()
     }
 
     pub(crate) async fn get(&mut self, path: &str) -> Reply {

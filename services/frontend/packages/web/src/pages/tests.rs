@@ -165,9 +165,17 @@ async fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
         let app = super::mount(router, built);
         if astro {
             // A page's path with a slash goes to the page, never to Dioxus's fallback.
-            let res = app.oneshot(Request::get("/asshole/?a=1").body(Body::empty()).unwrap()).await.unwrap();
+            let res = app.clone().oneshot(Request::get("/asshole/?a=1").body(Body::empty()).unwrap()).await.unwrap();
             assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
             assert_eq!(res.headers()[header::LOCATION], "/asshole?a=1");
+            // Routes match the path as sent: an encoded or upper-case spelling of a page is no
+            // page, so until cutover it is Dioxus's (as every unknown path is), never Astro's.
+            for path in ["/%61sshole", "/ASSHOLE"] {
+                let res = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+                let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+                let html = String::from_utf8_lossy(&body);
+                assert!(!html.contains(r#"id="bootstrap""#) && !html.contains("asshole.html"), "{path}: {html}");
+            }
         }
     }
 }
@@ -344,6 +352,8 @@ async fn check(app: axum::Router, access: Access, token: Option<&str>, path: &st
     // Status pages too: spliced, private, with the viewer on the html tag.
     assert_eq!(reply.content_type.as_deref(), Some("text/html; charset=utf-8"), "{who}");
     assert_eq!(reply.headers[header::CACHE_CONTROL], "private, no-cache", "{who}");
+    let retry = reply.headers.get(header::RETRY_AFTER).map(|v| v.to_str().unwrap());
+    assert_eq!(retry, (status == StatusCode::SERVICE_UNAVAILABLE).then_some("30"), "{who}");
     let html = String::from_utf8(reply.bytes).unwrap();
     assert!(html.contains(&format!("<body>{target}</body>")), "{who}: {html}");
     assert!(!html.contains(MARKER), "{who}");
@@ -427,4 +437,45 @@ async fn a_logged_out_redirect_asks_auth_nothing() {
     assert_eq!(reply.status, StatusCode::SEE_OTHER);
     assert_eq!(reply.headers[header::LOCATION], "/login?next=/asshole");
     assert!(site.auth.introspected.lock().unwrap().is_empty());
+}
+
+/// A session store that can't be read, counting the attempts.
+#[derive(Debug, Clone, Default)]
+struct Unreadable(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl tower_sessions::SessionStore for Unreadable {
+    async fn save(&self, _: &tower_sessions::session::Record) -> tower_sessions::session_store::Result<()> {
+        Ok(())
+    }
+    async fn load(&self, _: &tower_sessions::session::Id) -> tower_sessions::session_store::Result<Option<tower_sessions::session::Record>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(tower_sessions::session_store::Error::Backend("down".into()))
+    }
+    async fn delete(&self, _: &tower_sessions::session::Id) -> tower_sessions::session_store::Result<()> {
+        Ok(())
+    }
+}
+
+/// A session that can't be read: a guest-only page is the page, logged out, as the guard decided
+/// (the session isn't read again for it); a guarded page is the 503 page.
+#[tokio::test]
+async fn an_unreadable_session_is_read_once() {
+    let dist = Dist::new("unreadable");
+    for (access, status, file) in [
+        (Access::GuestOnly, StatusCode::OK, "asshole.html"),
+        (Access::LoggedIn, StatusCode::SERVICE_UNAVAILABLE, "503.html"),
+    ] {
+        let store = Unreadable::default();
+        let rows = [Page { path: PagePath::Asshole, file: "asshole.html", access }];
+        let app = super::mount_rows(axum::Router::new(), dist.built(), &rows)
+            .layer(tower_sessions::SessionManagerLayer::new(store.clone()));
+        let cookie = format!("id={}", tower_sessions::session::Id::default());
+        let req = Request::get("/asshole").header(header::COOKIE, cookie).body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), status, "{access:?}");
+        let html = String::from_utf8(axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+        assert!(html.contains(&format!("<body>{file}</body>")) && html.contains(r#"data-session="out""#), "{access:?}: {html}");
+        assert_eq!(store.0.load(std::sync::atomic::Ordering::SeqCst), 1, "{access:?}");
+    }
 }

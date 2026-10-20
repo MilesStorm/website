@@ -273,7 +273,14 @@ async fn guard(State((built, page)): State<(Arc<Built>, Page)>, req: Request, ne
     // Logged by the extractor when it fails.
     let viewer = json_api::Viewer::from_request_parts(&mut parts, &()).await.ok();
     let (file, status) = match verdict(page.access, viewer.as_ref()) {
-        Verdict::Serve => return next.run(Request::from_parts(parts, body)).await,
+        Verdict::Serve => {
+            // The page shows what was decided here: a session that can't be read is logged out
+            // (a guest-only page), not read a second time.
+            if viewer.is_none() {
+                parts.extensions.insert(api::Viewer::Anonymous);
+            }
+            return next.run(Request::from_parts(parts, body)).await;
+        }
         // A path has nothing to escape in a query (`api-types` tests it).
         Verdict::LogIn => return Redirect::to(&format!("/login?next={}", page.path.as_str())).into_response(),
         Verdict::Home => return Redirect::to("/").into_response(),
@@ -285,7 +292,12 @@ async fn guard(State((built, page)): State<(Arc<Built>, Page)>, req: Request, ne
         None => Bootstrap { viewer: None },
     };
     let request = parts.extensions.get::<api::trace::RequestTraceContext>();
-    respond(&built, file, status, request, &bootstrap)
+    let mut res = respond(&built, file, status, request, &bootstrap);
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        // Auth is usually back within moments.
+        res.headers_mut().insert(axum::http::header::RETRY_AFTER, HeaderValue::from_static("30"));
+    }
+    res
 }
 
 /// A page's path with a trailing slash: a permanent redirect to the path without it, keeping

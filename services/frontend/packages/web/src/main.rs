@@ -826,7 +826,9 @@ async fn oauth_callback(
                 tracing::error!(error = %e, %provider, "oauth_callback: failed to write username");
                 return Redirect::to("/login?error=session_failed").into_response();
             }
-            // Came from an invite link: back to it (the invite was just redeemed).
+            // Came from an invite link: back to it (the invite was just redeemed). Only this
+            // login's: an earlier login's invite page, never taken, is dropped first.
+            let _ = session.remove::<String>(api::INVITE_RETURN_KEY).await;
             api::redeem_pending_invite(&session, &token).await;
             Redirect::to(&json_api::next_page(&session, next).await).into_response()
         }
@@ -1155,9 +1157,20 @@ mod tests {
 
         // A callback that fails its state check forgets the page too.
         assert_eq!(site.get("/oauth/start/github?next=/asshole").await.status, StatusCode::SEE_OTHER);
+        assert_eq!(site.session_data().await["oauth_next"], "/asshole");
         let forged = site.get("/oauth/callback/github?code=good&state=forged").await;
         assert_eq!(forged.headers[axum::http::header::LOCATION], "/login?error=csrf_mismatch");
-        let reply = site.get("/oauth/callback/github?code=good&state=st").await;
-        assert_eq!(reply.headers[axum::http::header::LOCATION], "/login?error=csrf_mismatch");
+        let data = site.session_data().await;
+        assert!(!data.contains_key("oauth_next") && !data.contains_key("oauth_csrf_state"), "{data:?}");
+        drop(site);
+
+        // A password login redeemed an invite whose page was never taken (no after-login call):
+        // an OAuth login later lands on its own `next`, not on that old invite page.
+        let mut site = Site::serving(app()).await;
+        site.json(Method::POST, "/api/invites/open", serde_json::json!({"code": "join"})).await;
+        let login = site.json(Method::POST, "/api/session/login", serde_json::json!({"username": "tester", "password": "right"})).await;
+        assert_eq!(login.status, StatusCode::OK);
+        assert_eq!(site.session_data().await[api::INVITE_RETURN_KEY], "/invite#join");
+        assert_eq!(round_trip(&mut site, "?next=/asshole").await, "/asshole");
     }
 }
