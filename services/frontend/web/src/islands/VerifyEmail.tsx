@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { CircleAlert, CircleCheck } from 'lucide-react';
+import { CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { FormAlert } from '@/components/FormAlert';
 import { client } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
@@ -21,10 +22,7 @@ export function VerifyEmail() {
   if (!result.ok) {
     return (
       <div className="flex flex-col gap-4">
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription>{result.message}</AlertDescription>
-        </Alert>
+        <FormAlert message={result.message} />
         <p className="text-sm text-muted-foreground">
           Your profile page shows whether your email is confirmed, and can send a new link.
         </p>

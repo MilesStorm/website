@@ -13,7 +13,7 @@
 import { createServer } from 'node:http';
 
 const port = Number(process.env.FAKE_PORT ?? 4010);
-const site = process.env.SITE_URL ?? 'http://localhost:8090';
+const site = process.env.SITE_URL ?? 'https://localhost:8443';
 const PERMISSIONS = { all: ['llama', 'enshrouded', 'arcane', 'manage_permissions', 'brand_new'], none: [] };
 
 const routes = {

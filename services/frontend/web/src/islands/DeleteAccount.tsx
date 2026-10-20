@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CircleAlert } from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Trash2 } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { FormAlert } from '@/components/FormAlert';
@@ -33,10 +32,7 @@ export function DeleteAccount() {
   if (!account.ok) {
     return (
       <div className="flex flex-col gap-4">
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription>{account.message}</AlertDescription>
-        </Alert>
+        <FormAlert message={account.message} />
         <p className="text-sm text-muted-foreground">You can ask for a new link on your profile page.</p>
         <a href="/profile" className={buttonVariants({ variant: 'outline' })}>
           Open my profile
@@ -52,8 +48,9 @@ export function DeleteAccount() {
       </p>
       <FormAlert message={error} />
       <div className="flex flex-col gap-2 sm:flex-row-reverse">
-        <Button variant="destructive" className="sm:flex-1" disabled={busy} onClick={() => void remove()}>
-          Delete my account
+        {/* Not shadcn's destructive variant: its tinted red text is under WCAG's contrast minimum. */}
+        <Button className="sm:flex-1" disabled={busy} onClick={() => void remove()}>
+          <Trash2 aria-hidden="true" /> Delete my account
         </Button>
         <a href="/" className={buttonVariants({ variant: 'outline', className: 'sm:flex-1' })}>
           Keep my account

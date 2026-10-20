@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { CircleAlert, CircleCheck } from 'lucide-react';
+import { CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { FormAlert } from '@/components/FormAlert';
 import { client, type Schemas } from '@/api/client';
 import { applySession, fetchBootstrap } from '@/api/session';
 import { attempt, type Outcome } from '@/lib/errors';
@@ -32,10 +33,7 @@ export function InviteOpen() {
   if (!opened.ok) {
     return (
       <div className="flex flex-col gap-4">
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription>{opened.message}</AlertDescription>
-        </Alert>
+        <FormAlert message={opened.message} />
         <a href="/" className={buttonVariants({ variant: 'outline' })}>
           Go to the site
         </a>
