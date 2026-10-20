@@ -90,6 +90,22 @@ describe('the users tab', () => {
     expect(await screen.findByText('That no longer exists. Reload the page.')).toBeTruthy();
   });
 
+  it('keeps a page chosen right after loading', async () => {
+    const calls = serve((url) => {
+      if (url.pathname === '/api/admin/users') return json({ items: [user], total: 60 });
+    });
+    const { AdminPanel, SEARCH_DELAY_MS } = await import('@/islands/AdminPanel');
+    render(<AdminPanel />);
+    const pages = await screen.findByRole('navigation', { name: 'Pages' });
+    await userEvent.click(within(pages).getByRole('button', { name: 'Page 2' }));
+    await new Promise((r) => setTimeout(r, SEARCH_DELAY_MS + 150));
+    expect(within(pages).getByRole('button', { name: 'Page 2' }).getAttribute('aria-current')).toBe('page');
+    expect(calls.filter((c) => c.call.startsWith('GET /api/admin/users')).map((c) => c.call)).toEqual([
+      'GET /api/admin/users?page=0&limit=25&search=',
+      'GET /api/admin/users?page=1&limit=25&search=',
+    ]);
+  });
+
   it('pages through many users', async () => {
     const calls = serve((url) => {
       if (url.pathname === '/api/admin/users') return json({ items: [user], total: 60 });

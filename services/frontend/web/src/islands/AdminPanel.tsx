@@ -88,14 +88,16 @@ function useListing<T>(load: (page: number, search: string) => Promise<Outcome<{
   const [page, setPage] = useState(0);
   const [result, setResult] = useState<Outcome<{ items: T[]; total: number }> | null>(null);
   const [round, setRound] = useState(0);
-  // A new search starts at the first page: both change together, so it is one request.
+  // A new search starts at the first page: both change together, so it is one request. Only a
+  // changed term: the timer that runs on mount would otherwise undo a pager click.
   useEffect(() => {
+    if (search === asked) return;
     const wait = setTimeout(() => {
       setAsked(search);
       setPage(0);
     }, SEARCH_DELAY_MS);
     return () => clearTimeout(wait);
-  }, [search]);
+  }, [search, asked]);
   useEffect(() => {
     let current = true;
     void load(page, asked).then((r) => current && setResult(r));
