@@ -1,0 +1,14 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ArcaneCamera } from '@/islands/ArcaneCamera';
+---
+
+<Layout title="Arcane dice">
+  <main class="mx-auto flex max-w-3xl flex-col gap-4 px-4 pt-6 pb-16">
+    <h1 class="sr-only">Arcane dice reader</h1>
+    <ArcaneCamera client:only="react">
+      <Skeleton slot="fallback" className="mx-auto aspect-video w-full max-w-2xl rounded-xl" />
+    </ArcaneCamera>
+  </main>
+</Layout>

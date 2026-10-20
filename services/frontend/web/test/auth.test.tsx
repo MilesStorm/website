@@ -180,7 +180,8 @@ describe('the emailed links', () => {
 describe('an invite', () => {
   it('joins when logged in and points at the new page', async () => {
     open('/invite#join', {
-      'POST /api/invites/open': () => json({ kind: 'joined', role: 'arcane_user', group_label: 'the Arcane dice test group' }),
+      'POST /api/invites/open': () =>
+        json({ kind: 'joined', role: 'arcane_user', group_label: 'the Arcane dice test group', next: '/arcane' }),
       'GET /api/session': () => json({ viewer: null }),
     });
     const { InviteOpen } = await import('@/islands/InviteOpen');

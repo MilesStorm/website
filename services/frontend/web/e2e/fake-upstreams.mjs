@@ -1,7 +1,7 @@
 // Stand-ins for what the server calls, for the end-to-end tests against the built image: auth
-// (login, the token check, profiles, emails, invites, roll-sharing consent) and Ark. SurrealDB is
-// a real one (e2e/serve.sh). Test code only:
-// it runs on the CI runner beside the container, never in an image.
+// (login, the token check, profiles, emails, invites, roll-sharing consent, admin), Ark,
+// Enshrouded, and ai_pipeline's camera WebSocket. SurrealDB is a real one (e2e/serve.sh). Test
+// code only: it runs on the CI runner beside the container, never in an image.
 //
 // Accounts: `tester-none`, `tester-all` and `tester-down`, password `right`, and any
 // `tester-<kind>-<suffix>` of those kinds (a fresh account for a test that changes it, so tests
@@ -14,6 +14,8 @@
 // Emailed codes: `good` works, anything else has expired. Invite code `join` is for
 // `arcane_user`. OAuth: the provider's page is skipped, auth sends the browser straight back to
 // the site's callback (SITE_URL) with code `good`, which logs in as `tester-all`.
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const port = Number(process.env.FAKE_PORT ?? 4010);
@@ -267,3 +269,73 @@ createServer((req, res) => {
     res.end(typeof reply === 'string' ? reply : JSON.stringify(reply));
   });
 }).listen(port, '127.0.0.1', () => console.log(`fake-upstreams on 127.0.0.1:${port}`));
+
+// ---- ai_pipeline (the camera WebSocket's upstream) ----
+//
+// Answers every camera frame with the contract's `frame` message (contracts/arcane), numbered
+// as the frames come, and every fifth frame is also a settled `roll` (the contract's, with a
+// roll id of its own). A minimal WebSocket server: the handshake, and unfragmented frames.
+
+const aiPort = Number(process.env.FAKE_AI_PORT ?? 4011);
+const contract = (name) => JSON.parse(readFileSync(new URL(`../../../../contracts/arcane/${name}.json`, import.meta.url), 'utf8'));
+const FRAME = contract('frame');
+const ROLL = contract('roll');
+let connections = 0;
+
+/** One unmasked text frame (server to client). */
+function textFrame(text) {
+  const payload = Buffer.from(text);
+  const n = payload.length;
+  const head = n < 126 ? Buffer.from([0x81, n]) : n < 65536 ? Buffer.from([0x81, 126, n >> 8, n & 0xff]) : null;
+  if (!head) {
+    const big = Buffer.alloc(10);
+    big[0] = 0x81;
+    big[1] = 127;
+    big.writeBigUInt64BE(BigInt(n), 2);
+    return Buffer.concat([big, payload]);
+  }
+  return Buffer.concat([head, payload]);
+}
+
+const ai = createServer((_, res) => res.writeHead(426).end());
+ai.on('upgrade', (req, socket) => {
+  const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  const conn = ++connections;
+  let frames = 0;
+  let buf = Buffer.alloc(0);
+  socket.on('error', () => {});
+  socket.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    for (;;) {
+      if (buf.length < 2) return;
+      const opcode = buf[0] & 0x0f;
+      const masked = buf[1] & 0x80;
+      let len = buf[1] & 0x7f;
+      let at = 2;
+      if (len === 126) {
+        if (buf.length < 4) return;
+        len = buf.readUInt16BE(2);
+        at = 4;
+      } else if (len === 127) {
+        if (buf.length < 10) return;
+        len = Number(buf.readBigUInt64BE(2));
+        at = 10;
+      }
+      // The browser side's frames are masked; a frame's bytes aren't read, so they stay so.
+      if (masked) at += 4;
+      if (buf.length < at + len) return;
+      buf = buf.subarray(at + len);
+      if (opcode === 0x8) return void socket.end(Buffer.from([0x88, 0]));
+      if (opcode === 0x9) socket.write(Buffer.from([0x8a, 0]));
+      if (opcode !== 0x2) continue;
+      frames += 1;
+      socket.write(textFrame(JSON.stringify({ ...FRAME, frame_seq: frames })));
+      if (frames % 5 === 0) {
+        socket.write(textFrame(JSON.stringify({ ...ROLL, roll_id: `e2e-${conn}-${frames}`, frame_seq: frames, ts: Date.now() })));
+      }
+    }
+  });
+});
+ai.listen(aiPort, '127.0.0.1', () => console.log(`fake ai_pipeline on 127.0.0.1:${aiPort}`));
+

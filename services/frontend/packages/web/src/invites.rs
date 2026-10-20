@@ -13,10 +13,10 @@ use dioxus::prelude::*;
 pub use api_types::Opened;
 
 /// Where to go after joining `role`: (page, button text).
-pub fn after_join(role: &str) -> (&'static str, &'static str) {
+pub fn after_join(role: &str) -> (api_types::PagePath, &'static str) {
     match role {
-        "arcane_user" => ("/arcane", "Open Arcane dice"),
-        _ => ("/", "Go to the site"),
+        "arcane_user" => (api_types::PagePath::Arcane, "Open Arcane dice"),
+        _ => (api_types::PagePath::Home, "Go to the site"),
     }
 }
 
@@ -88,7 +88,9 @@ pub(crate) mod server {
             let token: Option<String> = session.get("opaque_token").await.ok().flatten();
             if let Some(token) = token {
                 match call("/internal/invite/redeem", json!({ "code": code, "token": token })).await {
-                    Ok(role) => return Ok(Opened::Joined { group_label: group_name(&role), role }),
+                    Ok(role) => {
+                        return Ok(Opened::Joined { group_label: group_name(&role), next: after_join(&role).0, role })
+                    }
                     // The session ran out: treat them as logged out.
                     Err(Refused::LoggedOut) => {}
                     Err(r) => return Err(message(r)),
@@ -145,7 +147,7 @@ mod tests {
     #[test]
     fn arcane_invites_have_a_friendly_name() {
         assert_eq!(group_name("arcane_user"), "the Arcane dice test group");
-        assert_eq!(after_join("arcane_user").0, "/arcane");
-        assert_eq!(after_join("other").0, "/");
+        assert_eq!(after_join("arcane_user").0, api_types::PagePath::Arcane);
+        assert_eq!(after_join("other").0, api_types::PagePath::Home);
     }
 }

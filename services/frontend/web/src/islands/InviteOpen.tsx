@@ -8,11 +8,11 @@ import { client, type Schemas } from '@/api/client';
 import { applySession, fetchBootstrap } from '@/api/session';
 import { attempt, type Outcome } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
-import type { Href } from '@/lib/pages';
+import type { PagePath } from '@/lib/pages';
 
-/** Where to go after joining a role, and the button that goes there. */
-export function afterJoin(role: string): [Href, string] {
-  return role === 'arcane_user' ? ['/arcane', 'Open Arcane dice'] : ['/', 'Go to the site'];
+/** The button to the page the server says joining leads to (`Opened.next`). */
+export function joinedButton(next: PagePath): string {
+  return next === '/arcane' ? 'Open Arcane dice' : 'Go to the site';
 }
 
 /** The page an invite link opens (`/invite#<code>`). Logged in, it joins at once. Logged out, the
@@ -40,9 +40,9 @@ export function InviteOpen() {
       </div>
     );
   }
-  const { kind, role, group_label } = opened.data;
-  if (kind === 'joined') {
-    const [page, label] = afterJoin(role);
+  if (opened.data.kind === 'joined') {
+    const { next: page, group_label } = opened.data;
+    const label = joinedButton(page);
     return (
       <div className="flex flex-col gap-4">
         <Alert>
@@ -55,6 +55,7 @@ export function InviteOpen() {
       </div>
     );
   }
+  const { group_label } = opened.data;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-center">

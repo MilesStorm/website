@@ -51,8 +51,9 @@ pub fn Invite(code: String) -> Element {
                         div { class: "alert alert-warning", span { "{message}" } }
                         Link { class: "btn btn-ghost", to: "/", "Go to the site" }
                     },
-                    Some(Ok(Opened::Joined { role, group_label })) => {
-                        let (page, button) = after_join(&role);
+                    Some(Ok(Opened::Joined { role, group_label, next })) => {
+                        let page = next.as_str();
+                        let button = after_join(&role).1;
                         rsx! {
                             div { class: "alert alert-success",
                                 span { "You're in! You've joined {group_label}." }
