@@ -3,11 +3,16 @@
 // options, so a file of its own), so Back really restores the page as it was, logged in, and the
 // layout's `pageshow` handler must load it again.
 import { expect, test } from '@playwright/test';
-import { logIn } from './site';
+import { STAGING, logIn } from './site';
 
 test.use({ channel: 'chromium', launchOptions: { ignoreDefaultArgs: ['--disable-back-forward-cache'] } });
 
 test('logging out, Back shows the page logged out', async ({ context, page }) => {
+  // Chromium says why a page wasn't kept: the test fails with its reasons, not just "not restored".
+  const notKept: unknown[] = [];
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Page.enable');
+  cdp.on('Page.backForwardCacheNotUsed', (e) => notKept.push(e.notRestoredExplanations));
   // Every document of the tab: a load counted per path, and a restore from the cache noted.
   await page.addInitScript(() => {
     const key = `loads:${location.pathname}`;
@@ -17,9 +22,13 @@ test('logging out, Back shows the page logged out', async ({ context, page }) =>
     });
   });
   await logIn(context, 'plain');
+  // A page left with a request still open isn't kept. Where the tracing is on (the staging and
+  // production hosts; not the stand-ins' localhost), it sends the page load's spans shortly after
+  // the load, to /faro/collect: wait for that answer, then for nothing else in flight.
+  const exported = STAGING ? page.waitForResponse((r) => new URL(r.url()).pathname === '/faro/collect') : null;
   await page.goto('/account-deleted');
   await expect(page.locator('html')).toHaveAttribute('data-session', 'in');
-  // A page left with a request still open (an island's script, the tracing's spans) isn't kept.
+  await exported;
   await page.waitForLoadState('networkidle');
   await page.goto('/');
   await page.getByRole('button', { name: /^Account: / }).click();
@@ -31,6 +40,7 @@ test('logging out, Back shows the page logged out', async ({ context, page }) =>
   await expect(page).toHaveURL(/\/account-deleted$/);
   await expect(page.locator('html')).toHaveAttribute('data-session', 'out');
   await expect(page.getByRole('link', { name: 'Log in' }).first()).toBeVisible();
+  expect(notKept).toEqual([]);
   const seen = await page.evaluate(() => ({
     restored: sessionStorage.getItem('restored'),
     loads: sessionStorage.getItem('loads:/account-deleted'),

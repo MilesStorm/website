@@ -63,10 +63,10 @@
     --muted-foreground: oklch(0.556 0 0);
     --accent: oklch(0.97 0 0);
     --accent-foreground: oklch(0.205 0 0);
-    /* Tailwind's red-800, not shadcn's red-600: destructive text on a light card stays over
-       WCAG's 4.5:1 on its own tint, hovered too (the destructive button's 20% tint: 5.7:1;
-       red-700 gave 4.4:1). */
-    --destructive: oklch(0.444 0.177 26.899);
+    /* Darker than shadcn's (0.577 0.245 27.325): destructive text over its own tint stays over
+       WCAG's 4.5:1 on the light card and page, hovered too (the button's 20% tint: 5.0:1;
+       stock gives 4.0:1 at rest). */
+    --destructive: oklch(0.475 0.195 27.2);
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
     --ring: oklch(0.708 0 0);
@@ -101,7 +101,10 @@
     --muted-foreground: oklch(0.708 0 0);
     --accent: oklch(0.269 0 0);
     --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
+    /* Lighter than shadcn's (0.704 0.191 22.216, which is outside sRGB): the closest in-sRGB
+       colour of the same hue whose text stays over WCAG's 4.5:1 on the hovered button's 30% tint,
+       on the card (4.5:1) and the page (5.2:1); stock gives 3.8:1 on the card. */
+    --destructive: oklch(0.776 0.131 22.216);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.556 0 0);

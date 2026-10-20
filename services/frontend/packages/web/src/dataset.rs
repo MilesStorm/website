@@ -142,6 +142,7 @@ pub async fn start(store: Dataset, redis: Client) {
         delay = (delay * 2).min(SCHEMA_RETRY_MAX);
     }
     SCHEMA_READY.store(true, Ordering::Release);
+    // web/e2e/serve.sh waits for "roll-sharing schema applied" before the tests start.
     tracing::info!("roll-sharing schema applied; sharing and flagging are on");
 }
 

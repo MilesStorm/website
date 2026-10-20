@@ -26,10 +26,15 @@ docker run -d --rm --name frontend-e2e-redis --network host redis:7-alpine --por
 # The version the cluster runs (surreal/single-node-values.yaml in the homelab repo).
 docker run -d --rm --name frontend-e2e-surreal --network host surrealdb/surrealdb:v3.2.4 \
   start --bind "127.0.0.1:$SURREAL_PORT" --user root --pass e2e-root memory >/dev/null
+surreal_up=
 for _ in $(seq 30); do
-  curl -fsS -o /dev/null "http://127.0.0.1:$SURREAL_PORT/health" 2>/dev/null && break
+  if curl -fsS -o /dev/null "http://127.0.0.1:$SURREAL_PORT/health" 2>/dev/null; then surreal_up=1; break; fi
   sleep 1
 done
+if [[ -z $surreal_up ]]; then
+  docker logs frontend-e2e-surreal
+  exit 1
+fi
 curl -fsS -u root:e2e-root -H 'Accept: application/json' "http://127.0.0.1:$SURREAL_PORT/sql" \
   -d "DEFINE NAMESPACE milesstorm; USE NS milesstorm; DEFINE DATABASE arcane; USE DB arcane;
       DEFINE USER dice ON DATABASE PASSWORD 'e2e-only' ROLES EDITOR;" >/dev/null

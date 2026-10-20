@@ -38,8 +38,8 @@ export function players(count: number | null): { value: string; note: string } {
   return { value: String(count), note: 'Server is active' };
 }
 
-/** The Ark server: who is online (asked again every 30 seconds while the page is in view, and
- * after a command), and start, stop and restart. */
+/** The Ark server: who is online (asked again every 30 seconds while the page is in view, when
+ * the tab is shown again, and after a command), and start, stop and restart. */
 export function ArkPanel() {
   const [count, setCount] = useState<Outcome<Schemas['ArkPlayers']> | null>(null);
   const [running, setRunning] = useState<Command | null>(null);
@@ -51,7 +51,15 @@ export function ArkPanel() {
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, POLL_MS);
-    return () => clearInterval(timer);
+    // Back to the tab: the count may be minutes old, so ask now.
+    const shown = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', shown);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', shown);
+    };
   }, [refresh]);
 
   const run = async (cmd: Command) => {

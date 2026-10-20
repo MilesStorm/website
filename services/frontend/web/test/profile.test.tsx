@@ -178,6 +178,15 @@ describe('the Ark panel', () => {
     expect(calls[1]?.body).toEqual({ cmd: 'start' });
   });
 
+  it('asks again at once when the tab is shown again', async () => {
+    const { calls } = open('/ark', { 'GET /api/ark/players': () => json({ count: 1 }) });
+    const { ArkPanel } = await import('@/islands/ArkPanel');
+    render(<ArkPanel />);
+    expect(await screen.findByText('Server is active')).toBeTruthy();
+    document.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => expect(calls.length).toBe(2));
+  });
+
   it('asks again every 30 seconds while the page is shown', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { calls } = open('/ark', { 'GET /api/ark/players': () => json({ count: 2 }) });

@@ -48,12 +48,10 @@ export function Profile() {
   /** A new copy of the account from the server: the page and the user menu show it. */
   const update = (next: Account) => {
     setAccount({ ok: true, data: next });
-    setViewer((v) => {
-      if (!v) return v;
-      const changed = { ...v, shown_name: next.shown_name, picture_url: next.picture_url };
-      viewerChanged(changed);
-      return changed;
-    });
+    if (!viewer) return;
+    const changed = { ...viewer, shown_name: next.shown_name, picture_url: next.picture_url };
+    setViewer(changed);
+    viewerChanged(changed);
   };
 
   if (!account) return <Skeleton className="h-64 w-full rounded-xl" role="status" aria-label="Loading your account" />;

@@ -89,6 +89,20 @@ if (!STAGING) {
     await expect(page.getByRole('heading', { name: 'Help improve dice recognition' })).toBeHidden();
   });
 
+  test('destructive buttons are readable hovered, in light and dark', async ({ context, page }) => {
+    await logIn(context, 'plain');
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme });
+      await page.goto('/profile');
+      if (colorScheme === 'dark') await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+      else await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+      await page.getByRole('button', { name: 'Delete my account…' }).hover();
+      // The hover colour fades in (the button's 150 ms transition).
+      await page.waitForTimeout(300);
+      await expectAccessible(page);
+    }
+  });
+
   test('a confirmed address is emailed a deletion link', async ({ context, page }) => {
     await logIn(context, 'all');
     await page.goto('/profile');
