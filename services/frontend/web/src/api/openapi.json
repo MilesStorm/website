@@ -2538,7 +2538,8 @@
           "/invite",
           "/profile",
           "/ark",
-          "/enshrouded"
+          "/enshrouded",
+          "/admin"
         ]
       },
       "PasswordReset": {
@@ -2854,6 +2855,13 @@
       },
       "file": "enshrouded.html",
       "path": "/enshrouded"
+    },
+    {
+      "access": {
+        "perm": "manage_permissions"
+      },
+      "file": "admin.html",
+      "path": "/admin"
     }
   ]
 }

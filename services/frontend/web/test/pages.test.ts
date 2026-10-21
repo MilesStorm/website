@@ -10,7 +10,7 @@ describe('the pages', () => {
 
   it('are only exact paths', () => {
     expect(isPagePath('/')).toBe(true);
-    for (const bad of ['//evil.com', '/asshole/', 'https://milesstorm.com/', '/api/session', '/admin']) {
+    for (const bad of ['//evil.com', '/asshole/', 'https://milesstorm.com/', '/api/session', '/arcane']) {
       expect(isPagePath(bad)).toBe(false);
     }
   });

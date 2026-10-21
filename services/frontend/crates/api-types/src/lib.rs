@@ -236,6 +236,7 @@ pages! {
     Profile => "/profile", "profile.html", Access::LoggedIn;
     Ark => "/ark", "ark.html", Access::Perm(KnownPermission::Llama);
     Enshrouded => "/enshrouded", "enshrouded.html", Access::Perm(KnownPermission::Enshrouded);
+    Admin => "/admin", "admin.html", Access::Perm(KnownPermission::ManagePermissions);
 }
 
 /// Pages without a path of their own, answered with a status: an unknown path (404), a page the

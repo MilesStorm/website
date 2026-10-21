@@ -30,16 +30,18 @@ export const USERS = {
   down: { username: 'tester-down', password: 'right' },
 };
 
-/** Logs `context` in as `who`; with `fresh`, as a new stand-in account of that kind. The API
- * call carries no Origin (it isn't a page's), so the server's same-origin rule lets it through. */
-export async function logIn(context: BrowserContext, who: Who, fresh: boolean | string = false): Promise<void> {
-  if (who === 'anonymous') return;
+/** Logs `context` in as `who` and says the username; with `fresh`, as a new stand-in account of
+ * that kind. The API call carries no Origin (it isn't a page's), so the server's same-origin rule
+ * lets it through. */
+export async function logIn(context: BrowserContext, who: Who, fresh: boolean | string = false): Promise<string> {
+  if (who === 'anonymous') return '';
   const user = { ...USERS[who] };
   // A stand-in account of its own (fake-upstreams.mjs), for a test that changes it.
   // A string starts the suffix: a stand-in reads some (`busy`, fake-upstreams.mjs).
   if (fresh) user.username += `-${typeof fresh === 'string' ? fresh : ''}${Math.random().toString(36).slice(2, 10)}`;
   const res = await context.request.post('/api/session/login', { data: user });
   expect(res.status(), await res.text()).toBe(200);
+  return user.username;
 }
 
 /** No serious or critical accessibility problems on the page as it is now. */

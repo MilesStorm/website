@@ -43,10 +43,14 @@ const kind = (token) => String(token).split('-')[0];
 const known = (token) => kind(token) in PERMISSIONS;
 
 const routes = {
-  'POST /internal/token/exchange': ({ username, password }) =>
-    password === 'right' && /^tester-(none|all|down)(-[a-z0-9]+)?$/.test(username)
-      ? [200, { token: username.slice('tester-'.length), username }]
-      : [401, 'Invalid credentials'],
+  'POST /internal/token/exchange': ({ username, password }) => {
+    if (password !== 'right' || !/^tester-(none|all|down)(-[a-z0-9]+)?$/.test(username)) {
+      return [401, 'Invalid credentials'];
+    }
+    const token = username.slice('tester-'.length);
+    seen(token);
+    return [200, { token, username }];
+  },
   'POST /internal/token/introspect': ({ token }) =>
     kind(token) === 'down'
       ? [500, {}]
@@ -118,16 +122,146 @@ const routes = {
     !known(token) ? [401, {}] : code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}],
 };
 
+// ---- Admin (auth trusts the website to have checked `manage_permissions`) ----
+//
+// Every account that has logged in is a user, with 30 more (`player-01`…) so the list has pages.
+// Roles: `admin` (every permission), `arcane_user`, and for each fresh account a `scratch_<suffix>`
+// role of its own, so tests that change a role's permissions don't meet.
+
+const ADMIN_PERMISSIONS = [
+  { id: 1, name: 'llama' },
+  { id: 2, name: 'enshrouded' },
+  { id: 3, name: 'arcane' },
+  { id: 4, name: 'manage_permissions' },
+  { id: 9, name: 'brand_new' },
+];
+const adminRoles = [
+  { id: 1, name: 'admin', permissions: [1, 2, 3, 4, 9] },
+  { id: 2, name: 'arcane_user', permissions: [3] },
+];
+let nextRoleId = 10;
+/** Role ids by user id: `tester-all` is an admin. */
+const userRoles = { 1: [1], 2: [] };
+const players = Array.from({ length: 30 }, (_, i) => ({
+  id: 1001 + i,
+  username: `player-${String(i + 1).padStart(2, '0')}`,
+  email: null,
+}));
+const invites = [];
+let nextInviteId = 1;
+
+/** An account logging in: a user of the admin listing, and a fresh one's scratch role. */
+function seen(token) {
+  const id = userId(token);
+  userRoles[id] ??= kind(token) === 'all' ? [1] : [];
+  const suffix = token.split('-')[1];
+  if (suffix && !adminRoles.some((r) => r.name === `scratch_${suffix}`)) {
+    adminRoles.push({ id: nextRoleId++, name: `scratch_${suffix}`, permissions: [] });
+  }
+}
+
+const roleRef = (id) => {
+  const role = adminRoles.find((r) => r.id === id);
+  return role && { id: role.id, name: role.name };
+};
+const adminUsers = () => [
+  ...Object.entries(userIds).map(([token, id]) => ({ id, username: `tester-${token}`, email: `${token}@example.test` })),
+  ...players,
+].map((u) => ({ ...u, roles: (userRoles[u.id] ?? []).map(roleRef).filter(Boolean) }));
+
+/** One page of `items` whose `name` has `search`, as auth answers a listing. */
+function paged(items, query, name) {
+  const page = Number(query.get('page') ?? 0);
+  const limit = Number(query.get('limit') ?? 25);
+  const search = (query.get('search') ?? '').toLowerCase();
+  const found = items.filter((x) => name(x).toLowerCase().includes(search));
+  return [200, { items: found.slice(page * limit, page * limit + limit), total: found.length }];
+}
+
+/** The admin routes with ids in their paths: `[method, pattern, handler(match, body)]`. */
+const dynamicRoutes = [
+  ['POST', /^\/internal\/admin\/users\/(\d+)\/roles\/(\d+)$/, ([, user, role]) => {
+    if (!adminUsers().some((u) => u.id === Number(user)) || !roleRef(Number(role))) return [404, { error: 'not_found' }];
+    const have = (userRoles[user] ??= []);
+    if (!have.includes(Number(role))) have.push(Number(role));
+    return [204, ''];
+  }],
+  ['DELETE', /^\/internal\/admin\/users\/(\d+)\/roles\/(\d+)$/, ([, user, role]) => {
+    userRoles[user] = (userRoles[user] ?? []).filter((r) => r !== Number(role));
+    return [204, ''];
+  }],
+  ['POST', /^\/internal\/admin\/roles\/(\d+)\/permissions\/(\d+)$/, ([, role, permission]) => {
+    const found = adminRoles.find((r) => r.id === Number(role));
+    if (!found) return [404, { error: 'not_found' }];
+    if (!found.permissions.includes(Number(permission))) found.permissions.push(Number(permission));
+    return [204, ''];
+  }],
+  ['DELETE', /^\/internal\/admin\/roles\/(\d+)\/permissions\/(\d+)$/, ([, role, permission]) => {
+    const found = adminRoles.find((r) => r.id === Number(role));
+    if (found) found.permissions = found.permissions.filter((p) => p !== Number(permission));
+    return [204, ''];
+  }],
+  ['DELETE', /^\/internal\/admin\/invites\/(\d+)$/, ([, id]) => {
+    const invite = invites.find((i) => i.id === Number(id));
+    if (!invite) return [404, { error: 'no_invite' }];
+    invite.revoked = true;
+    invite.live = false;
+    return [204, ''];
+  }],
+];
+
+Object.assign(routes, {
+  'GET /internal/admin/users': (_, query) => paged(adminUsers(), query, (u) => `${u.username} ${u.email ?? ''}`),
+  'GET /internal/admin/roles': (_, query) =>
+    paged(
+      adminRoles.map((r) => ({ ...r, permissions: r.permissions.map((p) => ADMIN_PERMISSIONS.find((x) => x.id === p)) })),
+      query,
+      (r) => r.name,
+    ),
+  'GET /internal/admin/roles/all': () => [200, adminRoles.map((r) => roleRef(r.id))],
+  'GET /internal/admin/permissions': () => [200, ADMIN_PERMISSIONS],
+  'GET /internal/admin/invites': () => [200, [...invites].reverse().map(({ link, ...listed }) => listed)],
+  'POST /internal/admin/invites': ({ token, role_id, days, max_uses, note }) => {
+    if (!known(token)) return [401, {}];
+    const role = adminRoles.find((r) => r.id === role_id);
+    if (!role) return [404, { error: 'no_role' }];
+    if (role.permissions.includes(4)) return [400, { error: 'admin_role' }];
+    if (!(days >= 1 && days <= 365) || (max_uses !== null && !(max_uses >= 1 && max_uses <= 1000))) {
+      return [400, { error: 'invalid_invite' }];
+    }
+    const now = new Date();
+    const invite = {
+      id: nextInviteId++,
+      role_id,
+      role: role.name,
+      note: note ?? null,
+      created_by: `tester-${token}`,
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + days * 86_400_000).toISOString(),
+      max_uses,
+      uses: 0,
+      revoked: false,
+      live: true,
+      joined: [],
+      link: `${site}/invite#e2e${nextInviteId}`,
+    };
+    invites.push(invite);
+    return [200, invite];
+  },
+});
+
 createServer((req, res) => {
   let body = '';
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {
-    const route = routes[`${req.method} ${req.url.split('?')[0]}`];
+    const url = new URL(req.url, 'http://fake');
+    const dynamic = dynamicRoutes.find(([method, pattern]) => method === req.method && pattern.test(url.pathname));
+    const route = routes[`${req.method} ${url.pathname}`] ?? (dynamic && ((b) => dynamic[2](url.pathname.match(dynamic[1]), b)));
     let parsed = {};
     try {
       parsed = body ? JSON.parse(body) : {};
     } catch {}
-    const [status, reply] = route ? route(parsed) : [404, { error: 'not_faked' }];
+    const [status, reply] = route ? route(parsed, url.searchParams) : [404, { error: 'not_faked' }];
     if (!route) console.error(`fake-upstreams: no stand-in for ${req.method} ${req.url}`);
     res.writeHead(status, { 'content-type': typeof reply === 'string' ? 'text/plain' : 'application/json' });
     res.end(typeof reply === 'string' ? reply : JSON.stringify(reply));
