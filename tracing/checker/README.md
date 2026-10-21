@@ -46,8 +46,8 @@ reason = "sent after the response"
 
 [[cpu]]                     # a parent whose own time is CPU work by design
 service = "frontend"
-name = "ssr.render"
-reason = "the page render"
+name = "profile_picture.convert"
+reason = "decodes and re-encodes the upload"
 ```
 
 Every entry needs a reason.

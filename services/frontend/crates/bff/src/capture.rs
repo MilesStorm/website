@@ -1,0 +1,378 @@
+//! Keeping roll pictures for training (server only).
+//!
+//! The camera proxy numbers every frame it forwards (ai_pipeline numbers them the
+//! same way and tags each result with `frame_seq`), keeps the last few, and when a
+//! roll settles hands the roll plus the exact frame it was read from to a
+//! per-connection capture worker. The worker:
+//! - holds the user's latest roll and picture in Redis for 10 minutes, so the
+//!   extension's "flag as wrong roll" can save it (flagging is the user's consent
+//!   for that one picture); only the latest roll per user is held;
+//! - for users who opted in (auth's PostgreSQL), stores rolls the model was unsure
+//!   about and about one in `DATASET_SAMPLE_EVERY` others in SurrealDB (`dataset.rs`).
+//!
+//! It runs apart from the live roll publisher so a slow or down database can
+//! never delay or drop rolls on their way to viewers.
+
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+use axum::body::Bytes;
+use aide::NoApi;
+use api_types::{ApiError, ErrorCode, FlagRequest, Flagged};
+use axum::extract::Extension;
+use axum::http::{header, HeaderMap};
+use axum::Json;
+use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use tower_sessions_redis_store::fred::prelude::*;
+
+use crate::trace::Carried;
+use tracing::Instrument as _;
+
+use crate::dataset::{auto_reason, clean_values, dataset, is_roll_id, shares, Capture};
+use crate::json_api::{self, Body, Viewer};
+use crate::rolls::{origin_allowed_with, RollHub};
+
+/// How long the latest roll's picture is kept for flagging.
+pub const HOLD_SECS: i64 = 600;
+/// Frames larger than this are never held or stored.
+pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+/// Recent frames kept per camera connection to match `frame_seq` (about half a second
+/// at the camera's 30 a second; a reply names the frame just sent).
+const FRAME_RING: usize = 16;
+const FLAGS_PER_HOUR: i64 = 30;
+const AUTO_SAMPLES_PER_DAY: i64 = 300;
+/// Captures waiting per connection; more are dropped (rolls are seconds apart).
+const CAPTURE_QUEUE: usize = 4;
+/// After a database error, skip automatic samples for this long.
+const ERROR_PAUSE: Duration = Duration::from_secs(30);
+/// The capture queue as span attributes name it.
+pub const CAPTURE_QUEUE_NAME: &str = "roll capture";
+
+fn held_meta_key(user: &str) -> String {
+    format!("arcane:held:{user}")
+}
+fn held_jpeg_key(user: &str) -> String {
+    format!("arcane:held_jpeg:{user}")
+}
+
+/// Only real pictures are kept: JPEG or PNG, by their first bytes.
+pub fn is_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xFF, 0xD8, 0xFF]) || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+}
+
+/// The last `FRAME_RING` frames forwarded upstream, by 1-based sequence number.
+/// Every binary message must be pushed (even oversized ones) so the numbering
+/// stays in step with ai_pipeline's.
+#[derive(Default)]
+pub struct FrameRing {
+    seq: u64,
+    frames: VecDeque<(u64, Bytes)>,
+}
+
+impl FrameRing {
+    pub fn push(&mut self, frame: &Bytes) {
+        self.seq += 1;
+        if frame.len() > MAX_FRAME_BYTES {
+            return;
+        }
+        if self.frames.len() == FRAME_RING {
+            self.frames.pop_front();
+        }
+        self.frames.push_back((self.seq, frame.clone()));
+    }
+
+    pub fn get(&self, seq: u64) -> Option<Bytes> {
+        self.frames.iter().find(|(s, _)| *s == seq).map(|(_, f)| f.clone())
+    }
+}
+
+/// One settled roll to keep: the roll JSON, the frame result it came with, and
+/// the picture ai_pipeline read it from (if still in the ring).
+///
+/// Queued as a `Carried` from inside the roll's `roll capture` span, so the worker's
+/// `arcane.capture` span continues the roll's trace.
+pub struct CaptureJob {
+    /// Without its `_trace` field (`rolls::split_trace`): this is what gets stored.
+    pub roll: String,
+    pub frame: Option<String>,
+    pub jpeg: Option<Bytes>,
+}
+
+impl RollHub {
+    /// A capture queue for one camera connection; the worker ends with the sender.
+    /// `token` is the connection's session token, used to look up the user's choice.
+    pub fn capturer(&self, user: String, token: String) -> mpsc::Sender<Carried<CaptureJob>> {
+        let (tx, mut rx) = crate::trace::channel::<CaptureJob>(CAPTURE_QUEUE);
+        let hub = self.clone();
+        let worker = async move {
+            let mut paused_until: Option<Instant> = None;
+            let mut last_counted = String::new();
+            while let Some(job) = rx.recv().await {
+                let span = tracing::info_span!(
+                    parent: None,
+                    "arcane.capture",
+                    otel.kind = "consumer",
+                    messaging.system = "tokio",
+                    messaging.operation.name = "process",
+                    "messaging.operation.type" = "process",
+                    messaging.destination.name = CAPTURE_QUEUE_NAME,
+                    trace_id = tracing::field::Empty,
+                    span_id = tracing::field::Empty,
+                );
+                let job = job.enter(&span);
+                // One iteration per job; `return` skips to the next job.
+                async {
+                    let Ok(roll) = serde_json::from_str::<Value>(&job.roll) else { return };
+                    let Some(roll_id) = roll.get("roll_id").and_then(Value::as_str).filter(|r| is_roll_id(r))
+                    else {
+                        return;
+                    };
+                    // Nothing is kept unless the store is configured.
+                    let Some(ds) = dataset() else { return };
+                    let Some(jpeg) = job.jpeg.filter(|j| is_image(j)) else {
+                        tracing::debug!(roll_id, "roll picture missing or not an image; not kept");
+                        return;
+                    };
+                    let capture = Capture {
+                        roll_id: roll_id.to_string(),
+                        frame: job.frame.and_then(|f| serde_json::from_str(&f).ok()),
+                        roll: roll.clone(),
+                        jpeg: jpeg.to_vec(),
+                    };
+                    hub.hold(&user, &capture).await;
+
+                    if paused_until.is_some_and(|t| Instant::now() < t) {
+                        return;
+                    }
+                    // Decide first; only rolls that would be kept cost a consent lookup.
+                    let Some(reason) = auto_reason(&capture.roll, roll_id, ds.sample_every()) else { return };
+                    match shares(&token).await {
+                        Ok(true) => {}
+                        Ok(false) => return,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "dataset consent lookup failed; pausing samples");
+                            crate::trace::failed("consent_lookup");
+                            paused_until = Some(Instant::now() + ERROR_PAUSE);
+                            return;
+                        }
+                    }
+                    // Re-emissions of the same roll refresh it without counting again.
+                    if last_counted != roll_id {
+                        let n = hub.count_in_window(&format!("arcane:auto_count:{user}"), 86_400).await;
+                        if n.is_none_or(|n| n > AUTO_SAMPLES_PER_DAY) {
+                            return;
+                        }
+                        last_counted = roll_id.to_string();
+                    }
+                    if let Err(e) = ds.save(&user, &capture, Some(reason), None).await {
+                        tracing::warn!(error = %e, "saving dataset sample failed; pausing samples");
+                        crate::trace::failed("surrealdb");
+                        paused_until = Some(Instant::now() + ERROR_PAUSE);
+                    }
+                }
+                .instrument(span)
+                .await;
+            }
+        };
+        // Per connection, not per process: shutdown waits for the captures still queued.
+        crate::trace::spawn_loop("camera session: keeps roll pictures", crate::trace::session(worker));
+        tx
+    }
+
+    /// Keep `user`'s latest roll and picture for `HOLD_SECS`, replacing any earlier
+    /// one. Both keys are written in one transaction so they always belong together.
+    async fn hold(&self, user: &str, c: &Capture) {
+        let meta = json!({"roll_id": c.roll_id, "roll": c.roll, "frame": c.frame}).to_string();
+        let expire = Some(Expiration::EX(HOLD_SECS));
+        let tx = self.pool.next().multi();
+        let queued: Result<(), _> = async {
+            tx.set::<(), _, _>(held_jpeg_key(user), Bytes::from(c.jpeg.clone()), expire.clone(), None, false)
+                .await?;
+            tx.set::<(), _, _>(held_meta_key(user), meta, expire, None, false).await?;
+            tx.exec::<tower_sessions_redis_store::fred::types::Value>(true).await.map(|_| ())
+        }
+        .await;
+        if let Err(e) = queued {
+            tracing::warn!(error = %e, "holding roll picture failed");
+            crate::trace::failed("redis");
+        }
+    }
+
+    /// The held roll, if it is still there and is `roll_id`. Both keys are read in
+    /// one command, so the picture always matches the roll.
+    pub async fn held(&self, user: &str, roll_id: &str) -> Option<Capture> {
+        let both: Vec<Option<Bytes>> = self
+            .pool
+            .next()
+            .mget(vec![held_meta_key(user), held_jpeg_key(user)])
+            .await
+            .inspect_err(|_| crate::trace::failed("redis"))
+            .ok()?;
+        let [meta, jpeg]: [Option<Bytes>; 2] = both.try_into().ok()?;
+        let meta: Value = serde_json::from_slice(&meta?).ok()?;
+        if meta.get("roll_id").and_then(Value::as_str) != Some(roll_id) {
+            return None;
+        }
+        Some(Capture {
+            roll_id: roll_id.to_string(),
+            roll: meta.get("roll").cloned().unwrap_or(Value::Null),
+            frame: meta.get("frame").cloned().filter(|f| !f.is_null()),
+            jpeg: jpeg?.to_vec(),
+        })
+    }
+
+    pub async fn clear_held(&self, user: &str) {
+        let r: Result<i64, _> = self.pool.next().del(vec![held_meta_key(user), held_jpeg_key(user)]).await;
+        if let Err(e) = r {
+            tracing::warn!(error = %e, "clearing held roll failed");
+            crate::trace::failed("redis");
+        }
+    }
+
+    /// Removes everything kept in Redis for `user` (held roll, last roll, rate
+    /// counters), for deleting their account.
+    pub async fn forget_user(&self, user: &str) -> Result<(), Error> {
+        let keys = vec![
+            held_meta_key(user),
+            held_jpeg_key(user),
+            format!("{}{user}", crate::rolls::LAST_ROLL_PREFIX),
+            format!("arcane:auto_count:{user}"),
+            format!("arcane:flag_count:{user}"),
+        ];
+        let _: i64 = self.pool.next().del(keys).await.inspect_err(|_| crate::trace::failed("redis"))?;
+        Ok(())
+    }
+
+    /// Increment a counter that resets `secs` after it was created; returns the new
+    /// value, or None if Redis failed (callers refuse). The counter is created with
+    /// its expiry in one command, so it can never be left without one.
+    async fn count_in_window(&self, key: &str, secs: i64) -> Option<i64> {
+        let client = self.pool.next();
+        let created: Result<Option<String>, _> = client
+            .set(key, 0, Some(Expiration::EX(secs)), Some(SetOptions::NX), false)
+            .await;
+        if let Err(e) = created {
+            tracing::warn!(error = %e, "rate counter failed");
+            crate::trace::failed("redis");
+            return None;
+        }
+        client
+            .incr(key)
+            .await
+            .inspect_err(|e| {
+                tracing::warn!(error = %e, "rate counter failed");
+                crate::trace::failed("redis");
+            })
+            .ok()
+    }
+}
+
+/// The flag endpoint is called by the extension: its Origin is the extension's own
+/// (random per install) or absent. Web pages other than this site and `extra` (comma-separated,
+/// `ARCANE_ALLOWED_ORIGINS`) are refused; they also can't send a JSON body cross-site without
+/// CORS, which is never granted.
+pub(crate) fn flag_origin_allowed(headers: &HeaderMap, extra: &str) -> bool {
+    match headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
+        Some(o) if o.starts_with("moz-extension://") || o.starts_with("chrome-extension://") => true,
+        _ => origin_allowed_with(headers, extra, cfg!(debug_assertions)),
+    }
+}
+
+fn unavailable() -> json_api::ApiError {
+    ApiError::new(ErrorCode::Unavailable, "Flagging isn't available right now.").into()
+}
+
+/// `POST /api/arcane/flag` `{"roll_id":..,"values":["5",null,..]}`: save the user's
+/// latest roll and its picture as a wrong reading, with optional corrections. The access
+/// layer has checked `arcane`, and the origin (the extension's is let in).
+pub async fn arcane_flag(
+    viewer: Viewer,
+    NoApi(hub): json_api::Hub,
+    Body(req): Body<FlagRequest>,
+) -> Result<Json<Flagged>, json_api::ApiError> {
+    let user = viewer.username()?;
+    let (Some(Extension(hub)), Some(ds)) = (hub, dataset()) else {
+        return Err(unavailable());
+    };
+    if !is_roll_id(&req.roll_id) {
+        return Err(ApiError::new(ErrorCode::Invalid, "That isn't a roll.").into());
+    }
+    let Some(capture) = hub.held(user, &req.roll_id).await else {
+        let message = "That roll can't be flagged any more: only your latest roll can be, for 10 minutes.";
+        return Err(ApiError::new(ErrorCode::Gone, message).into());
+    };
+    let dice = capture.roll.get("dice").and_then(Value::as_array).map_or(0, Vec::len);
+    let Some(values) = clean_values(&req.values, dice) else {
+        let message = "Give one value per die: a face from 0 to 20, or nothing.";
+        return Err(ApiError::new(ErrorCode::Invalid, message).into());
+    };
+    // Counted only for flags that would be saved; refused if Redis can't count.
+    match hub.count_in_window(&format!("arcane:flag_count:{user}"), 3600).await {
+        Some(n) if n <= FLAGS_PER_HOUR => {}
+        Some(_) => {
+            let message = "You've flagged a lot of rolls this hour. Try again later.";
+            return Err(ApiError::new(ErrorCode::RateLimited, message).into());
+        }
+        None => return Err(unavailable()),
+    }
+    match ds.save(user, &capture, None, Some(&values)).await {
+        Ok(()) => {
+            tracing::info!(roll_id = %req.roll_id, "roll flagged as wrong");
+            Ok(Json(Flagged { ok: true }))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "saving flagged roll failed");
+            Err(ApiError::new(ErrorCode::Upstream, "The roll couldn't be saved. Try again.").into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ring_numbers_every_frame_and_keeps_the_last_ones() {
+        let mut ring = FrameRing::default();
+        for i in 0..40u8 {
+            ring.push(&Bytes::from(vec![i]));
+        }
+        assert_eq!(ring.get(40).as_deref(), Some(&[39u8][..]));
+        assert_eq!(ring.get(25).as_deref(), Some(&[24u8][..]), "oldest kept");
+        assert!(ring.get(24).is_none(), "older than the ring");
+    }
+
+    #[test]
+    fn oversized_frames_are_counted_but_not_kept() {
+        let mut ring = FrameRing::default();
+        ring.push(&Bytes::from(vec![0u8; MAX_FRAME_BYTES + 1]));
+        ring.push(&Bytes::from_static(b"ok"));
+        assert!(ring.get(1).is_none());
+        assert_eq!(ring.get(2).as_deref(), Some(&b"ok"[..]), "numbering stays in step");
+    }
+
+    #[test]
+    fn only_jpeg_and_png_are_images() {
+        assert!(is_image(b"\xff\xd8\xff\xe0rest"));
+        assert!(is_image(b"\x89PNG\r\n\x1a\nrest"));
+        assert!(!is_image(b"GIF89a"));
+        assert!(!is_image(b"<svg"));
+        assert!(!is_image(b""));
+    }
+
+    #[test]
+    fn extension_and_same_site_origins_may_flag() {
+        let h = |origin: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::HOST, "milesstorm.com".parse().unwrap());
+            h.insert(header::ORIGIN, origin.parse().unwrap());
+            h
+        };
+        assert!(flag_origin_allowed(&h("moz-extension://1b2c3d"), ""));
+        assert!(flag_origin_allowed(&h("chrome-extension://abcdef"), ""));
+        assert!(flag_origin_allowed(&h("https://milesstorm.com"), ""));
+        assert!(!flag_origin_allowed(&h("https://evil.example"), ""));
+        assert!(flag_origin_allowed(&h("https://dev.example"), "https://dev.example, https://other.example"));
+    }
+}

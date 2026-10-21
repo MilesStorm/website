@@ -12,7 +12,7 @@ name: e2e
 # until its branch is pushed here.
 #
 # Built on eta, like the release images: its Docker keeps unchanged layers and the cargo cache
-# mounts between runs, where a GitHub runner builds Rust and the wasm from nothing. Only people
+# mounts between runs, where a GitHub runner builds Rust from nothing. Only people
 # who can write to this repository push to it, except Renovate: its branches carry dependency
 # versions no one has reviewed yet, so they build on a GitHub runner instead, never on eta.
 

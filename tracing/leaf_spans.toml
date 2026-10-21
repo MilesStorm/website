@@ -120,29 +120,8 @@ reason = "marks the session for a new ID; the store write happens later in the s
 
 [[leaf]]
 service = "frontend"
-name = "bff.after_login_path"
-reason = "reads the session in memory; the store read happened in the session layer"
-
-[[leaf]]
-service = "frontend"
 name = "bff.logout"
 reason = "clears the session in memory; the store delete happens later in the session layer"
-
-[[leaf]]
-service = "frontend"
-name = "bff.check_login_status"
-reason = "childless when logged out: no token, so no call to auth"
-
-[[leaf]]
-service = "frontend"
-name = "bff.get_my_permissions"
-reason = "childless when logged out: no token, so no call to auth"
-
-[[cpu]]
-service = "frontend"
-name = "ssr.render"
-reason = "the Dioxus page render: its own time is render CPU between the server futures (see the profiler)"
-
 
 [[leaf]]
 service = "frontend"
@@ -151,18 +130,43 @@ reason = "after a login without a pending invite it only reads the session and r
 
 [[leaf]]
 service = "frontend"
-name = "GET /assets/*"
-reason = "a static file sent from disk: the span is the read and the send, with nothing of ours inside"
+name = "GET /favicon.ico"
+reason = "the site's icon sent from disk: the read and the send, with nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "* /api/{*rest}"
+reason = "an API path that doesn't exist: the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
+name = "* /api/"
+reason = "the API's prefix alone: the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
+name = "* /bff/{*rest}"
+reason = "an old Dioxus server-function path: the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
+name = "* /bff/"
+reason = "the old server functions' prefix alone: the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
+name = "GET NotFound"
+reason = "Astro's 404 page for an unknown path: childless for a request without a session"
 
 [[leaf]]
 service = "frontend"
 name = "GET /_astro/*"
 reason = "an Astro file (hashed) sent from disk: the read and the send, with nothing of ours inside"
 
-# Astro's pages (FRONTEND_UI=astro), one entry per page, never a glob: a broader one would hide
+# Astro's pages, one entry per page, never a glob: a broader one would hide
 # childless API GETs. A request without a session is childless whatever the page's access: a
 # public page is served, a guarded one redirects to /login?next=, a guest-only one is served. A
-# Rust test (packages/web/src/pages/tests.rs) checks every page in PAGES has one.
+# Rust test (crates/bff/src/pages/tests.rs) checks every page in PAGES has one.
 [[leaf]]
 service = "frontend"
 name = "GET /"

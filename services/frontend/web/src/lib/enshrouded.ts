@@ -60,7 +60,7 @@ export function playersOnline(n: number): string {
 }
 
 /** What a recent command did, after its sender's name. A name auth has and this site doesn't
- * know reads as a restart, as on the Dioxus panel. */
+ * know reads as a restart. */
 export function actionText(action: Schemas['EnshroudedActionName']): string {
   if (action === 'update') return ' asked for an update';
   if (action === 'update_now') return ' force-updated the server, disconnecting players';

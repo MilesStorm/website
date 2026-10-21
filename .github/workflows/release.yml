@@ -20,7 +20,7 @@ env:
   # name:directory:Cargo.toml (for the version tag). A new service only needs a line here
   # (and its Argo apps in the homelab repo); its approval box appears on its first release.
   SERVICES: >-
-    frontend:services/frontend:packages/web/Cargo.toml
+    frontend:services/frontend:crates/bff/Cargo.toml
     auth:services/auth:Cargo.toml
     ai-pipeline:services/ai_pipeline:Cargo.toml
 

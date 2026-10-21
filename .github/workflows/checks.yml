@@ -31,22 +31,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: services/frontend
-      # asset! needs the vendored Faro bundles and the Tailwind CSS at compile time.
-      - run: npm ci && npm run vendor
-      - run: node_modules/.bin/tailwindcss -i packages/ui/tailwind.css -o packages/ui/assets/styling/tailwind.css --minify
-      - run: cargo clippy -p api-types -p api -p web --features web/server --all-targets -- -D warnings
-      - run: cargo test -p api-types -p api -p web --features web/server
-      - run: npm run test:trace
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
       # The committed API contract is what the handlers say (web/src/api/openapi.json), and the
       # TypeScript types are generated from it: regenerate both with `npm run api` in web/.
       - name: OpenAPI document is current
-        run: cargo run -q -p web --features web/server -- openapi | diff - web/src/api/openapi.json
+        run: cargo run -q -p bff --bin server -- openapi | diff - web/src/api/openapi.json
       - name: TypeScript API types are current
         working-directory: services/frontend/web
         run: npm ci && npm run api:types && git diff --exit-code -- src/api/schema.d.ts
       # aide can't read a response type through `impl IntoApiResponse`: handlers name theirs.
       - name: API handlers return concrete types
-        run: '! grep -rn "impl IntoApiResponse" packages/web/src'
+        run: '! grep -rn "impl IntoApiResponse" crates/bff/src'
       # The Astro pages: typed against schema.d.ts, their component tests, and a build with
       # exactly the pages in PAGES, each with the marker the server splices at.
       - name: Astro pages type-check
@@ -57,10 +53,13 @@ jobs:
       - name: Component tests
         working-directory: services/frontend/web
         run: npm test
+      - name: Tracing script tests
+        working-directory: services/frontend/web
+        run: npm run test:trace
       - name: Astro build has exactly the pages
         env:
           ASTRO_TELEMETRY_DISABLED: 1
-        run: (cd web && npm run build) && cargo run -q -p web --features web/server -- check-pages web/dist
+        run: (cd web && npm run build) && cargo run -q -p bff --bin server -- check-pages web/dist
 
   # The browser extension's scripts, type-checked (tsconfig.json); a job of its own so it runs
   # beside the frontend's.

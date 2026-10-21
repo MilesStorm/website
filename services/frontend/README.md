@@ -1,53 +1,23 @@
-# Development
+# Frontend
 
-The workspace contains the `web` crate, a `ui` crate for shared components and an `api` crate for shared backend logic:
-
-```
-your_project/
-├─ README.md
-├─ Cargo.toml
-└─ packages/
-   ├─ web/
-   │  └─ ... # Web specific UI/logic
-   ├─ api/
-   │  └─ ... # All shared server logic
-   └─  ui/
-      └─ ... # Component shared between multiple platforms
-```
-
-## Shared UI crate
-
-The workspace contains a `ui` crate with components that are shared between multiple platforms.  The `ui` crate starts out something like this:
+The website: Astro pages with React islands, served by a Rust (axum) server that is also the
+backend for frontend (BFF). One image, `ghcr.io/milesstorm/frontend`.
 
 ```
-ui/
-├─ src/
-│  ├─ lib.rs # The entrypoint for the ui crate
-│  ├─ hero.rs # The Hero component that will be used in every platform
-│  ├─ echo.rs # The shared echo component that communicates with the server
-│  ├─ navbar.rs # The Navbar component that will be used in the layout of every platform's router
+services/frontend/
+├─ Cargo.toml        # workspace: crates/*
+├─ Dockerfile        # web ∥ bff → verify → runtime (no Node at run time)
+├─ crates/
+│  ├─ bff/           # package `bff`, binary `server`: the pages (spliced with the viewer and the
+│  │                 #   trace), the JSON API under /api/*, OAuth, the camera WebSocket, rolls
+│  └─ api-types/     # the API's types and the PAGES table, the source of the OpenAPI document
+├─ web/              # the Astro app: src/pages, src/islands, src/components/ui (shadcn),
+│                    #   assets/trace.js (browser tracing), src/api (generated client types)
+└─ surreal/          # the SurrealDB schema the server applies at startup
 ```
 
-## Shared backend logic
-
-The workspace contains a `api` crate with shared backend logic. This crate defines the shared server functions. Server functions are async functions that expose a public API on the server. They can be called like a normal async function from the client. When you run `dx serve`, all of the server functions will be collected in the server build and hosted on a public API for the client to call. The `api` crate starts out something like this:
-
-```
-api/
-├─ src/
-│  ├─ lib.rs # Exports a server function that echos the input string
-```
-
-### Serving Your App
-
-Navigate to the web crate:
-```bash
-cd web
-```
-
-and serve:
-
-```bash
-dx serve
-```
-
+- `server` serves the site. `server openapi` prints the API's OpenAPI document (committed as
+  `web/src/api/openapi.json`; `npm run api` in `web/` regenerates it and the TypeScript types).
+  `server check-pages <dir>` checks an Astro build has exactly the pages in `PAGES`.
+- Running it locally: the root [README](../../README.MD#run-the-web-application-locally).
+  Configuration: [ENV.md](../../ENV.md). Tracing: [TRACING.md](../../TRACING.md).
