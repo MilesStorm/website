@@ -226,20 +226,51 @@ fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Bu
     let assets = Router::new()
         .route_service("/_astro/{*path}", files)
         .layer(axum::middleware::map_response(immutable));
-    router.merge(assets).fallback(move |request, viewer| not_found(built.clone(), request, viewer))
+    // The icon browsers ask for at the root (Astro's `public/`), not hashed: kept a day.
+    let favicon = Router::new()
+        .route_service("/favicon.ico", tower_http::services::ServeFile::new(built.dir.join("favicon.ico")))
+        .layer(axum::middleware::map_response(a_day));
+    router
+        .merge(assets)
+        .merge(favicon)
+        // Dioxus's server functions are explicit routes: any other `/bff/*` path is an API call
+        // that doesn't exist, answered as `/api/*`'s are.
+        .route("/bff/{*rest}", axum::routing::any(|| async { json_api::no_such_api() }))
+        .fallback(move |req: Request| not_found(built.clone(), req))
 }
 
-/// Any other path: the 404 page, spliced like every page, with status 404.
-async fn not_found(
-    built: Arc<Built>,
-    request: Option<axum::Extension<api::trace::RequestTraceContext>>,
-    viewer: Result<json_api::Viewer, json_api::ApiError>,
-) -> Response {
-    let bootstrap = match viewer {
+/// `favicon.ico`'s cache header, a 304 included.
+async fn a_day(mut res: Response) -> Response {
+    if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
+        res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
+    }
+    res
+}
+
+/// Any other path: the 404 page, spliced like every page, with status 404. A request that isn't
+/// a page load (a file the build doesn't have, such as `/robots.txt`, or a method other than
+/// GET/HEAD) gets a bare 404, and asks auth nothing.
+async fn not_found(built: Arc<Built>, req: Request) -> Response {
+    if !page_like(&req) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let request = req.extensions().get::<api::trace::RequestTraceContext>().cloned();
+    let (mut parts, _) = req.into_parts();
+    let bootstrap = match json_api::Viewer::from_request_parts(&mut parts, &()).await {
         Ok(viewer) => json_api::bootstrap(viewer.0).await,
+        // Logged out is what the page then shows; the reason is logged by the extractor.
         Err(_) => Bootstrap { viewer: None },
     };
-    respond(&built, "404.html", StatusCode::NOT_FOUND, request.as_ref().map(|r| &r.0), &bootstrap)
+    respond(&built, "404.html", StatusCode::NOT_FOUND, request.as_ref(), &bootstrap)
+}
+
+/// Whether `req` could be a page load: GET or HEAD, of a path whose last part names no file
+/// other than an HTML one.
+fn page_like(req: &Request) -> bool {
+    let method = req.method();
+    let last = req.uri().path().rsplit('/').next().unwrap_or("");
+    (method == axum::http::Method::GET || method == axum::http::Method::HEAD)
+        && (!last.contains('.') || last.ends_with(".html"))
 }
 
 /// What a page that isn't public answers a viewer.

@@ -641,8 +641,9 @@ impl Public {
             guard,
         );
         std::fs::create_dir_all(public.0.join("assets")).unwrap();
+        // As `dx bundle` makes it: the Dioxus icon is a hashed file under `assets/`, so no
+        // root `favicon.ico` (the Astro build serves that one).
         std::fs::write(public.0.join("assets/web.js"), "").unwrap();
-        std::fs::write(public.0.join("favicon.ico"), "").unwrap();
         std::env::set_var("DIOXUS_PUBLIC_PATH", &public.0);
         public
     }

@@ -92,3 +92,17 @@ test('any other path is the 404 page, for every kind of viewer', async ({ contex
     await expectAccessible(page);
   }
 });
+
+test('what isn’t a page load gets no page: the icon, unknown API paths, unknown files', async ({ request }) => {
+  const icon = await request.get('/favicon.ico');
+  expect(icon.status()).toBe(200);
+  expect(icon.headers()['content-type']).toBe('image/x-icon');
+  for (const path of ['/api/nope', '/bff/nope']) {
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(404);
+    expect((await res.json()).error, path).toBe('not_found');
+  }
+  const file = await request.get('/robots.txt');
+  expect(file.status()).toBe(404);
+  expect(await file.text()).toBe('');
+});

@@ -33,6 +33,7 @@ impl Dist {
         }
         std::fs::write(dir.join("_astro/app.Ab12.js"), "console.log(1)").unwrap();
         std::fs::write(dir.join("_astro/app.Ab12.js.br"), "brotli").unwrap();
+        std::fs::write(dir.join("favicon.ico"), "icon").unwrap();
         Self(dir)
     }
 
@@ -177,6 +178,13 @@ async fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
                 let html = String::from_utf8_lossy(&body);
                 assert!(html.contains("<body>404.html</body>") && html.contains(r#"id="bootstrap""#), "{path}: {html}");
             }
+            // An API path that doesn't exist is the error envelope, a server function's too.
+            for path in ["/api/nope", "/bff/nope"] {
+                let res = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+                assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
+                let body: Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap()).unwrap();
+                assert_eq!(body["error"], "not_found", "{path}");
+            }
         } else {
             // Without the flag, Dioxus renders it (a 200 with its own page).
             let res = app.clone().oneshot(Request::get("/nope").body(Body::empty()).unwrap()).await.unwrap();
@@ -295,6 +303,8 @@ fn every_page_is_a_leaf_span() {
     }
     assert!(leaf("GET /_astro/*"), "no [[leaf]] for Astro's files");
     assert!(leaf("GET NotFound"), "no [[leaf]] for the 404 page");
+    assert!(leaf("GET /favicon.ico"), "no [[leaf]] for the icon");
+    assert!(leaf("* /bff/{*rest}") && leaf("* /api/{*rest}"), "no [[leaf]] for the API's 404s");
 }
 
 /// The browser continues the page request's own SERVER span (TRACING.md, "Browser").
@@ -518,4 +528,34 @@ async fn without_the_flag_a_page_span_is_named_after_its_dioxus_route() {
         .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
     app.oneshot(Request::get("/enshrouded").body(Body::empty()).unwrap()).await.unwrap();
     crate::trace_tests::span(&exporter, &format!("GET {}", crate::page_name("/enshrouded"))).await;
+}
+
+/// What isn't a page load gets no page: an unknown API or server-function path is the error
+/// envelope, a file the build doesn't have or another method a bare 404, all without asking
+/// auth; the root icon is served.
+#[tokio::test]
+async fn only_page_loads_get_the_404_page() {
+    let dist = Dist::new("notpages");
+    let app = super::mount(axum::Router::new().merge(crate::json_api::router()), Some(dist.built()));
+    let mut site = Site::serving(app).await.log_in("all").await;
+    for path in ["/api/nope", "/bff/nope", "/bff/get_account99"] {
+        let reply = site.get(path).await;
+        assert_eq!((reply.status, reply.body["error"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")), "{path}");
+    }
+    for path in ["/robots.txt", "/apple-touch-icon.png", "/no/such.js"] {
+        let reply = site.get(path).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+        assert!(reply.bytes.is_empty(), "{path}: a bare 404");
+    }
+    let posted = site.send(axum::http::Method::POST, "/nope", None, None).await;
+    assert_eq!(posted.status, StatusCode::NOT_FOUND);
+    assert!(posted.bytes.is_empty());
+    assert_eq!(site.auth.introspected("all"), 0, "none of these asks auth");
+
+    let icon = site.get("/favicon.ico").await;
+    assert_eq!((icon.status, icon.bytes.as_slice()), (StatusCode::OK, &b"icon"[..]));
+    assert_eq!(icon.headers[header::CACHE_CONTROL], "public, max-age=86400");
+    // A page load still is the 404 page.
+    assert_eq!(site.get("/nope").await.status, StatusCode::NOT_FOUND);
+    assert_eq!(site.auth.introspected("all"), 1);
 }

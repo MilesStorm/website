@@ -751,7 +751,7 @@ pub fn router() -> axum::Router {
 
 /// [`router`] with the flag's extra origins (comma-separated).
 pub(crate) fn router_with(arcane_origins: &str) -> axum::Router {
-    let not_found = || async { ApiError::from(api_types::ApiError::new(ErrorCode::NotFound, "There is no such API.")) };
+    let not_found = || async { no_such_api() };
     let not_allowed = || async {
         ApiError::from(api_types::ApiError::new(ErrorCode::Invalid, "That method isn't allowed here.").with_status(405))
     };
@@ -759,6 +759,12 @@ pub(crate) fn router_with(arcane_origins: &str) -> axum::Router {
         .0
         .method_not_allowed_fallback(not_allowed)
         .route("/api/{*rest}", axum::routing::any(not_found))
+}
+
+/// An API path that doesn't exist: the error envelope, 404 (`/api/*`, and `/bff/*` under the
+/// Astro pages, [`crate::pages`]).
+pub(crate) fn no_such_api() -> ApiError {
+    ApiError::from(api_types::ApiError::new(ErrorCode::NotFound, "There is no such API."))
 }
 
 /// The OpenAPI document as `web openapi` prints it (and web/src/api/openapi.json holds it).

@@ -156,6 +156,21 @@ reason = "a static file sent from disk: the span is the read and the send, with 
 
 [[leaf]]
 service = "frontend"
+name = "GET /favicon.ico"
+reason = "the site's icon sent from disk (FRONTEND_UI=astro): the read and the send, with nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "* /api/{*rest}"
+reason = "an API path that doesn't exist: the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
+name = "* /bff/{*rest}"
+reason = "a server-function path that doesn't exist (FRONTEND_UI=astro): the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
 name = "GET NotFound"
 reason = "Astro's 404 page for an unknown path (FRONTEND_UI=astro): childless for a request without a session"
 
