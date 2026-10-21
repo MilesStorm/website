@@ -84,7 +84,6 @@ Create `services/frontend/.env` (the server reads `.env` from the directory it r
 ```dotenv
 BFF_SERVICE_SECRET=replace-with-a-shared-local-secret
 AUTH_SERVICE_URL=http://127.0.0.1:7070
-PUBLIC_AUTH_URL=http://localhost:7070
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 ```

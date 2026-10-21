@@ -14,7 +14,6 @@ spec:
           env:
             - {name: OTEL_RESOURCE_ATTRIBUTES, value: "deployment.environment.name=staging"}
             - {name: AUTH_SERVICE_URL, value: "http://auth-service.website-staging.svc.cluster.local"}
-            - {name: PUBLIC_AUTH_URL, value: "https://staging.milesstorm.com"}
             - {name: REDIS_HOST, value: "redis.website-staging.svc.cluster.local"}
             - {name: AI_PIPELINE_SERVICE_URL, value: "ws://ai-pipeline-service.website-staging.svc.cluster.local:9000"}
             - {name: SURREAL_USER, value: "dice_staging"}

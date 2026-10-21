@@ -44,7 +44,7 @@ echo $! > .fake.pid
 docker run -d --rm --name frontend-e2e --network host \
   -e IP=127.0.0.1 -e PORT="$E2E_PORT" -e GIT_SHA=e2e0000 \
   -e REDIS_HOST=127.0.0.1 -e REDIS_PORT="$REDIS_PORT" \
-  -e AUTH_SERVICE_URL="http://127.0.0.1:$FAKE_PORT" -e PUBLIC_AUTH_URL="http://127.0.0.1:$FAKE_PORT" \
+  -e AUTH_SERVICE_URL="http://127.0.0.1:$FAKE_PORT" \
   -e BFF_SERVICE_SECRET=e2e-only -e AI_PIPELINE_SERVICE_URL="ws://127.0.0.1:$FAKE_AI_PORT" \
   -e SURREAL_URL="http://127.0.0.1:$SURREAL_PORT" -e SURREAL_USER=dice -e SURREAL_PASS=e2e-only \
   "$IMAGE" >/dev/null
