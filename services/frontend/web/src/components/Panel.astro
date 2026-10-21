@@ -1,6 +1,7 @@
 ---
 // A short page in one centred card: the logging-in pages and the short messages. shadcn's
-// login-03 block: the card on a muted page, its header centred, the content the card's width.
+// login-03 block: the card on a muted page (the plain one in dark), its header centred, the
+// content the card's width.
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface Props {
@@ -10,17 +11,16 @@ interface Props {
 const { title, description } = Astro.props;
 ---
 
-<main class="flex min-h-[calc(100svh-3.5rem-1px)] flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10">
+<main class="flex min-h-[calc(100svh-3.5rem-1px)] flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10 dark:bg-background">
   <div class="flex w-full max-w-sm flex-col gap-6">
     <Card>
       <CardHeader className="text-center">
         <CardTitle className="text-xl"><h1>{title}</h1></CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
-      <CardContent>
+      <CardContent className="gap-4">
         <slot />
       </CardContent>
     </Card>
-    <slot name="after" />
   </div>
 </main>

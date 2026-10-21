@@ -12,7 +12,7 @@ import { client } from '@/api/client';
 import { applySession } from '@/api/session';
 import { attempt } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
-import { MIN_PASSWORD } from '@/lib/password';
+import { MIN_PASSWORD, NEW_PASSWORD_HINT } from '@/lib/copy';
 
 const schema = z
   .object({
@@ -65,7 +65,7 @@ export function ResetForm() {
           label="New password"
           type="password"
           autoComplete="new-password"
-          description={`At least ${MIN_PASSWORD} characters.`}
+          description={NEW_PASSWORD_HINT}
         />
         <TextField form={form} name="again" label="Type it again" type="password" autoComplete="new-password" />
         <FormAlert message={error?.message} />

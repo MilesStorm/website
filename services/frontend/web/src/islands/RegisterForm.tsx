@@ -10,7 +10,7 @@ import { TextField } from '@/components/TextField';
 import { client } from '@/api/client';
 import { attempt } from '@/lib/errors';
 import { landAfterLogin, nextFrom } from '@/lib/login';
-import { MIN_PASSWORD } from '@/lib/password';
+import { HAVE_ACCOUNT, MIN_PASSWORD, REGISTER_PASSWORD_HINT } from '@/lib/copy';
 
 const schema = z.object({
   email: z.email('Enter an email address.'),
@@ -53,7 +53,7 @@ export function RegisterForm() {
           label="Password"
           type="password"
           autoComplete="new-password"
-          description={`At least ${MIN_PASSWORD} characters. We'll email you a link to confirm your address.`}
+          description={REGISTER_PASSWORD_HINT}
         />
         <FormAlert message={error} />
         <Field>
@@ -61,7 +61,7 @@ export function RegisterForm() {
             Sign up with email
           </Button>
           <FieldDescription className="text-center">
-            Already have an account? <a href={login}>Log in</a>
+            {HAVE_ACCOUNT.text} <a href={login}>{HAVE_ACCOUNT.link}</a>
           </FieldDescription>
         </Field>
       </FieldGroup>

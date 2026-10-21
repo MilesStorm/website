@@ -9,6 +9,7 @@ import { OAuthButtons } from '@/components/OAuthButtons';
 import { TextField } from '@/components/TextField';
 import { client } from '@/api/client';
 import { attempt, oauthError } from '@/lib/errors';
+import { FORGOT_LINK, NO_ACCOUNT } from '@/lib/copy';
 import { landAfterLogin, nextFrom } from '@/lib/login';
 
 const schema = z.object({
@@ -46,7 +47,7 @@ export function LoginForm() {
           autoComplete="current-password"
           action={
             <a href="/forgot-password" className="text-sm underline-offset-4 hover:underline">
-              Forgot your password?
+              {FORGOT_LINK}
             </a>
           }
         />
@@ -56,7 +57,7 @@ export function LoginForm() {
             Log in
           </Button>
           <FieldDescription className="text-center">
-            Don&apos;t have an account? <a href={withNext('/register')}>Sign up</a>
+            {NO_ACCOUNT.text} <a href={withNext('/register')}>{NO_ACCOUNT.link}</a>
           </FieldDescription>
         </Field>
       </FieldGroup>

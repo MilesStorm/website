@@ -21,9 +21,10 @@ const LINKS: { href: Href; label: string; requires: KnownPermission }[] = [
 const link = buttonVariants({
   variant: 'ghost',
   size: 'sm',
-  className: 'px-2.5 text-muted-foreground aria-[current=page]:text-foreground',
+  className: 'text-muted-foreground aria-[current=page]:text-foreground',
 });
-const here = Astro.url.pathname.replace(/\.html$/, '');
+// Built as files (`build.format: 'file'`): /login.html is /login, /index.html is /.
+const here = Astro.url.pathname.replace(/(\/index)?\.html$/, '') || '/';
 const current = (href: Href) => (href === here ? 'page' : undefined);
 ---
 
@@ -61,15 +62,17 @@ const current = (href: Href) => (href === here ? 'page' : undefined);
           <Menu aria-hidden="true" />
         </summary>
         <ul class="absolute right-0 mt-2 flex w-48 flex-col gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          <li><a href="/" class={link + ' w-full justify-start'}>Home</a></li>
+          <li><a href="/" class={link + ' w-full justify-start'} aria-current={current('/')}>Home</a></li>
           {
             LINKS.map((l) => (
               <Gate as="li" requires={l.requires}>
-                <a href={l.href} class={link + ' w-full justify-start'}>{l.label}</a>
+                <a href={l.href} class={link + ' w-full justify-start'} aria-current={current(l.href)}>
+                  {l.label}
+                </a>
               </Gate>
             ))
           }
-          <Gate as="li" session="in"><a href="/profile" class={link + ' w-full justify-start'}>Profile</a></Gate>
+          <Gate as="li" session="in"><a href="/profile" class={link + ' w-full justify-start'} aria-current={current('/profile')}>Profile</a></Gate>
           <Gate as="li" session="out" class="sm:hidden"><a href="/login" class={link + ' w-full justify-start'}>Log in</a></Gate>
         </ul>
       </details>

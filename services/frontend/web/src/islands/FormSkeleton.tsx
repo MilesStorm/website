@@ -1,7 +1,16 @@
 import type { ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSeparator } from '@/components/ui/field';
-import { MIN_PASSWORD } from '@/lib/password';
+import {
+  FORGOT_INTRO,
+  FORGOT_LINK,
+  HAVE_ACCOUNT,
+  NEW_PASSWORD_HINT,
+  NO_ACCOUNT,
+  NO_PASSWORD,
+  REGISTER_PASSWORD_HINT,
+  type Note,
+} from '@/lib/copy';
 
 /** A form's place while its island loads. */
 export function FormSkeleton() {
@@ -41,7 +50,7 @@ function Labelled({ label, action, description }: { label: string; action?: stri
 
 function Frame({ children }: { children: ReactNode }) {
   return (
-    <div aria-busy="true">
+    <div role="status" aria-label="Loading" aria-busy="true">
       <FieldGroup>{children}</FieldGroup>
     </div>
   );
@@ -59,11 +68,16 @@ function OAuth() {
   );
 }
 
-function Submit({ note }: { note?: string }) {
+function Submit({ note }: { note?: Note }) {
   return (
     <Field>
       <Control />
-      {note && <FieldDescription className="text-center">{note}</FieldDescription>}
+      {note && (
+        <FieldDescription className="text-center">
+          {note.text} {note.link}
+          {note.end}
+        </FieldDescription>
+      )}
     </Field>
   );
 }
@@ -73,8 +87,8 @@ export function LoginSkeleton() {
     <Frame>
       <OAuth />
       <Labelled label="Username" />
-      <Labelled label="Password" action="Forgot your password?" />
-      <Submit note="Don't have an account? Sign up" />
+      <Labelled label="Password" action={FORGOT_LINK} />
+      <Submit note={NO_ACCOUNT} />
     </Frame>
   );
 }
@@ -85,8 +99,8 @@ export function RegisterSkeleton() {
       <OAuth />
       <Labelled label="Email" />
       <Labelled label="Username" />
-      <Labelled label="Password" description={`At least ${MIN_PASSWORD} characters. We'll email you a link to confirm your address.`} />
-      <Submit note="Already have an account? Log in" />
+      <Labelled label="Password" description={REGISTER_PASSWORD_HINT} />
+      <Submit note={HAVE_ACCOUNT} />
     </Frame>
   );
 }
@@ -94,8 +108,9 @@ export function RegisterSkeleton() {
 export function ForgotSkeleton() {
   return (
     <Frame>
+      <FieldDescription className="text-center">{FORGOT_INTRO}</FieldDescription>
       <Labelled label="Username or email" />
-      <Submit note="Log in with GitHub or Google? Then you have no password here: use that button on the log in page." />
+      <Submit note={NO_PASSWORD} />
     </Frame>
   );
 }
@@ -103,7 +118,7 @@ export function ForgotSkeleton() {
 export function ResetSkeleton() {
   return (
     <Frame>
-      <Labelled label="New password" description={`At least ${MIN_PASSWORD} characters.`} />
+      <Labelled label="New password" description={NEW_PASSWORD_HINT} />
       <Labelled label="Type it again" />
       <Submit />
     </Frame>
