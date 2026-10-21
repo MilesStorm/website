@@ -276,6 +276,7 @@ function SharingCard() {
     void attempt(client.GET('/api/account/sharing')).then(setState);
   }, []);
 
+  // Shaped for the usual answer (the store is set up): the rarer ones below are shorter.
   if (!state) {
     return (
       <div role="status" aria-label="Loading your sharing setting" aria-busy="true">

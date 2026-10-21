@@ -1,6 +1,6 @@
-// The logging-in forms' and the profile's fixed text, shared with their placeholders
-// (islands/FormSkeleton.tsx, islands/ProfileSkeleton.tsx) so the two can't drift apart in size.
-// Free of the API client: the placeholders are rendered when the pages are built.
+// The logging-in forms', the deletion link's and the profile's fixed text, shared with their
+// placeholders (islands/FormSkeleton.tsx, islands/ProfileSkeleton.tsx) so the two can't drift
+// apart in size. Free of the API client: the placeholders are rendered when the pages are built.
 
 /** Auth's own minimum password length (services/auth); the server checks it too. */
 export const MIN_PASSWORD = 8;

@@ -119,6 +119,8 @@ export function ProfileSkeleton() {
           </CardDescription>
         </CardHeader>
       </Card>
+      {/* The usual answer: the sharing store is set up. Without it the card is left out, and if its
+          setting can't be read it is a one-line alert (Profile's SharingCard). */}
       <div data-requires="arcane">
         <SharingSkeleton />
       </div>

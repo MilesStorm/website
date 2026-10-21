@@ -6,7 +6,7 @@ import { homeCards } from '@/lib/features';
 import { cn } from '@/lib/utils';
 import { bffUrl } from '@/api/client';
 import defaultPicture from '@/assets/default-profile.png';
-import { HERO_NAME, HomeSkeleton } from './HomeSkeleton';
+import { HERO_NAME, HERO_SECTION, HomeSkeleton } from './HomeSkeleton';
 
 /** The logged-in start page: a greeting and the parts of the site, open or locked. */
 export function HomeCards() {
@@ -17,7 +17,7 @@ export function HomeCards() {
   if (!viewer) return <HomeSkeleton />;
   return (
     <div className="flex flex-col gap-4">
-      <section className="flex flex-col items-center gap-2 pt-12 pb-12 text-center md:pt-20 lg:pt-24">
+      <section className={HERO_SECTION}>
         <p className={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M13 2 4 14h7l-1 8 9-12h-7z" />

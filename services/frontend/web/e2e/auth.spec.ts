@@ -2,7 +2,7 @@
 // the emailed links, an invite opened while logged out, and logging out. Against staging, the
 // journeys that would make accounts or need a real emailed code don't run.
 import { expect, test, type Browser, type Page } from '@playwright/test';
-import { STAGING, USERS, expectAccessible, logIn } from './site';
+import { STAGING, USERS, expectAccessible, logIn, shownHeight } from './site';
 
 async function fillLogin(page: Page, who: 'plain' | 'all') {
   await page.getByLabel('Username').fill(USERS[who].username);
@@ -48,18 +48,9 @@ test("an emailed link's code goes in a request body, never in a URL; an expired 
   expect(await page.locator('meta[name="referrer"]').getAttribute('content')).toBe('no-referrer');
 });
 
-/** The height of the page's column (Panel): with scripts off, holding the placeholder; with them
- * on, once `ready` (a locator in `main`) shows. */
-async function panelHeight(browser: Browser, path: string, ready: string | null): Promise<number> {
-  const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled: ready !== null });
-  const page = await context.newPage();
-  await page.goto(path);
-  await page.locator(`main ${ready ?? '[role="status"]'}`).first().waitFor();
-  await page.evaluate(() => document.fonts.ready);
-  const box = await page.locator('main [data-panel]').boundingBox();
-  await context.close();
-  return box!.height;
-}
+/** The height of the page's column (Panel), as `shownHeight` measures it. */
+const panelHeight = (browser: Browser, path: string, ready: string | null) =>
+  shownHeight(browser, path, 'main [data-panel]', ready);
 
 test("each form's placeholder is the form's size, so nothing moves when the form arrives", async ({ browser }) => {
   for (const path of ['/login', '/register', '/forgot-password', '/reset-password#code']) {

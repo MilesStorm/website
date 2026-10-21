@@ -2,7 +2,7 @@
 // looking at them. Changing a name or picture, sharing, and Ark commands (which would start or
 // stop the real game server) run against the stand-ins only.
 import { expect, test, type Browser } from '@playwright/test';
-import { STAGING, expectAccessible, logIn } from './site';
+import { STAGING, expectAccessible, logIn, shownHeight } from './site';
 
 /** A 2×2 PNG: small, and a picture the server can read. */
 const PNG = Buffer.from(
@@ -30,19 +30,9 @@ test('the Ark panel shows who is online', async ({ context, page }) => {
   await expectAccessible(page);
 });
 
-/** The height of `measure` on `path`, logged in with every permission: with scripts off, holding the
- * placeholder; with them on, once `ready` (a locator in `main`) shows. */
-async function loadedHeight(browser: Browser, path: string, measure: string, ready: string | null): Promise<number> {
-  const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled: ready !== null });
-  await logIn(context, 'all');
-  const page = await context.newPage();
-  await page.goto(path);
-  await page.locator(`main ${ready ?? '[role="status"]'}`).first().waitFor();
-  await page.evaluate(() => document.fonts.ready);
-  const box = await page.locator(measure).first().boundingBox();
-  await context.close();
-  return box!.height;
-}
+/** `shownHeight`, logged in with every permission. */
+const loadedHeight = (browser: Browser, path: string, measure: string, ready: string | null) =>
+  shownHeight(browser, path, measure, ready, 'all');
 
 if (!STAGING) {
   // The stand-ins' `tester-all`: the usual answer (a confirmed email), with the sharing card.

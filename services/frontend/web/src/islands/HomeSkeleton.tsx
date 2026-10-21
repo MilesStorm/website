@@ -5,14 +5,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 export function HomeSkeleton() {
   return (
     <div className="flex flex-col gap-4" role="status" aria-label="Loading" aria-busy="true">
-      <section className="flex flex-col items-center gap-2 pt-12 pb-12 text-center md:pt-20 lg:pt-24">
+      <section className={HERO_SECTION}>
         <Skeleton className="mb-2 h-6 w-32 rounded-4xl" />
         <div className={HERO_NAME}>
           <Skeleton className="size-12 shrink-0 rounded-full md:size-14" />
           {/* A line of the name's height (the line box), with the pulse inside it. */}
-          <span>
-            <Skeleton className="inline-block h-[0.8em] w-[5em] rounded-2xl align-middle" />
-          </span>
+          <div>
+            <span className="inline-block h-[0.8em] w-[5em] animate-pulse rounded-2xl bg-muted align-middle" />
+          </div>
         </div>
       </section>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -23,6 +23,9 @@ export function HomeSkeleton() {
   );
 }
 
-/** The hero's line with the picture and the name (HomeCards), and its place here. */
+/** The hero (HomeCards), and its place here. */
+export const HERO_SECTION = 'flex flex-col items-center gap-2 pt-12 pb-12 text-center md:pt-20 lg:pt-24';
+
+/** The hero's line with the picture and the name, and its place here. */
 export const HERO_NAME =
   'flex max-w-full items-center justify-center gap-4 text-4xl leading-tight font-semibold tracking-tight md:text-5xl lg:leading-[1.1]';

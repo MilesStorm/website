@@ -13,8 +13,9 @@ import {
   type Note,
 } from '@/lib/copy';
 
-// The logging-in forms' places: the form's own layout, text and labels, with a pulse where each
-// input and button goes, so nothing moves when the form arrives (e2e/auth.spec.ts measures it).
+// The logging-in forms' places, and the emailed links' and the invite's: the form's (or the usual
+// answer's) own layout, text and labels, with a pulse where each input, button and username goes,
+// so nothing moves when it arrives (e2e/auth.spec.ts measures it).
 
 /** An input's or a button's place (both are h-9). */
 function Control() {
