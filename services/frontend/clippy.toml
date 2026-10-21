@@ -1,12 +1,3 @@
-await-holding-invalid-types = [
-  "generational_box::GenerationalRef",
-  { path = "generational_box::GenerationalRef", reason = "Reads should not be held over an await point. This will cause any writes to fail while the await is pending since the read borrow is still active." },
-  "generational_box::GenerationalRefMut",
-  { path = "generational_box::GenerationalRefMut", reason = "Write should not be held over an await point. This will cause any reads or writes to fail while the await is pending since the write borrow is still active." },
-  "dioxus_signals::WriteLock",
-  { path = "dioxus_signals::WriteLock", reason = "Write should not be held over an await point. This will cause any reads or writes to fail while the await is pending since the write borrow is still active." },
-]
-
 # Coverage by construction (TRACING.md, "Chokepoints"): the raw I/O constructors are banned,
 # so new code can only reach them through api::trace, which adds the span. A legitimate raw
 # use carries `#[allow(clippy::disallowed_*, reason = "...")]` and is listed in
@@ -17,9 +8,6 @@ disallowed-types = [
 ]
 
 disallowed-methods = [
-  { path = "dioxus_fullstack_core::server_future::use_server_future", reason = "use api::trace::use_server_future, which keeps SSR server futures in the page request's trace (TRACING.md)" },
-  { path = "dioxus_fullstack_core::loader::use_loader", reason = "SSR futures need the page request's trace: add an api::trace::use_loader wrapper like api::trace::use_server_future (TRACING.md)" },
-
   # Outbound HTTP
   { path = "reqwest::Client::new", reason = "use api::trace::client (TRACING.md)" },
   { path = "reqwest::Client::builder", reason = "use api::trace::client (TRACING.md)" },

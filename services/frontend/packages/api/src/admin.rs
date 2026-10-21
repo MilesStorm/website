@@ -1,6 +1,6 @@
-//! The admin panel's calls to auth (`/internal/admin/*`), shared by the JSON API and the server
-//! functions. Auth trusts the website to have checked the user's `manage_permissions` first:
-//! callers must (the API's access layer, the server functions' `admin_token`).
+//! The admin panel's calls to auth (`/internal/admin/*`), for the JSON API. Auth trusts the
+//! website to have checked the user's `manage_permissions` first: callers must (the API's access
+//! layer does).
 
 use api_types::{
     AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, ApiError, ErrorCode, NewInvite,

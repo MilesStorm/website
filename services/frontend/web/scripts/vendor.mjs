@@ -1,16 +1,15 @@
 // The browser tracing as one classic script (src/vendor/tracing.js): the Grafana Faro bundles
 // (Apache-2.0, with a licence header prepended as they ship without one), OTel's
-// BatchSpanProcessor and trace.js, in the order the Dioxus pages load them as four scripts. The
-// layout loads it synchronously in <head>, before every module script, so fetch and WebSocket
-// are wrapped before an island can call them (TRACING.md, "Browser").
+// BatchSpanProcessor and trace.js (assets/trace.js), in that order. The layout loads it
+// synchronously in <head>, before every module script, so fetch and WebSocket are wrapped before
+// an island can call them (TRACING.md, "Browser").
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { buildSync } from 'esbuild';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-// trace.js stays with the Dioxus app (its `asset!`) until that is deleted.
-const traceJs = process.env.TRACE_JS ?? join(root, '../packages/web/assets/trace.js');
+const traceJs = join(root, 'assets/trace.js');
 const out = join(root, 'src/vendor/tracing.js');
 const parts = [];
 

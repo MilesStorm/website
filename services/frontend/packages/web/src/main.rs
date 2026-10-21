@@ -1,45 +1,17 @@
 use std::collections::HashMap;
 
-use dioxus::prelude::*;
-
-use api::{check_login_status, get_my_permissions, logout};
-use ui::{data_dir::LoginStatus, setup_mode, CookieConsent, Navbar, TAILWIND};
-use views::{
-    AccountDeleted, AdminPanel, Arcane, Ark, AssholeTimer, DeleteAccount, Enshrouded, ForgotPassword, Invite, Landing,
-    Login, NotFound, Profile, Register, ResetPassword, VerifyEmail,
-};
-
-mod views;
-#[cfg(not(target_arch = "wasm32"))]
 mod rolls;
-#[cfg(not(target_arch = "wasm32"))]
 mod capture;
-#[cfg(not(target_arch = "wasm32"))]
 mod dataset;
 mod sharing;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod trace_tests;
 mod account;
 mod emails;
 mod invites;
-#[cfg(not(target_arch = "wasm32"))]
 mod json_api;
-#[cfg(not(target_arch = "wasm32"))]
 mod pages;
 
-pub static LOGIN_STATUS: GlobalSignal<LoginStatus> = Signal::global(|| LoginStatus::LoggedOut);
-pub static PERMISSIONS: GlobalSignal<HashMap<String, bool>> = Signal::global(HashMap::new);
-/// The logged-in user's name and picture (navbar, profile page); `None` until loaded.
-pub static ACCOUNT: GlobalSignal<Option<account::AccountInfo>> = Signal::global(|| None);
-
-const FAVICON: Asset = asset!("/assets/favicon.ico");
-
-#[cfg(target_arch = "wasm32")]
-fn main() {
-    dioxus::launch(App);
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
@@ -49,7 +21,7 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::SUCCESS;
         }
         // `web check-pages <dir>`: whether an Astro build has exactly the pages (the image's
-        // verify stage; the server checks the same at startup with FRONTEND_UI=astro).
+        // verify stage; the server checks the same at startup).
         Some("check-pages") => {
             let dir = std::path::PathBuf::from(args.next().unwrap_or_else(|| "web/dist".into()));
             return match pages::Built::load(&dir, api_types::PAGES) {
@@ -77,12 +49,10 @@ fn main() -> std::process::ExitCode {
 // ---- Server launch ----
 
 /// The exporters' providers, kept to flush them before the process ends.
-#[cfg(not(target_arch = "wasm32"))]
 static TELEMETRY: std::sync::OnceLock<(opentelemetry_sdk::trace::SdkTracerProvider, opentelemetry_sdk::logs::SdkLoggerProvider)> =
     std::sync::OnceLock::new();
 
 /// Sends the spans and log records still batched. Blocks until the collector has them.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn flush_telemetry() {
     if let Some((traces, logs)) = TELEMETRY.get() {
         let _ = traces.force_flush();
@@ -92,10 +62,8 @@ pub(crate) fn flush_telemetry() {
 
 /// How long a shutdown waits for open connections, camera sessions and detached tasks.
 /// Kubernetes kills the pod 30 s after SIGTERM; telemetry is flushed after the wait.
-#[cfg(not(target_arch = "wasm32"))]
 const SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[cfg(not(target_arch = "wasm32"))]
 fn server_launch() {
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::WithExportConfig;
@@ -168,15 +136,12 @@ fn server_launch() {
 
     let otel_log_layer = _otel_log_provider.as_ref().map(otel_log_bridge);
 
-    // Init subscriber before dioxus::serve — Dioxus's own try_init().ok() will
-    // then fail silently and our subscriber (JSON + OTel) wins.
     // The OTel log bridge additionally ships log events via OTLP so Loki entries carry
     // trace_id/span_id, enabling Tempo → Loki correlation.
-    // The filter also decides which spans exist (TRACING.md, "Log level"); `dioxus=warn`
-    // keeps per-signal spans (dioxus_signals) from becoming root traces of their own.
+    // The filter also decides which spans exist (TRACING.md, "Log level").
     tracing_subscriber::registry()
         .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
-            |_| "info,dioxus=warn,tower_sessions=warn,opentelemetry=warn".into(),
+            |_| "info,tower_sessions=warn,opentelemetry=warn".into(),
         )))
         .with(tracing_subscriber::fmt::layer().json())
         .with(otel_layer)
@@ -199,12 +164,6 @@ fn server_launch() {
         move || router(redis_url.clone(), store.lock().ok().and_then(|mut s| s.take()), shutdown.clone())
     };
 
-    // `dx serve` hot-patches the running server, which only `dioxus::serve` does. It never
-    // returns, so a debug build stops without draining or flushing.
-    if cfg!(debug_assertions) {
-        dioxus::serve(app)
-    }
-
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -222,15 +181,15 @@ fn server_launch() {
     }
 }
 
-/// What `dioxus::serve` does in a release build (dioxus-server 0.7.10 `launch.rs`: bind the
-/// `IP`/`PORT` address, then `axum::serve`), plus a graceful shutdown on SIGTERM, which
-/// `dioxus::serve` can't do: it never returns.
-#[cfg(not(target_arch = "wasm32"))]
+/// Binds `IP`:`PORT` (default 127.0.0.1:8080) and serves `app`'s router until SIGTERM, then
+/// shuts down gracefully.
 async fn serve<F>(mut app: impl FnMut() -> F, shutdown: tokio_util::sync::CancellationToken)
 where
     F: std::future::Future<Output = anyhow::Result<axum::Router>>,
 {
-    let addr = dioxus::cli_config::fullstack_address_or_localhost();
+    let ip = std::env::var("IP").ok().and_then(|ip| ip.parse().ok()).unwrap_or(std::net::Ipv4Addr::LOCALHOST.into());
+    let port = std::env::var("PORT").ok().and_then(|port| port.parse().ok()).unwrap_or(8080);
+    let addr = std::net::SocketAddr::new(ip, port);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .unwrap_or_else(|e| panic!("failed to bind to address {addr}: {e}"));
@@ -248,7 +207,6 @@ where
 /// Serves until `shutdown` is cancelled, then waits at most `wait` for what is still
 /// running: open requests (roll streams end by themselves: they watch `shutdown` too), then
 /// camera sessions and detached tasks (`api::trace`), which axum doesn't count.
-#[cfg(not(target_arch = "wasm32"))]
 async fn serve_until(
     listener: tokio::net::TcpListener,
     router: axum::Router,
@@ -279,7 +237,6 @@ async fn serve_until(
 }
 
 /// Resolves when the process is asked to stop: SIGTERM (Kubernetes) or Ctrl-C.
-#[cfg(not(target_arch = "wasm32"))]
 async fn terminated() {
     #[cfg(unix)]
     {
@@ -294,9 +251,8 @@ async fn terminated() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-/// The website's router: the Dioxus app and the plain axum routes, with their Redis
+/// The website's router: the pages, the API and the other axum routes, with their Redis
 /// clients and background loops. `shutdown` ends the long-lived streams.
-#[cfg(not(target_arch = "wasm32"))]
 async fn router(
     redis_url: String,
     store: Option<dataset::Dataset>,
@@ -358,13 +314,10 @@ async fn router(
         .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
-    // FRONTEND_UI=astro: Astro's pages instead of Dioxus's, and Astro's 404 page for any other
-    // path.
-    let astro = pages::from_env()?;
-    let astro_on = astro.is_some();
+    // Astro's pages, and its 404 page for any other path.
+    let built = pages::from_env()?;
 
     let routes = Router::new()
-        .serve_dioxus_application(ServeConfig::default(), App)
         .route("/oauth/start/{provider}", get(oauth_start))
         .route("/oauth/callback/{provider}", get(oauth_callback))
         .route("/ws/arcane", arcane_ws_route())
@@ -373,13 +326,11 @@ async fn router(
             "/metrics",
             get(move || async move { metric_handle.render() }),
         );
-    let router = pages::mount(routes, astro)
-        .layer(axum::middleware::from_fn_with_state(astro_on, render_span))
+    let router = pages::mount(routes, built)
         .layer(axum::Extension(roll_hub))
         .layer(axum::middleware::from_fn(no_store))
         .layer(layer)
         .layer(axum::middleware::from_fn(api::trace::capture_request_context))
-        .layer(axum::middleware::from_fn_with_state(astro_on, name_page_span))
         .layer(axum::middleware::from_fn(api::trace::end_span_with_body))
         .layer(OtelInResponseLayer)
         // Prometheus scrapes every 15s; a trace each would bury the real ones.
@@ -390,7 +341,6 @@ async fn router(
 
 /// `service.version` is the commit the image was built from (Dockerfile `GIT_SHA`).
 /// `OTEL_RESOURCE_ATTRIBUTES` adds the rest (`deployment.environment.name`).
-#[cfg(not(target_arch = "wasm32"))]
 fn otel_resource() -> opentelemetry_sdk::Resource {
     opentelemetry_sdk::Resource::builder()
         .with_service_name("frontend")
@@ -404,7 +354,6 @@ fn otel_resource() -> opentelemetry_sdk::Resource {
 /// The OTLP log bridge. Log records take their trace_id/span_id from the OTel context
 /// tracing-opentelemetry activates with each span. The SDK's own logs (its warnings, such as
 /// dropped spans, go to stdout at `warn`) stay out: exporting them would log more.
-#[cfg(not(target_arch = "wasm32"))]
 fn otel_log_bridge<S>(provider: &opentelemetry_sdk::logs::SdkLoggerProvider) -> impl tracing_subscriber::Layer<S>
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -414,118 +363,37 @@ where
         .with_filter(tracing_subscriber::filter::filter_fn(|meta| !meta.target().starts_with("opentelemetry")))
 }
 
-/// Page requests reach Dioxus's fallback, which has no `MatchedPath`, so `OtelAxumLayer`
-/// names their span just `GET`. Names it after the page's `Route` variant instead: a
-/// bounded set, unlike raw paths (span names become Tempo span-metrics labels).
-/// Server functions are named by their path without Dioxus's hash ([`server_fn_route`]).
-#[cfg(not(target_arch = "wasm32"))]
-async fn name_page_span(
-    axum::extract::State(astro): axum::extract::State<bool>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    use opentelemetry::trace::TraceContextExt as _;
-    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-    let method = req.method();
-    let span = tracing::Span::current();
-    // tracing-opentelemetry takes an `otel.name` recorded only before the span has started; by
-    // now it has (the layer above entered it), so the started span is renamed itself.
-    let rename = |name: String| span.context().span().update_name(name);
-    let matched = req.extensions().get::<axum::extract::MatchedPath>();
-    // Only a path that reached a server function: any other is the client's own string,
-    // and span names become span-metrics labels.
-    if let Some(route) = matched.and_then(|m| server_fn_route(m.as_str())) {
-        rename(format!("{method} {route}"));
-        span.record("http.route", route);
-    } else if is_page(&req) {
-        // With Astro's pages every page has a route: the fallback is the 404 page.
-        let page = if astro { "NotFound".to_string() } else { page_name(req.uri().path()) };
-        rename(format!("{method} {page}"));
-    }
-    next.run(req).await
-}
-
-/// Whether a request goes to Dioxus's page handler (the router's fallback): no route of
-/// ours or of Dioxus's (server functions, assets) matched it.
-#[cfg(not(target_arch = "wasm32"))]
-fn is_page(req: &axum::extract::Request) -> bool {
-    use axum::http::Method;
-    (req.method() == Method::GET || req.method() == Method::HEAD)
-        && req.extensions().get::<axum::extract::MatchedPath>().is_none()
-}
-
-/// The innermost layer: a Dioxus page render gets its `ssr.render` span
-/// (`api::trace::ssr_render`). With Astro's pages there is none: the fallback is the 404 page.
-#[cfg(not(target_arch = "wasm32"))]
-async fn render_span(
-    axum::extract::State(astro): axum::extract::State<bool>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    if !astro && is_page(&req) {
-        api::trace::ssr_render(req, next).await
-    } else {
-        next.run(req).await
-    }
-}
-
-/// `Cache-Control` on server-function and API responses (`no-store`) and rendered pages
-/// (`private, no-cache`), unless the handler chose its own. Neither may be replayed by a shared cache: pages carry the request's
+/// `Cache-Control` on API responses (`no-store`) and pages (`private, no-cache`), unless the
+/// handler chose its own. Neither may be replayed by a shared cache: pages carry the request's
 /// `<meta name="traceparent">`, and the browser's clock correction takes its samples from both
 /// (TRACING.md, "Browser clock"). Cloudflare caches neither today; this keeps a future rule from
 /// changing that.
-#[cfg(not(target_arch = "wasm32"))]
 async fn no_store(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
     let path = req.uri().path();
-    let bff = path.starts_with("/bff/") || path.starts_with("/api/");
+    let api = path.starts_with("/api/");
     let mut res = next.run(req).await;
     let html = res
         .headers()
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.starts_with("text/html"));
-    if (bff || html) && !res.headers().contains_key(CACHE_CONTROL) {
+    if (api || html) && !res.headers().contains_key(CACHE_CONTROL) {
         // Pages may stay in the browser's back/forward cache, which `no-store` turns off.
-        let value = if bff { "no-store" } else { "private, no-cache" };
+        let value = if api { "no-store" } else { "private, no-cache" };
         res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static(value));
     }
     res
 }
 
-/// `/bff/get_account` for `/bff/get_account12855143162362325647`: Dioxus appends a hash to
-/// each server function's path, which the browser's span (assets/trace.js) leaves out, so
-/// both sides of a call carry the same name. None for other paths.
-#[cfg(not(target_arch = "wasm32"))]
-fn server_fn_route(path: &str) -> Option<&str> {
-    let name = path.strip_prefix("/bff/")?;
-    let base = name.trim_end_matches(|c: char| c.is_ascii_digit());
-    // The same rule as trace.js: 6 or more digits after a name.
-    let digits = name.len() - base.len();
-    (digits >= 6 && !base.is_empty() && !base.ends_with('/')).then(|| &path[..path.len() - digits])
-}
-
-/// The `Route` variant `path` renders (`NotFound` for anything unknown).
-#[cfg(not(target_arch = "wasm32"))]
-fn page_name(path: &str) -> String {
-    // The variant name is what Debug prints before the fields.
-    let route = path.parse::<Route>().map(|r| format!("{r:?}")).unwrap_or_default();
-    match route.split(|c: char| !c.is_alphanumeric()).next() {
-        Some(name) if !name.is_empty() => name.to_string(),
-        _ => "NotFound".to_string(),
-    }
-}
-
 // ---- Arcane WebSocket proxy ----
 
 /// `/ws/arcane`: the origin is checked first, so a foreign page's handshake costs no call to auth.
-#[cfg(not(target_arch = "wasm32"))]
 fn arcane_ws_route() -> axum::routing::MethodRouter {
     axum::routing::get(arcane_ws_proxy).route_layer(axum::middleware::from_fn(camera_origin))
 }
 
 /// Browsers send `Origin` on a WebSocket handshake: it must be this site's ([`rolls::origin_allowed`]).
-#[cfg(not(target_arch = "wasm32"))]
 async fn camera_origin(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     use axum::response::IntoResponse;
     if rolls::origin_allowed(req.headers()) {
@@ -538,7 +406,6 @@ async fn camera_origin(req: axum::extract::Request, next: axum::middleware::Next
 /// Upgrades to WebSocket and bidirectionally proxies to the ai_pipeline inference service.
 /// Requires the `arcane` permission (and a same-host Origin, [`arcane_ws_route`]): 401, 403 or
 /// 503 otherwise. Settled rolls are published for the user's other devices (see `rolls`).
-#[cfg(not(target_arch = "wasm32"))]
 async fn arcane_ws_proxy(
     viewer: Result<json_api::Viewer, json_api::ApiError>,
     ws: Result<axum::extract::ws::WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
@@ -599,10 +466,8 @@ async fn arcane_ws_proxy(
 }
 
 /// ai_pipeline is in the cluster: a handshake that takes longer than this has failed.
-#[cfg(not(target_arch = "wasm32"))]
 const UPSTREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[cfg(not(target_arch = "wasm32"))]
 async fn proxy_ws(
     client: axum::extract::ws::WebSocket,
     upstream_url: String,
@@ -752,14 +617,12 @@ async fn proxy_ws(
 
 /// The `traceparent` query parameter of the camera WebSocket URL. Its value is hex and
 /// dashes, so it needs no percent-decoding.
-#[cfg(not(target_arch = "wasm32"))]
 fn query_traceparent(uri: &axum::http::Uri) -> Option<&str> {
     uri.query()?.split('&').find_map(|pair| pair.strip_prefix("traceparent="))
 }
 
 /// From an ai_pipeline reply (parsed once): whether it is a roll event, and its
 /// `frame_seq`, the number of the forwarded frame it was computed from.
-#[cfg(not(target_arch = "wasm32"))]
 fn reply_info(text: &str) -> (bool, Option<u64>) {
     if !text.contains("\"frame_seq\"") {
         return (rolls::is_roll(text), None);
@@ -771,19 +634,15 @@ fn reply_info(text: &str) -> (bool, Option<u64>) {
 
 // ---- OAuth Axum handlers ----
 
-#[cfg(not(target_arch = "wasm32"))]
 const OAUTH_CSRF_KEY: &str = "oauth_csrf_state";
-#[cfg(not(target_arch = "wasm32"))]
 const OAUTH_PROVIDER_KEY: &str = "oauth_provider";
 /// The page to land on after the login: a [`api_types::PagePath`], never the browser's string.
-#[cfg(not(target_arch = "wasm32"))]
 const OAUTH_NEXT_KEY: &str = "oauth_next";
 
 /// Begin the OAuth flow for `provider`. Asks auth (cluster-internal) for the provider's
 /// authorization URL, stashes the CSRF state in the BFF session, and redirects the browser.
 /// `?next=` is kept in the session for the callback when it is one of the site's pages; anything
 /// else is dropped (logged), and the login goes on.
-#[cfg(not(target_arch = "wasm32"))]
 async fn oauth_start(
     axum::extract::Path(provider): axum::extract::Path<String>,
     session: tower_sessions::Session,
@@ -834,7 +693,6 @@ async fn oauth_start(
 /// Provider callback. Validates CSRF state, asks auth to exchange the code, and
 /// stores the resulting opaque token + username on the BFF session. Lands on
 /// [`json_api::next_page`]: the invite page, else the start's `next`, else `/`.
-#[cfg(not(target_arch = "wasm32"))]
 async fn oauth_callback(
     axum::extract::Path(provider): axum::extract::Path<String>,
     session: tower_sessions::Session,
@@ -888,130 +746,7 @@ async fn oauth_callback(
     }
 }
 
-// ---- Dioxus app ----
-
-// `page_name` (span names) reads the variant name from the derived Debug.
-#[derive(Debug, Clone, Routable, PartialEq)]
-#[rustfmt::skip]
-enum Route {
-    #[layout(WebNavbar)]
-        #[route("/")]
-        Landing {},
-        #[route("/login?:error")]
-        Login { error: String },
-        #[route("/register")]
-        Register {},
-        #[route("/forgot-password")]
-        ForgotPassword {},
-        #[route("/reset-password#:code")]
-        ResetPassword { code: String },
-        #[route("/verify-email#:code")]
-        VerifyEmail { code: String },
-        #[route("/delete-account#:code")]
-        DeleteAccount { code: String },
-        #[route("/account-deleted")]
-        AccountDeleted {},
-        #[route("/invite#:code")]
-        Invite { code: String },
-        #[route("/profile")]
-        Profile {},
-        #[route("/ark")]
-        Ark {},
-        #[route("/enshrouded")]
-        Enshrouded {},
-        #[route("/arcane")]
-        Arcane {},
-        #[route("/asshole")]
-        AssholeTimer {},
-        #[route("/admin")]
-        AdminPanel {},
-        #[route("/:..segments")]
-        NotFound { segments: Vec<String> },
-}
-
-#[component]
-fn App() -> Element {
-    let status = api::trace::use_server_future("check_login_status", check_login_status)?;
-    let perms = api::trace::use_server_future("get_my_permissions", get_my_permissions)?;
-
-    use_effect(move || {
-        if let Some(Ok(s)) = status.value()() {
-            *LOGIN_STATUS.write() = s;
-        }
-        if let Some(Ok(p)) = perms.value()() {
-            let map: HashMap<String, bool> = p.into_iter().map(|n| (n, true)).collect();
-            *PERMISSIONS.write() = map;
-        }
-    });
-
-    // Load the account (display name, picture) whenever someone logs in.
-    use_effect(move || match LOGIN_STATUS() {
-        LoginStatus::LoggedIn(_) => {
-            spawn(async move {
-                if let Ok(a) = account::get_account().await {
-                    *ACCOUNT.write() = Some(a);
-                }
-            });
-        }
-        LoginStatus::LoggedOut => *ACCOUNT.write() = None,
-    });
-
-    setup_mode();
-
-    // Browser tracing (TRACING.md, "Browser"): the page request's trace for the browser to
-    // continue, then the tracer, as classic scripts that run before the WASM module loads.
-    // The meta is rendered on the client too (as `None`, inserting nothing) so the tree
-    // hydrates the same. Copied as-is (`with_minify(false)`): the bundles come minified, and
-    // dx's esbuild pass turns a file it takes for an ES module into ESM, hiding the
-    // top-level `var GrafanaFaroWebSdk` the other scripts need.
-    let traceparent = use_hook(api::trace::traceparent);
-    let version = use_hook(api::trace::service_version);
-
-    rsx! {
-        document::Meta { name: "traceparent", content: traceparent }
-        document::Meta { name: "service-version", content: version }
-        document::Script { src: asset!("/assets/vendor/faro-web-sdk.iife.js", AssetOptions::js().with_minify(false)) }
-        document::Script { src: asset!("/assets/vendor/faro-web-tracing.iife.js", AssetOptions::js().with_minify(false)) }
-        document::Script { src: asset!("/assets/vendor/otel-batch.iife.js", AssetOptions::js().with_minify(false)) }
-        document::Script { src: asset!("/assets/trace.js", AssetOptions::js().with_minify(false)) }
-        document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: TAILWIND }
-
-        Router::<Route> {}
-
-        CookieConsent {}
-    }
-}
-
-#[component]
-fn WebNavbar() -> Element {
-    let logout_handler = move |_: ()| {
-        spawn(async move {
-            let _ = logout().await;
-            *LOGIN_STATUS.write() = LoginStatus::LoggedOut;
-            *PERMISSIONS.write() = HashMap::new();
-            *ACCOUNT.write() = None;
-        });
-    };
-
-    let perms = PERMISSIONS.read();
-    let account = ACCOUNT();
-    rsx! {
-        Navbar {
-            user: LOGIN_STATUS(),
-            name: account.as_ref().map(|a| a.shown_name.clone()),
-            picture: account.as_ref().and_then(|a| a.picture_url.clone()),
-            on_logout: logout_handler,
-            has_ark: perms.contains_key("llama"),
-            has_enshrouded: perms.contains_key("enshrouded"),
-            has_arcane: perms.contains_key("arcane"),
-            has_admin: perms.contains_key("manage_permissions"),
-        }
-        Outlet::<Route> {}
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
     use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
@@ -1021,53 +756,6 @@ mod tests {
     fn test_client() -> api::trace::TracedClient {
         let peer = api::trace::Peer { service: "frontend", system: None };
         api::trace::client(peer, std::time::Duration::from_secs(5), |b| b).unwrap()
-    }
-
-    #[test]
-    fn server_function_spans_leave_out_the_hash() {
-        use super::server_fn_route;
-        assert_eq!(server_fn_route("/bff/get_account12855143162362325647"), Some("/bff/get_account"));
-        assert_eq!(server_fn_route("/bff/login_password123456"), Some("/bff/login_password"));
-        assert_eq!(server_fn_route("/bff/get_account"), None);
-        assert_eq!(server_fn_route("/bff/get_account12345"), None);
-        assert_eq!(server_fn_route("/bff/12855143162362325647"), None);
-        assert_eq!(server_fn_route("/api/profile/picture"), None);
-    }
-
-    #[test]
-    fn code_pages_start_with_the_same_markup_before_hydration() {
-        use dioxus::prelude::*;
-        fn render(code: &str) -> String {
-            dioxus::ssr::render_element(rsx! {
-                super::ResetPassword { code: code.to_string() }
-                super::VerifyEmail { code: code.to_string() }
-                super::DeleteAccount { code: code.to_string() }
-                super::Invite { code: code.to_string() }
-            })
-        }
-        let server = render("");
-        let browser_initial = render("a_b-c");
-        assert_eq!(server, browser_initial);
-        assert!(!server.contains("a_b-c"));
-        assert!(server.contains("loading-spinner"));
-    }
-
-    #[test]
-    fn one_time_code_routes_use_fragments() {
-        use super::Route;
-        for (path, route) in [
-            ("/reset-password", Route::ResetPassword { code: "a_b-c".into() }),
-            ("/verify-email", Route::VerifyEmail { code: "a_b-c".into() }),
-            ("/delete-account", Route::DeleteAccount { code: "a_b-c".into() }),
-            ("/invite", Route::Invite { code: "a_b-c".into() }),
-        ] {
-            let address = route.to_string();
-            assert_eq!(address, format!("{path}#a_b-c"));
-            assert_eq!(address.parse::<Route>().unwrap(), route);
-            // This is all the browser sends in the initial HTTP request.
-            let server_route = path.parse::<Route>().unwrap();
-            assert_eq!(server_route.to_string(), path);
-        }
     }
 
     #[test]
@@ -1081,17 +769,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bff_responses_and_pages_are_not_stored() {
+    async fn api_responses_and_pages_are_not_stored() {
         use axum::http::header::CACHE_CONTROL;
         use axum::response::{Html, IntoResponse};
         use axum::routing::{get, post};
 
         let app = axum::Router::new()
-            .route("/bff/login_password123456", post(|| async { "{}" }))
             .route("/api/session/login", post(|| async { "{}" }))
             .route("/login", get(|| async { Html("<html></html>") }))
-            .route("/assets/app.css", get(|| async { ([(axum::http::header::CONTENT_TYPE, "text/css")], "") }))
-            .route("/bff/picture123456", get(|| async { ([(CACHE_CONTROL, "private, max-age=60")], "").into_response() }))
+            .route("/_astro/app.css", get(|| async { ([(axum::http::header::CONTENT_TYPE, "text/css")], "") }))
+            .route("/api/account/picture", get(|| async { ([(CACHE_CONTROL, "private, max-age=60")], "").into_response() }))
             .layer(axum::middleware::from_fn(super::no_store));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -1101,24 +788,14 @@ mod tests {
         let cache_control = |res: reqwest::Response| {
             res.headers().get(CACHE_CONTROL).map(|v| v.to_str().unwrap().to_string())
         };
-        let post = client.post(format!("{base}/bff/login_password123456")).send().await.unwrap();
-        assert_eq!(cache_control(post).as_deref(), Some("no-store"));
         let api = client.post(format!("{base}/api/session/login")).send().await.unwrap();
         assert_eq!(cache_control(api).as_deref(), Some("no-store"));
         let page = client.get(format!("{base}/login")).send().await.unwrap();
         assert_eq!(cache_control(page).as_deref(), Some("private, no-cache"));
-        let asset = client.get(format!("{base}/assets/app.css")).send().await.unwrap();
+        let asset = client.get(format!("{base}/_astro/app.css")).send().await.unwrap();
         assert_eq!(cache_control(asset), None);
-        let own = client.get(format!("{base}/bff/picture123456")).send().await.unwrap();
+        let own = client.get(format!("{base}/api/account/picture")).send().await.unwrap();
         assert_eq!(cache_control(own).as_deref(), Some("private, max-age=60"), "the handler's own is kept");
-    }
-
-    #[test]
-    fn pages_are_named_by_route() {
-        assert_eq!(super::page_name("/"), "Landing");
-        assert_eq!(super::page_name("/login"), "Login");
-        assert_eq!(super::page_name("/admin"), "AdminPanel");
-        assert_eq!(super::page_name("/some/1234/thing"), "NotFound");
     }
 
     /// Log records carry the trace and span of the span they were written in (I8), and

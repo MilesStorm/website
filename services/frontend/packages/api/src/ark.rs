@@ -1,11 +1,30 @@
 //! The Ark server panel's calls to auth (`/internal/ark/*`, which checks the token's `llama`
-//! permission and asks the game host), shared by the JSON API and the server functions.
+//! permission and asks the game host), for the JSON API.
 
 use api_types::{ApiError, ArkCommand, ArkOutcome, ArkPlayers, ErrorCode};
+use serde::Deserialize;
 use serde_json::json;
-use ui::data_dir::CommandResult;
 
-use crate::{auth_json, trace, DockerRequestResponse};
+use crate::{auth_json, trace};
+
+/// Auth's reply to an Ark call: the game host's result, in its own names.
+#[derive(Deserialize)]
+struct DockerRequestResponse {
+    command_result: Option<CommandResult>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum CommandResult {
+    Stopped,
+    AlreadyStopped,
+    FailedToStop,
+    Started,
+    AlreadyRunning,
+    FailedToStart,
+    Timeout,
+    Restarting,
+    NumPlayers(i32),
+}
 
 fn unreachable() -> ApiError {
     ApiError::new(ErrorCode::Upstream, "The Ark server can't be reached right now. Try again later.")

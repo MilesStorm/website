@@ -1,8 +1,8 @@
 //! The JSON API under `/api/*` (types in crates/api-types). Plain axum handlers registered
 //! through aide, so the OpenAPI document (`web openapi`, committed as web/src/api/openapi.json)
 //! is read off their signatures: handlers return `Result<Json<T>, ApiError>`, never `impl
-//! IntoApiResponse`, which aide can't see through. The Dioxus server functions call the same
-//! functions, so both keep the `bff.<fn>` spans.
+//! IntoApiResponse`, which aide can't see through. The functions they call keep their
+//! `bff.<fn>` spans.
 //!
 //! Access is per route group, as layers ([`access`]): `/api/account/*` needs a login, and its
 //! sharing settings the `arcane` permission; `/api/ark/*` needs `llama`, `/api/enshrouded/*`
@@ -427,39 +427,39 @@ pub(crate) type Hub = NoApi<Option<Extension<RollHub>>>;
 
 /// `POST /api/account/email/send-confirmation`.
 async fn send_confirmation(viewer: Viewer) -> Result<Json<EmailSent>, ApiError> {
-    Ok(Json(EmailSent { email: emails::server::send_confirmation(viewer.token()?).await? }))
+    Ok(Json(EmailSent { email: emails::send_confirmation(viewer.token()?).await? }))
 }
 
 /// `POST /api/email/confirm`.
 async fn confirm_email(Body(code): Body<Code>) -> Result<Json<Confirmed>, ApiError> {
-    Ok(Json(Confirmed { username: emails::server::confirm(&code.code).await? }))
+    Ok(Json(Confirmed { username: emails::confirm(&code.code).await? }))
 }
 
 /// `POST /api/password/forgot`: answered the same whether or not the account exists.
 async fn forgot_password(Body(f): Body<ForgotPassword>) -> Result<NoContent, ApiError> {
-    emails::server::forgot(&f.login).await?;
+    emails::forgot(&f.login).await?;
     Ok(NoContent)
 }
 
 /// `POST /api/password/reset`.
 async fn reset_password(NoApi(session): NoApi<Session>, Body(r): Body<PasswordReset>) -> Result<Json<Done>, ApiError> {
-    Ok(Json(emails::server::reset(Some(&session), &r.code, &r.password).await?))
+    Ok(Json(emails::reset(Some(&session), &r.code, &r.password).await?))
 }
 
 /// `POST /api/account/deletion/request`.
 async fn request_deletion(viewer: Viewer) -> Result<Json<EmailSent>, ApiError> {
-    Ok(Json(EmailSent { email: emails::server::request_deletion(viewer.token()?).await? }))
+    Ok(Json(EmailSent { email: emails::request_deletion(viewer.token()?).await? }))
 }
 
 /// `POST /api/deletion/check`.
 async fn check_deletion(Body(code): Body<Code>) -> Result<Json<Deletion>, ApiError> {
-    Ok(Json(emails::server::deletion(&code.code).await?))
+    Ok(Json(emails::deletion(&code.code).await?))
 }
 
 /// `POST /api/deletion/confirm`.
 async fn confirm_deletion(NoApi(session): NoApi<Session>, NoApi(hub): Hub, Body(code): Body<Code>) -> Result<Json<Done>, ApiError> {
     let hub = hub.map(|Extension(h)| h);
-    Ok(Json(emails::server::delete(Some(&session), hub.as_ref(), &code.code).await?))
+    Ok(Json(emails::delete(Some(&session), hub.as_ref(), &code.code).await?))
 }
 
 /// `POST /api/account/deletion/direct`.
@@ -470,26 +470,26 @@ async fn delete_direct(
     Body(d): Body<DirectDeletion>,
 ) -> Result<Json<Done>, ApiError> {
     let hub = hub.map(|Extension(h)| h);
-    Ok(Json(emails::server::delete_direct(Some(&session), hub.as_ref(), viewer.token()?, &d.confirm).await?))
+    Ok(Json(emails::delete_direct(Some(&session), hub.as_ref(), viewer.token()?, &d.confirm).await?))
 }
 
 // ---- Invites ----
 
 /// `POST /api/invites/open`: joins when logged in, else keeps the invite for after logging in.
 async fn open_invite(NoApi(session): NoApi<Session>, Body(code): Body<Code>) -> Result<Json<Opened>, ApiError> {
-    Ok(Json(invites::server::open(&session, &code.code).await?))
+    Ok(Json(invites::open(&session, &code.code).await?))
 }
 
 // ---- Sharing roll pictures ----
 
 /// `GET /api/account/sharing`.
 async fn get_sharing(viewer: Viewer) -> Result<Json<SharingState>, ApiError> {
-    Ok(Json(sharing::server::sharing(viewer.token()?).await?))
+    Ok(Json(sharing::sharing(viewer.token()?).await?))
 }
 
 /// `PUT /api/account/sharing`.
 async fn set_sharing(viewer: Viewer, Body(s): Body<Sharing>) -> Result<Json<SharingState>, ApiError> {
-    Ok(Json(sharing::server::set_sharing(viewer.token()?, s.share).await?))
+    Ok(Json(sharing::set_sharing(viewer.token()?, s.share).await?))
 }
 
 /// `DELETE /api/account/sharing/data`: needs only the session's username, so it works without
@@ -498,7 +498,7 @@ async fn delete_shared(viewer: Viewer, NoApi(hub): Hub) -> Result<Json<Deleted>,
     let user = viewer.username()?.to_string();
     let token = viewer.token().ok().map(str::to_string);
     let hub = hub.map(|Extension(h)| h);
-    let n = sharing::server::delete_shared(user, token.as_deref(), hub).await?;
+    let n = sharing::delete_shared(user, token.as_deref(), hub).await?;
     Ok(Json(Deleted { deleted: n as u64 }))
 }
 
@@ -635,12 +635,6 @@ fn api_router(arcane_origins: &str) -> ApiRouter {
             .delete(remove_picture)
             // Room for the largest accepted upload; bigger bodies get 413.
             .layer(picture_limit()),
-        )
-        // The picture's old path, for the Dioxus pages and cached `<img>` URLs: the same
-        // handlers, left out of the document.
-        .route(
-            "/api/profile/picture",
-            axum::routing::get(account::get_picture).post(account::upload_picture).layer(picture_limit()),
         )
         .api_route("/api/account/email/send-confirmation", post(send_confirmation))
         .api_route("/api/account/deletion/request", post(request_deletion))

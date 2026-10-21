@@ -7,11 +7,6 @@
 
 [[allow]]
 file = "packages/api/src/trace.rs"
-lints = ["disallowed_methods"]
-reason = "trace::use_server_future is the wrapper the lint points to"
-
-[[allow]]
-file = "packages/api/src/trace.rs"
 lints = ["disallowed_methods", "disallowed_types"]
 reason = "trace::client is the traced HTTP client constructor"
 

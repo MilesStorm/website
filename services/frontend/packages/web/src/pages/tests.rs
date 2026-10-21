@@ -11,8 +11,8 @@ use axum::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 
-use super::{verdict, Built, Injected, Split, Ui, Verdict, MARKER};
-use crate::json_api::tests::{Public, Site};
+use super::{verdict, Built, Injected, Split, Verdict, MARKER};
+use crate::json_api::tests::Site;
 
 /// A page as Astro writes it: the charset first, then the marker.
 fn page(body: &str) -> String {
@@ -61,15 +61,6 @@ fn bootstrap_of(html: &str) -> Value {
     let start = html.find(open).expect("no bootstrap") + open.len();
     let end = start + html[start..].find("</script>").expect("bootstrap not closed");
     serde_json::from_str(&html[start..end]).expect("the bootstrap is JSON")
-}
-
-#[test]
-fn the_flag_is_astro_or_dioxus() {
-    assert_eq!(Ui::parse(None).unwrap(), Ui::Dioxus);
-    assert_eq!(Ui::parse(Some("")).unwrap(), Ui::Dioxus);
-    assert_eq!(Ui::parse(Some("dioxus")).unwrap(), Ui::Dioxus);
-    assert_eq!(Ui::parse(Some("astro")).unwrap(), Ui::Astro);
-    assert!(Ui::parse(Some("Astro!")).is_err());
 }
 
 #[test]
@@ -152,52 +143,39 @@ fn the_build_must_have_exactly_the_pages() {
 }
 
 #[tokio::test]
-async fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
-    use dioxus::prelude::*;
-    let _public = Public::new("pages");
+async fn the_pages_mount_beside_the_api() {
     let dist = Dist::new("mount");
-    for built in [None, Some(dist.built())] {
-        let astro = built.is_some();
-        // axum panics on overlapping routes when the router is built.
-        let router = axum::Router::new()
-            .serve_dioxus_application(ServeConfig::default(), crate::App)
-            .route("/ws/arcane", axum::routing::get(|| async {}))
-            .merge(crate::json_api::router());
-        let app = super::mount(router, built);
-        if astro {
-            // A page's path with a slash goes to the page, never to Dioxus's fallback.
-            let res = app.clone().oneshot(Request::get("/asshole/?a=1").body(Body::empty()).unwrap()).await.unwrap();
-            assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
-            assert_eq!(res.headers()[header::LOCATION], "/asshole?a=1");
-            // Any other path is Astro's 404 page, never Dioxus's renderer: an unknown path, and
-            // an encoded or upper-case spelling of a page (routes match the path as sent).
-            for path in ["/nope", "/%61sshole", "/ASSHOLE", "/index.html"] {
-                let res = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
-                assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
-                let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
-                let html = String::from_utf8_lossy(&body);
-                assert!(html.contains("<body>404.html</body>") && html.contains(r#"id="bootstrap""#), "{path}: {html}");
-            }
-            // An API path that doesn't exist is the error envelope, a server function's too.
-            for path in ["/api/nope", "/bff/nope"] {
-                let res = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
-                assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
-                let body: Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap()).unwrap();
-                assert_eq!(body["error"], "not_found", "{path}");
-            }
-        } else {
-            // Without the flag, Dioxus renders it (a 200 with its own page).
-            let res = app.clone().oneshot(Request::get("/nope").body(Body::empty()).unwrap()).await.unwrap();
-            let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
-            assert!(!String::from_utf8_lossy(&body).contains("404.html"));
-        }
+    // axum panics on overlapping routes when the router is built.
+    let router = axum::Router::new()
+        .route("/ws/arcane", axum::routing::get(|| async {}))
+        .merge(crate::json_api::router());
+    let app = super::mount(router, dist.built());
+    // A page's path with a slash goes to the page.
+    let res = app.clone().oneshot(Request::get("/asshole/?a=1").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(res.headers()[header::LOCATION], "/asshole?a=1");
+    // Any other path is Astro's 404 page: an unknown path, and an encoded or upper-case
+    // spelling of a page (routes match the path as sent).
+    for path in ["/nope", "/%61sshole", "/ASSHOLE", "/index.html"] {
+        let res = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("<body>404.html</body>") && html.contains(r#"id="bootstrap""#), "{path}: {html}");
+    }
+    // An API path that doesn't exist is the error envelope, an old server function's too.
+    for path in ["/api/nope", "/bff/nope"] {
+        let res = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(body["error"], "not_found", "{path}");
     }
 }
 
 #[tokio::test]
 async fn pages_and_astro_files_are_served_and_nothing_else() {
     let dist = Dist::new("serve");
-    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built()))).await;
+    let mut site = Site::serving(super::mount(axum::Router::new(), dist.built())).await;
 
     let home = site.get("/").await;
     assert_eq!(home.status, StatusCode::OK);
@@ -221,7 +199,7 @@ async fn pages_and_astro_files_are_served_and_nothing_else() {
 #[tokio::test]
 async fn cache_headers_keep_pages_private_and_files_forever() {
     let dist = Dist::new("cache");
-    let app = super::mount(axum::Router::new(), Some(dist.built()))
+    let app = super::mount(axum::Router::new(), dist.built())
         .layer(tower_sessions::SessionManagerLayer::new(tower_sessions::MemoryStore::default()));
     let get = |path: &'static str| {
         let app = app.clone();
@@ -245,7 +223,7 @@ async fn cache_headers_keep_pages_private_and_files_forever() {
 #[tokio::test]
 async fn astro_files_go_compressed_when_the_browser_takes_it() {
     let dist = Dist::new("compressed");
-    let app = super::mount(axum::Router::new(), Some(dist.built()));
+    let app = super::mount(axum::Router::new(), dist.built());
     let req = Request::get("/_astro/app.Ab12.js").header(header::ACCEPT_ENCODING, "gzip, br").body(Body::empty()).unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.headers()[header::CONTENT_ENCODING], "br");
@@ -264,7 +242,7 @@ async fn astro_files_go_compressed_when_the_browser_takes_it() {
 #[tokio::test]
 async fn a_logged_in_page_knows_the_viewer_with_one_call_to_auth() {
     let dist = Dist::new("viewer");
-    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built()))).await.log_in("all").await;
+    let mut site = Site::serving(super::mount(axum::Router::new(), dist.built())).await.log_in("all").await;
     let html = String::from_utf8(site.get("/").await.bytes).unwrap();
     // Known permissions only, in auth's order.
     assert!(html.contains(r#"<html data-session="in" data-perms="llama enshrouded arcane manage_permissions""#), "{html}");
@@ -275,7 +253,7 @@ async fn a_logged_in_page_knows_the_viewer_with_one_call_to_auth() {
     drop(site);
 
     // Auth down: logged in, with no permissions.
-    let mut site = Site::serving(super::mount(axum::Router::new(), Some(dist.built()))).await.log_in("down").await;
+    let mut site = Site::serving(super::mount(axum::Router::new(), dist.built())).await.log_in("down").await;
     let html = String::from_utf8(site.get("/").await.bytes).unwrap();
     assert!(html.contains(r#"data-session="in" data-perms="""#), "{html}");
 }
@@ -313,7 +291,7 @@ async fn the_page_traceparent_is_the_request_span() {
     use opentelemetry::trace::SpanKind;
     let (exporter, _guard) = crate::trace_tests::exporting();
     let dist = Dist::new("trace");
-    let app = super::mount(axum::Router::new(), Some(dist.built()))
+    let app = super::mount(axum::Router::new(), dist.built())
         // As the server layers them: the session's own spans are current in the handler.
         .layer(tower_sessions::SessionManagerLayer::new(tower_sessions::MemoryStore::default()))
         .layer(axum::middleware::from_fn(api::trace::capture_request_context))
@@ -436,7 +414,7 @@ async fn every_page_answers_every_viewer() {
     let dist = Dist::new("table");
     for page in PAGES {
         for token in VIEWERS {
-            check(super::mount(axum::Router::new(), Some(dist.built())), page.access, token, page.path.as_str()).await;
+            check(super::mount(axum::Router::new(), dist.built()), page.access, token, page.path.as_str()).await;
         }
     }
 }
@@ -498,14 +476,13 @@ async fn an_unreadable_session_is_read_once() {
 }
 
 /// An unknown path: the 404 page with the viewer, private, as a 404; its span is `GET NotFound`
-/// (a bounded name, never the path), and it has no `ssr.render` child.
+/// (a bounded name, never the path). A missing file's bare 404 isn't the page: its span keeps
+/// the method alone.
 #[tokio::test]
 async fn an_unknown_path_is_the_404_page_and_its_span_is_named_for_it() {
     let (exporter, _guard) = crate::trace_tests::exporting();
     let dist = Dist::new("notfound");
-    let app = super::mount(axum::Router::new(), Some(dist.built()))
-        .layer(axum::middleware::from_fn_with_state(true, crate::render_span))
-        .layer(axum::middleware::from_fn_with_state(true, crate::name_page_span))
+    let app = super::mount(axum::Router::new(), dist.built())
         .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
     let mut site = Site::serving(app).await.log_in("all").await;
     let reply = site.get("/no/such/page?x=1").await;
@@ -514,20 +491,10 @@ async fn an_unknown_path_is_the_404_page_and_its_span_is_named_for_it() {
     let html = String::from_utf8(reply.bytes).unwrap();
     assert!(html.contains("<body>404.html</body>") && html.contains(r#"<html data-session="in""#), "{html}");
     crate::trace_tests::span(&exporter, "GET NotFound").await;
-    assert!(crate::trace_tests::spans(&exporter, "ssr.render").is_empty());
-}
 
-/// Without the flag a page request's span is named after its Dioxus route (the started span is
-/// renamed: tracing-opentelemetry takes no `otel.name` once a span has started).
-#[tokio::test]
-async fn without_the_flag_a_page_span_is_named_after_its_dioxus_route() {
-    let (exporter, _guard) = crate::trace_tests::exporting();
-    let app = axum::Router::new()
-        .fallback(|| async { "a Dioxus page" })
-        .layer(axum::middleware::from_fn_with_state(false, crate::name_page_span))
-        .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
-    app.oneshot(Request::get("/enshrouded").body(Body::empty()).unwrap()).await.unwrap();
-    crate::trace_tests::span(&exporter, &format!("GET {}", crate::page_name("/enshrouded"))).await;
+    assert_eq!(site.get("/robots.txt").await.status, StatusCode::NOT_FOUND);
+    crate::trace_tests::span(&exporter, "GET").await;
+    assert_eq!(crate::trace_tests::spans(&exporter, "GET NotFound").len(), 1);
 }
 
 /// What isn't a page load gets no page: an unknown API or server-function path is the error
@@ -536,7 +503,7 @@ async fn without_the_flag_a_page_span_is_named_after_its_dioxus_route() {
 #[tokio::test]
 async fn only_page_loads_get_the_404_page() {
     let dist = Dist::new("notpages");
-    let app = super::mount(axum::Router::new().merge(crate::json_api::router()), Some(dist.built()));
+    let app = super::mount(axum::Router::new().merge(crate::json_api::router()), dist.built());
     let mut site = Site::serving(app).await.log_in("all").await;
     for path in ["/api/nope", "/bff/nope", "/bff/get_account99"] {
         let reply = site.get(path).await;

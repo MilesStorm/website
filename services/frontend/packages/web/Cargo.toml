@@ -4,20 +4,16 @@ version = "0.2.2"
 edition = "2021"
 
 [dependencies]
-dioxus = { workspace = true, features = ["router", "fullstack"] }
-ui = { workspace = true }
 api = { workspace = true }
 api-types = { workspace = true }
-manganis = { version = "0.7.7", features = ["dioxus"] }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dotenvy = { workspace = true }
 tower-sessions = { workspace = true }
 tower-sessions-redis-store = { workspace = true }
-axum = { workspace = true }
-# Astro's hashed files under /_astro/ (src/pages.rs); the version Dioxus uses.
+# `ws`: the camera WebSocket (src/main.rs).
+axum = { workspace = true, features = ["ws"] }
+# Astro's hashed files under /_astro/ (src/pages.rs).
 tower-http = { version = "0.6.8", features = ["fs"] }
 # The JSON API under /api/* and its OpenAPI document (src/json_api.rs).
 aide = { workspace = true }
@@ -58,7 +54,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+[dev-dependencies]
 # InMemoryLogExporter for the log bridge test, the in-memory span exporter for the trace tests
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # A real Redis for the roll hub's trace tests (needs Docker).
@@ -69,36 +65,3 @@ tower = { version = "0.5", features = ["util"] }
 toml = "0.8"
 # A session store that can't be read (src/pages/tests.rs): SessionStore is an #[async_trait] trait.
 async-trait = "0.1.89"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.3", features = ["wasm_js"] }
-getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
-web-sys = { version = "0.3", features = [
-    "Window",
-    "Document",
-    "Location",
-    "Navigator",
-    "MediaDevices",
-    "MediaStream",
-    "MediaStreamTrack",
-    "MediaStreamConstraints",
-    "HtmlVideoElement",
-    "HtmlMediaElement",
-    "HtmlCanvasElement",
-    "CanvasRenderingContext2d",
-    "WebSocket",
-    "MessageEvent",
-    "BinaryType",
-    "Blob",
-    "RequestInit",
-    "Response",
-] }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
-rand = "0.9"
-gloo-timers = { version = "0.3", features = ["futures"] }
-
-[features]
-web = ["dioxus/web"]
-server = ["dioxus/server", "ui/server", "api/server"]

@@ -1,4 +1,4 @@
-// Tests for trace.js: run with `npm run test:trace` from services/frontend.
+// Tests for trace.js: run with `npm run test:trace` in services/frontend/web.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -156,7 +156,7 @@ test('click then fetch creates a lazy root span that parents the fetch', async (
   h.click(el('button', {}, '  Sign\n  in  '));
   assert.equal(h.spans.length, 0, 'span must not exist before a fetch');
   h.clk.advance(50);
-  await h.win.fetch('/bff/login_password', { method: 'POST' });
+  await h.win.fetch('/api/session/login', { method: 'POST' });
   assert.equal(h.spans.length, 1);
   const [span] = h.spans;
   assert.equal(span.name, 'click Sign in');
@@ -173,7 +173,7 @@ test('click without a fetch produces no span and is dropped', async () => {
   h.click(el('button', {}, 'Toggle'));
   h.clk.advance(1001);
   assert.equal(h.tracer.current(), null);
-  await h.win.fetch('/bff/x');
+  await h.win.fetch('/api/x');
   assert.equal(h.spans.length, 0);
   assert.equal(h.calls[0].parent, undefined);
 });
@@ -181,7 +181,7 @@ test('click without a fetch produces no span and is dropped', async () => {
 test('a fetch started from the first fetch .then stays in the interaction', async () => {
   const h = setup();
   h.click(el('button', {}, 'Go'));
-  await h.win.fetch('/bff/a').then(() => h.win.fetch('/bff/b'));
+  await h.win.fetch('/api/a').then(() => h.win.fetch('/api/b'));
   assert.equal(h.spans.length, 1);
   assert.equal(h.calls[1].parent, h.spans[0]);
 });
@@ -190,7 +190,7 @@ test('interaction ends QUIET_MS after its last fetch settles, at the settle time
   const h = setup();
   h.click(el('button', {}, 'Go'));
   h.clk.advance(20);
-  await h.win.fetch('/bff/a');
+  await h.win.fetch('/api/a');
   await tick();
   const settled = h.clk.now();
   h.clk.advance(299);
@@ -198,7 +198,7 @@ test('interaction ends QUIET_MS after its last fetch settles, at the settle time
   h.clk.advance(1);
   assert.equal(h.spans[0].endTime, settled);
   assert.equal(h.tracer.current(), null);
-  await h.win.fetch('/bff/later');
+  await h.win.fetch('/api/later');
   assert.equal(h.calls[1].parent, undefined);
 });
 
@@ -206,7 +206,7 @@ test('interaction ends at MAX_MS while a fetch is still in flight', async () => 
   const h = setup();
   h.respondWith(() => new Promise(() => {}));
   h.click(el('button', {}, 'Go'));
-  h.win.fetch('/bff/slow');
+  h.win.fetch('/api/slow');
   h.clk.advance(9999);
   assert.equal(h.spans[0].endTime, undefined);
   h.clk.advance(1);
@@ -217,12 +217,12 @@ test('a new interaction ends the previous one only at its first fetch', async ()
   const h = setup();
   h.respondWith(() => new Promise(() => {}));
   h.click(el('button', {}, 'One'));
-  h.win.fetch('/bff/a');
+  h.win.fetch('/api/a');
   h.clk.advance(5);
   h.click(el('button', {}, 'Two'));
   assert.equal(h.spans[0].endTime, undefined, 'a pending click does not end the current span');
   h.clk.advance(5);
-  h.win.fetch('/bff/b');
+  h.win.fetch('/api/b');
   assert.equal(h.spans[0].endTime, 1_000_010);
   assert.equal(h.spans[1].name, 'click Two');
   assert.equal(h.spans[1].opts.startTime, 1_000_005);
@@ -234,7 +234,7 @@ test('submit replaces the pending click on the same button', async () => {
   const button = el('button', { type: 'submit' }, 'Log In');
   h.click(button);
   h.submit(el('form'), button);
-  await h.win.fetch('/bff/login_password');
+  await h.win.fetch('/api/session/login');
   assert.equal(h.spans.length, 1);
   assert.equal(h.spans[0].name, 'submit Log In');
   assert.equal(h.tracer.pending(), null);
@@ -249,7 +249,7 @@ test('a click that never fetches leaves the page load span alone', async () => {
   h.clk.advance(1000);
   assert.equal(h.tracer.pending(), null, 'the pending click expired');
   assert.equal(load.endTime, undefined);
-  await h.win.fetch('/bff/get_account');
+  await h.win.fetch('/api/account');
   assert.equal(h.calls[0].parent, load);
   assert.equal(h.spans.length, 1);
 });
@@ -260,7 +260,7 @@ test('window load firing while an interaction is current', async () => {
   h.respondWith(() => new Promise(() => {}));
   h.clk.advance(100);
   h.click(el('button', {}, 'Go'));
-  h.win.fetch('/bff/a');
+  h.win.fetch('/api/a');
   assert.equal(load.endTime, 1_000_100, 'ends at the click fetch, before window load');
   const [, click] = h.spans;
   h.clk.advance(50);
@@ -274,19 +274,19 @@ test('window load firing while an interaction is current', async () => {
 test('a form with nothing naming it takes its submitter label', async () => {
   const h = setup();
   h.submit(el('form'), el('button', { type: 'submit' }, ' Log In '));
-  await h.win.fetch('/bff/login_password');
+  await h.win.fetch('/api/session/login');
   assert.equal(h.spans[0].name, 'submit Log In');
   assert.equal(h.tracer.labelFor(el('form')), 'form');
   assert.equal(h.tracer.labelFor(el('form', { id: 'login' }), el('button', {}, 'Log In')), 'login');
 });
 
-test('fetch span names are method plus templated path without the server-fn hash', () => {
+test('fetch span names are method plus templated path', () => {
   const { fetchSpanName } = setup().api;
-  assert.equal(fetchSpanName('POST', 'https://milesstorm.com/bff/login_password10033624767130250299'), 'POST /bff/login_password');
-  assert.equal(fetchSpanName('POST', 'https://milesstorm.com/bff/login_password10033624767130250299?x=1#y'), 'POST /bff/login_password');
-  assert.equal(fetchSpanName('GET', 'https://milesstorm.com/bff/items/42'), 'GET /bff/items/{id}');
-  assert.equal(fetchSpanName('GET', 'https://milesstorm.com/bff/login_v2'), 'GET /bff/login_v2');
-  assert.equal(fetchSpanName('GET', 'https://milesstorm.com/assets/web_bg-dxhd673222225b8b59d.wasm'), 'GET /assets/web_bg-dxhd673222225b8b59d.wasm');
+  assert.equal(fetchSpanName('POST', 'https://milesstorm.com/api/session/login'), 'POST /api/session/login');
+  assert.equal(fetchSpanName('POST', 'https://milesstorm.com/api/session/login?x=1#y'), 'POST /api/session/login');
+  assert.equal(fetchSpanName('DELETE', 'https://milesstorm.com/api/admin/invites/42'), 'DELETE /api/admin/invites/{id}');
+  assert.equal(fetchSpanName('GET', 'https://milesstorm.com/api/login_v2'), 'GET /api/login_v2');
+  assert.equal(fetchSpanName('GET', 'https://milesstorm.com/_astro/client.Ab12Cd.js'), 'GET /_astro/client.Ab12Cd.js');
   assert.equal(fetchSpanName('GET', 'https://milesstorm.com/blog/post12345678'), 'GET /blog/post12345678');
   assert.equal(fetchSpanName('GET', undefined), 'GET');
 });
@@ -307,8 +307,8 @@ test('ignored URLs are neither parented nor counted', async () => {
 
 test('Request objects are recognised by their url', async () => {
   const h = setup();
-  h.submit(el('form', { name: 'login', action: '/bff/login' }));
-  await h.win.fetch({ url: 'https://milesstorm.com/bff/login_password' });
+  h.submit(el('form', { name: 'login', action: '/api/session/login' }));
+  await h.win.fetch({ url: 'https://milesstorm.com/api/session/login' });
   assert.equal(h.spans[0].name, 'submit login');
   assert.equal(h.calls[0].parent, h.spans[0]);
 });
@@ -320,14 +320,14 @@ test('page load span is a child of the meta traceparent and parents fetches unti
   assert.equal(span.name, 'page load /login');
   assert.deepEqual({ ...span.parent.remote }, { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1, isRemote: true });
   assert.equal(span.opts.startTime, 999_990);
-  await h.win.fetch('/assets/web.wasm');
+  await h.win.fetch('/_astro/client.Ab12Cd.js');
   await tick();
   assert.equal(h.calls[0].parent, span);
   h.clk.advance(1000);
   assert.equal(span.endTime, undefined, 'stays open until window load');
   h.load();
   h.clk.advance(1000);
-  await h.win.fetch('/bff/get_account123456789');
+  await h.win.fetch('/api/account');
   await tick();
   assert.equal(h.calls[1].parent, span, 'a hydration-time call 1s after load still joins');
   h.clk.advance(1499);
@@ -338,7 +338,7 @@ test('page load span is a child of the meta traceparent and parents fetches unti
 
 test('page load span never ends before window load', async () => {
   const h = setup({ meta: REMOTE });
-  await h.win.fetch('/assets/web.wasm');
+  await h.win.fetch('/_astro/client.Ab12Cd.js');
   await tick();
   h.clk.advance(800);
   h.load();
@@ -353,7 +353,7 @@ test('page load is capped at 15s and ended early by a user interaction', () => {
   const h = setup({ meta: REMOTE });
   h.clk.advance(100);
   h.click(el('a', { href: '/blog/42' }, 'secret text'));
-  h.win.fetch('/bff/post');
+  h.win.fetch('/api/post');
   assert.equal(h.spans[0].endTime, 1_000_100);
 });
 
@@ -368,7 +368,7 @@ test('invalid traceparent metas produce no page load span', () => {
 test('anchors are named by templated path, never by their text', async () => {
   const h = setup();
   h.click(el('a', { href: '/blog/42/comments/1234?x=secret' }, 'Private title'));
-  await h.win.fetch('/bff/post');
+  await h.win.fetch('/api/post');
   assert.equal(h.spans[0].name, 'click /blog/{id}/comments/{id}');
   assert.equal(h.tracer.labelFor(el('button', { 'aria-label': 'Close' }, 'x')), 'Close');
   assert.equal(h.tracer.labelFor(el('div', { 'data-trace-name': 'roll dice' }, 'ignored')), 'roll dice');
@@ -381,11 +381,11 @@ test('wrapper returns the same response and rethrows the same rejection', async 
   const failure = new TypeError('network down');
   h.click(el('button', {}, 'Go'));
   h.respondWith(() => Promise.resolve(response));
-  assert.equal(await h.win.fetch('/bff/a'), response);
+  assert.equal(await h.win.fetch('/api/a'), response);
   h.respondWith(() => Promise.reject(failure));
-  await assert.rejects(h.win.fetch('/bff/b'), (e) => e === failure);
+  await assert.rejects(h.win.fetch('/api/b'), (e) => e === failure);
   h.respondWith(() => { throw failure; });
-  assert.throws(() => h.win.fetch('/bff/c'), (e) => e === failure);
+  assert.throws(() => h.win.fetch('/api/c'), (e) => e === failure);
   await tick();
   assert.equal(h.tracer.current().inflight, 0);
 });
@@ -447,10 +447,10 @@ test('the fetch request hook renames Faro fetch spans', () => {
   const sandbox = bootSandbox('milesstorm.com');
   vm.runInContext(SRC, sandbox);
   const hook = sandbox.tracingOpts.instrumentationOptions.fetchInstrumentationOptions.requestHook;
-  const span = { name: 'POST', attributes: { 'http.request.method': 'POST', 'url.full': 'https://milesstorm.com/bff/login_password10033624767130250299?x=1' },
+  const span = { name: 'POST', attributes: { 'http.request.method': 'POST', 'url.full': 'https://milesstorm.com/api/session/login?x=1' },
     updateName(n) { this.name = n; } };
   hook(span, {});
-  assert.equal(span.name, 'POST /bff/login_password');
+  assert.equal(span.name, 'POST /api/session/login');
 });
 
 test('fetch spans keep their network timing events', () => {
@@ -474,18 +474,18 @@ test('beforeSend strips query strings and fragments from page and span URLs', ()
   const item = h.api.scrubItem({
     meta: { page: { url: 'https://milesstorm.com/login?next=/x#top' } },
     payload: { resourceSpans: [{ scopeSpans: [{ spans: [{ attributes: [
-      { key: 'http.url', value: { stringValue: 'https://milesstorm.com/bff/a?token=1' } },
-      { key: 'url.full', value: { stringValue: 'https://milesstorm.com/bff/b#frag' } },
+      { key: 'http.url', value: { stringValue: 'https://milesstorm.com/api/a?token=1' } },
+      { key: 'url.full', value: { stringValue: 'https://milesstorm.com/api/b#frag' } },
     ] }] }] }] },
   });
   assert.equal(item.meta.page.url, 'https://milesstorm.com/login');
   const attrs = item.payload.resourceSpans[0].scopeSpans[0].spans[0].attributes;
-  assert.equal(attrs[0].value.stringValue, 'https://milesstorm.com/bff/a');
-  assert.equal(attrs[1].value.stringValue, 'https://milesstorm.com/bff/b');
+  assert.equal(attrs[0].value.stringValue, 'https://milesstorm.com/api/a');
+  assert.equal(attrs[1].value.stringValue, 'https://milesstorm.com/api/b');
   const ctx = h.api.scrubItem({ payload: { context: { url: 'https://milesstorm.com/reset?code=abc', href: '/x#t', page_url: '/p?q', other: '/keep?q' } } });
   assert.deepEqual({ ...ctx.payload.context }, { url: 'https://milesstorm.com/reset', href: '/x', page_url: '/p', other: '/keep?q' });
-  const event = h.api.scrubItem({ payload: { attributes: { 'http.url': 'https://milesstorm.com/bff/a?q=1' } } });
-  assert.equal(event.payload.attributes['http.url'], 'https://milesstorm.com/bff/a');
+  const event = h.api.scrubItem({ payload: { attributes: { 'http.url': 'https://milesstorm.com/api/a?q=1' } } });
+  assert.equal(event.payload.attributes['http.url'], 'https://milesstorm.com/api/a');
 });
 
 test('beacon traceparent is unsampled with random non-zero ids', () => {
@@ -518,7 +518,7 @@ function clockAt(nowMs = 1_000_100, perfNow = 100) {
   return clockSync({ now: () => nowMs, performance: { now: () => perfNow } });
 }
 const gatewayEntry = (requestStart, responseStart, received, dur, extra = {}) => ({
-  entryType: 'resource', initiatorType: 'fetch', name: 'https://milesstorm.com/bff/get_account123',
+  entryType: 'resource', initiatorType: 'fetch', name: 'https://milesstorm.com/api/account',
   transferSize: 300, requestStart, responseStart,
   serverTiming: [{ name: 'gateway', duration: dur, description: String(received) }], ...extra,
 });
@@ -543,10 +543,10 @@ test('clock sync keeps the lowest-delay sample and ignores entries without a gat
 test('clock sync only trusts responses no cache can replay', () => {
   const c = clockAt();
   // A day-old stamp replayed by a cache: negative delay, huge offset. Static assets, cache hits
-  // (transferSize 0) and non-/bff/ fetches are never sampled.
+  // (transferSize 0) and fetches outside /api/ are never sampled.
   c.addEntry(gatewayEntry(2, 3, 1_000_070 - 86_400_000, 4));
   c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { transferSize: 0 }));
-  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/assets/web.wasm' }));
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/_astro/client.Ab12Cd.js' }));
   c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { initiatorType: 'img' }));
   c.addEntry(gatewayEntry(2, 4, 1_000_070, 5)); // delay -3 ms: not this request's stamp
   assert.equal(c.best(), null);
@@ -554,9 +554,10 @@ test('clock sync only trusts responses no cache can replay', () => {
   assert.equal(c.best().offset, 60.5);
 });
 
-test('clock sync samples the JSON API as it does server functions', () => {
+test('clock sync samples the JSON API only', () => {
   const c = clockAt();
   c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/apix/session' }));
+  c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/bff/get_account123' }));
   assert.equal(c.best(), null);
   c.addEntry(gatewayEntry(2, 22, 1_000_070, 5, { name: 'https://milesstorm.com/api/session' }));
   assert.equal(c.best().offset, 60.5);
@@ -629,7 +630,7 @@ const ids = (spans) => spans.map((sp) => sp.name);
 test('a click ends after its last child span, not at the fetch promise', async () => {
   const h = setup({ fetchSpans: true });
   h.click(el('button', {}, 'Go'));
-  await h.win.fetch('/bff/a');
+  await h.win.fetch('/api/a');
   await tick();
   const settled = h.clk.now();
   h.clk.advance(300);
@@ -648,14 +649,14 @@ test('a click ends after its last child span, not at the fetch promise', async (
 test('the quiet window runs from the child span end, and a later fetch keeps the root open', async () => {
   const h = setup({ fetchSpans: true });
   h.click(el('button', {}, 'Go'));
-  await h.win.fetch('/bff/a');
+  await h.win.fetch('/api/a');
   await tick();
   const t0 = h.clk.now();
   h.clk.advance(100);
   h.endFetchSpan(0, t0 + 50); // reported early: 250 ms of the window remain
   h.clk.advance(249);
   assert.equal(h.spans[0].endTime, undefined);
-  await h.win.fetch('/bff/b');
+  await h.win.fetch('/api/b');
   assert.equal(h.calls[1].parent, h.spans[0], 'still current');
   await tick();
   h.clk.advance(1000);
@@ -700,7 +701,7 @@ test('long tasks become events on the open span', async () => {
 test('a trace started before any clock sample is held back, then sent when a sample arrives', async () => {
   const h = setup({ fetchSpans: true });
   h.click(el('button', {}, 'Go'));
-  await h.win.fetch('/bff/a');
+  await h.win.fetch('/api/a');
   await tick();
   h.endFetchSpan(0, h.clk.now());
   h.clk.advance(100);
@@ -721,7 +722,7 @@ test('a trace started before any clock sample is held back, then sent when a sam
 test('a held trace whose root ends without a sample is sent uncorrected, and stays so', async () => {
   const h = setup({ fetchSpans: true });
   h.click(el('button', {}, 'Go'));
-  await h.win.fetch('/bff/a');
+  await h.win.fetch('/api/a');
   await tick();
   h.endFetchSpan(0, h.clk.now());
   h.clk.advance(300);
@@ -738,7 +739,7 @@ test('a trace started after a sample goes straight to the batch processor', asyn
   const h = setup({ fetchSpans: true });
   h.clockSync.addEntry(skewEntry());
   h.click(el('button', {}, 'Go'));
-  await h.win.fetch('/bff/a');
+  await h.win.fetch('/api/a');
   await tick();
   h.endFetchSpan(0, h.clk.now());
   assert.deepEqual(ids(h.exported), ['POST'], 'not held');
@@ -754,10 +755,17 @@ test('a held trace pushed out by newer ones is sent, not dropped', () => {
   assert.deepEqual(h.exported.map((s) => s.name), ['old']);
 });
 
-// The real vendored bundle (npm run vendor), behind our processor: a span reaches the exporter.
+// The real BatchSpanProcessor, bundled as scripts/vendor.mjs bundles it, behind our processor:
+// a span reaches the exporter.
 test('the vendored BatchSpanProcessor exports what the span processor lets through', async (t) => {
   let bundle;
-  try { bundle = readFileSync(new URL('./vendor/otel-batch.iife.js', import.meta.url), 'utf8'); } catch (err) { return t.skip('run npm run vendor'); }
+  try {
+    const { buildSync } = await import('esbuild');
+    bundle = buildSync({
+      stdin: { contents: "export { BatchSpanProcessor } from '@opentelemetry/sdk-trace-web';", resolveDir: new URL('..', import.meta.url).pathname },
+      bundle: true, format: 'iife', globalName: 'OtelSdkTraceWeb', target: 'es2019', write: false,
+    }).outputFiles[0].text;
+  } catch (err) { return t.skip(`run npm ci (${err.message})`); }
   const sandbox = { URL, Date, crypto, setTimeout, clearTimeout, performance, Promise, console };
   sandbox.globalThis = sandbox;
   vm.runInNewContext(bundle + ';globalThis.OtelSdkTraceWeb = OtelSdkTraceWeb;' + SRC, sandbox);
@@ -778,7 +786,7 @@ test('the vendored BatchSpanProcessor exports what the span processor lets throu
 
 test('forceFlush sends held traces uncorrected', () => {
   const h = setup({ meta: REMOTE, fetchSpans: true });
-  h.win.fetch('/assets/web.wasm');
+  h.win.fetch('/_astro/client.Ab12Cd.js');
   h.endFetchSpan(0, h.clk.now());
   assert.equal(h.exported.length, 0);
   h.processor.forceFlush();
@@ -789,7 +797,7 @@ test('client-side route changes start a lazy navigate root named by templated pa
   const h = setup({ path: '/' });
   h.win.history.pushState(null, '', '/blog/42?code=secret#x');
   assert.equal(h.spans.length, 0, 'no span before a server call');
-  await h.win.fetch('/bff/get_post');
+  await h.win.fetch('/api/get_post');
   assert.equal(h.spans[0].name, 'navigate /blog/{id}');
   assert.equal(h.spans[0].opts.root, true);
   assert.equal(h.spans[0].opts.attributes['ui.event'], 'navigate');
@@ -797,7 +805,7 @@ test('client-side route changes start a lazy navigate root named by templated pa
   // Back button.
   h.win.location.pathname = '/';
   h.popstate();
-  await h.win.fetch('/bff/list');
+  await h.win.fetch('/api/list');
   assert.equal(h.spans[1].name, 'navigate /');
   assert.equal(h.spans[0].endTime !== undefined, true, 'the new root ended the old one');
 });
@@ -807,14 +815,14 @@ test('a route change caused by a click keeps the click as the root; same-route p
   h.win.history.pushState(null, '', '/?tab=2');
   h.click(el('a', { href: '/login' }, 'Log in'));
   h.win.history.pushState(null, '', '/login');
-  await h.win.fetch('/bff/a');
+  await h.win.fetch('/api/a');
   assert.deepEqual(ids(h.spans), ['click /login']);
 });
 
 test('route changes while the page load is current stay in the page load', async () => {
   const h = setup({ meta: REMOTE, path: '/' });
   h.win.history.pushState(null, '', '/login');
-  await h.win.fetch('/bff/check_login_status');
+  await h.win.fetch('/api/check_login_status');
   assert.deepEqual(ids(h.spans), ['page load /']);
   assert.equal(h.calls[0].parent, h.spans[0]);
 });

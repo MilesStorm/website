@@ -1,35 +1,19 @@
-//! BFF server functions — phantom token pattern delegating to auth service.
+//! The BFF's calls to auth: the phantom token pattern (the session holds an opaque token, auth
+//! knows whose it is), logins, the session's viewer, invites kept for after logging in.
 
-use api_types::ApiError;
-#[cfg(feature = "server")]
-use api_types::{ErrorCode, KnownPermission, Permission};
-use dioxus::prelude::*;
+use api_types::{ApiError, ErrorCode, Permission};
 use serde::{Deserialize, Serialize};
 
 pub use api_types::{
     AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, AdminUserRole, ArkCommand, ArkOutcome,
     EnshroudedCommand, EnshroudedStatus, NewInvite, PagedResult,
 };
-pub use ui::data_dir::{CommandResult, LoginStatus};
 
-#[cfg(feature = "server")]
 pub mod admin;
-#[cfg(feature = "server")]
 pub mod ark;
-#[cfg(feature = "server")]
 pub mod enshrouded;
 pub mod trace;
 
-/// Preserve an expected auth rejection; upstream failures remain gateway errors.
-pub fn auth_error(status: u16, message: impl Into<String>) -> ServerFnError {
-    ServerFnError::ServerError {
-        message: message.into(),
-        code: if (400..500).contains(&status) { status } else { 502 },
-        details: None,
-    }
-}
-
-#[cfg(feature = "server")]
 fn password_login_error(status: u16, body: &str) -> ApiError {
     // Auth also uses 401 for a bad BFF service secret. That is an outage, not
     // a user's mistyped password, so only its credential rejection is a 4xx.
@@ -40,19 +24,9 @@ fn password_login_error(status: u16, body: &str) -> ApiError {
     }
 }
 
-// ---- Session helpers (server-only) ----
+// ---- Session helpers ----
 
-#[cfg(feature = "server")]
 mod session {
-    use dioxus::fullstack::FullstackContext;
-    use tower_sessions::Session;
-
-    pub fn get_session() -> Option<Session> {
-        let ctx = FullstackContext::current()?;
-        let parts = ctx.parts_mut();
-        parts.extensions.get::<Session>().cloned()
-    }
-
     pub fn auth_url() -> String {
         std::env::var("AUTH_SERVICE_URL")
             .unwrap_or_else(|_| "http://localhost:7070".to_string())
@@ -67,7 +41,6 @@ mod session {
 /// invite). Otherwise someone who planted a known session ID in a browser (session
 /// fixation) would be logged in as whoever logs in there next. Call before storing
 /// the login; on failure, don't log in.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.fresh_session_id", skip_all, err)]
 pub async fn fresh_session_id(sess: &tower_sessions::Session) -> Result<(), String> {
     sess.cycle_id().await.map_err(|e| {
@@ -78,12 +51,10 @@ pub async fn fresh_session_id(sess: &tower_sessions::Session) -> Result<(), Stri
 
 /// The longest a call to auth may take. Auth answers in milliseconds, except the ark
 /// commands, which wait for the game server's container.
-#[cfg(feature = "server")]
 const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The BFF's client for calls to auth: every request gets a CLIENT span and carries
 /// the trace context (see `trace::client`).
-#[cfg(feature = "server")]
 fn http_client() -> &'static trace::TracedClient {
     static CLIENT: std::sync::OnceLock<trace::TracedClient> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -94,15 +65,13 @@ fn http_client() -> &'static trace::TracedClient {
 
 /// Builds the client for calls to auth before the server takes requests. Building it loads the
 /// system CA certificates (~30 ms of CPU), which otherwise lands in the first request's trace.
-#[cfg(feature = "server")]
 pub fn init_http_client() {
     http_client();
 }
 
-// ---- Plain async helpers for Axum OAuth handlers in the web crate ----
+// ---- OAuth, for the web crate's handlers ----
 
 /// Ask the auth service to begin an OAuth flow. Returns `(auth_url, csrf_state)`.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.start_oauth", skip_all, err, fields(provider = %provider))]
 pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
     use session::{auth_url, service_secret};
@@ -134,7 +103,6 @@ pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
 }
 
 /// Exchange an OAuth authorization code for a BFF opaque token + username.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.exchange_oauth_code", skip_all, fields(provider = %provider))]
 pub async fn exchange_oauth_code(
     provider: &str,
@@ -182,33 +150,15 @@ pub async fn exchange_oauth_code(
     Ok((data.token, data.username))
 }
 
-// ---- Shared response types ----
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct DockerRequestResponse {
-    pub restart_result: String,
-    pub command_result: Option<CommandResult>,
-}
-
-// ---- Session: shared by the server functions and the JSON API ----
-
-/// A JSON API error as a server function's: the same message and status.
-pub fn server_error(e: ApiError) -> ServerFnError {
-    ServerFnError::ServerError { code: e.status(), message: e.message, details: None }
-}
-
-#[cfg(feature = "server")]
 fn login_unavailable() -> ApiError {
     ApiError::new(ErrorCode::Upstream, "Login is unavailable right now. Try again later.")
 }
 
-#[cfg(feature = "server")]
 fn registration_failed() -> ApiError {
     ApiError::new(ErrorCode::Upstream, "Registration failed")
 }
 
 /// Stores a login in the session under a new session ID, then redeems a pending invite.
-#[cfg(feature = "server")]
 async fn store_login(sess: &tower_sessions::Session, token: &str, username: &str) -> Result<(), ApiError> {
     fresh_session_id(sess).await.map_err(|_| ApiError::internal())?;
     let stored = match sess.insert("opaque_token", token).await {
@@ -224,7 +174,6 @@ async fn store_login(sess: &tower_sessions::Session, token: &str, username: &str
 }
 
 /// Log in with username + password. The username logged in as.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.login_password", skip_all, fields(username = %username))]
 pub async fn log_in(sess: &tower_sessions::Session, username: String, password: String) -> Result<String, ApiError> {
     trace::rejectable(async move {
@@ -282,7 +231,6 @@ pub async fn log_in(sess: &tower_sessions::Session, username: String, password: 
 }
 
 /// Clear the session.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.logout", skip_all, err)]
 pub async fn log_out(sess: &tower_sessions::Session) -> Result<(), ApiError> {
     let username: Option<String> = sess.get("username").await.ok().flatten();
@@ -295,7 +243,6 @@ pub async fn log_out(sess: &tower_sessions::Session) -> Result<(), ApiError> {
 }
 
 /// Register a new account and log in as it. The username logged in as.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.register_password", skip_all, fields(username = %username))]
 pub async fn register(
     sess: &tower_sessions::Session,
@@ -365,7 +312,6 @@ pub async fn register(
 }
 
 /// Who a request comes from, by its session.
-#[cfg(feature = "server")]
 #[derive(Debug, Clone)]
 pub enum Viewer {
     Anonymous,
@@ -377,7 +323,6 @@ pub enum Viewer {
 
 /// The session's [`Viewer`], with one call to auth when it is logged in. A session whose
 /// token auth no longer knows is cleared. Err when the session can't be read.
-#[cfg(feature = "server")]
 pub async fn viewer(sess: &tower_sessions::Session) -> Result<Viewer, String> {
     let username: Option<String> = sess.get("username").await.map_err(|e| e.to_string())?;
     let Some(username) = username else {
@@ -393,7 +338,6 @@ pub async fn viewer(sess: &tower_sessions::Session) -> Result<Viewer, String> {
 /// Who a session logged in as `username` with `token` is, by one call to auth: `None` when the
 /// login is over (no token, or auth no longer knows it), so the session must be cleared. Shared
 /// by [`viewer`] and the long-lived connections' re-check, which reads a stored session.
-#[cfg(feature = "server")]
 pub async fn login_viewer(username: &str, token: Option<String>) -> Option<Viewer> {
     use session::{auth_url, service_secret};
 
@@ -443,75 +387,15 @@ pub async fn login_viewer(username: &str, token: Option<String>) -> Option<Viewe
     })
 }
 
-#[cfg(feature = "server")]
 async fn token_gone(sess: &tower_sessions::Session, username: &str) -> Viewer {
     tracing::info!(username = %username, "session's token no longer valid; logging out");
     let _ = sess.flush().await;
     Viewer::Anonymous
 }
 
-// ---- Server functions ----
-
-/// Log in with username + password.
-#[server(prefix = "/bff")]
-pub async fn login_password(
-    username: String,
-    password: String,
-) -> Result<LoginStatus, ServerFnError> {
-    let sess = session::get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-    log_in(&sess, username, password).await.map(LoginStatus::LoggedIn).map_err(server_error)
-}
-
-/// Clear the current session.
-#[server(prefix = "/bff")]
-pub async fn logout() -> Result<(), ServerFnError> {
-    match session::get_session() {
-        Some(sess) => log_out(&sess).await.map_err(server_error),
-        None => Ok(()),
-    }
-}
-
-/// Check the current login status from the BFF session.
-#[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.check_login_status", skip_all, err)]
-pub async fn check_login_status() -> Result<LoginStatus, ServerFnError> {
-    let Some(sess) = session::get_session() else {
-        return Ok(LoginStatus::LoggedOut);
-    };
-    Ok(match viewer(&sess).await.map_err(ServerFnError::new)? {
-        Viewer::Anonymous => LoginStatus::LoggedOut,
-        Viewer::User { username, .. } | Viewer::Degraded { username } => LoginStatus::LoggedIn(username),
-    })
-}
-
-/// Register a new account and auto-login on success.
-#[server(prefix = "/bff")]
-pub async fn register_password(
-    username: String,
-    email: String,
-    password: String,
-) -> Result<LoginStatus, ServerFnError> {
-    let sess = session::get_session().ok_or_else(|| ServerFnError::new("no session context"))?;
-    register(&sess, username, email, password).await.map(LoginStatus::LoggedIn).map_err(server_error)
-}
-
-/// Returns the list of permission names held by the current session's user.
-#[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.get_my_permissions", skip_all, err)]
-pub async fn get_my_permissions() -> Result<Vec<String>, ServerFnError> {
-    let Some(sess) = session::get_session() else {
-        return Ok(vec![]);
-    };
-    Ok(match viewer(&sess).await.map_err(ServerFnError::new)? {
-        Viewer::User { permissions, .. } => permissions.iter().map(|p| p.name().to_string()).collect(),
-        Viewer::Anonymous | Viewer::Degraded { .. } => vec![],
-    })
-}
-
 /// Whether the token's user shares roll pictures for training the dice reader
 /// (stored by auth; see `dataset_consent` there). Err when the user lacks
 /// `arcane` or auth can't be reached.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.dataset_consent", skip_all, err)]
 pub async fn dataset_consent(token: &str) -> Result<bool, String> {
     use session::{auth_url, service_secret};
@@ -539,7 +423,6 @@ pub async fn dataset_consent(token: &str) -> Result<bool, String> {
 
 /// Record the token's user's choice to share roll pictures, with the version of
 /// the consent wording they saw.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.set_dataset_consent", skip_all, err, fields(share))]
 pub async fn set_dataset_consent(token: &str, share: bool, consent_version: &str) -> Result<(), String> {
     use session::{auth_url, service_secret};
@@ -564,7 +447,6 @@ pub async fn set_dataset_consent(token: &str, share: bool, consent_version: &str
 }
 
 /// The token's own account, as the profile page shows it.
-#[cfg(feature = "server")]
 #[derive(Debug, Clone, Deserialize)]
 pub struct AccountProfile {
     /// Permanent id; never shown, used to key the user's profile picture.
@@ -580,14 +462,12 @@ pub struct AccountProfile {
 
 /// POST `body` to auth's `path`: the status and the JSON reply (`Null` when the
 /// reply isn't JSON). Auth's email endpoints answer errors as `{"error": code}`.
-#[cfg(feature = "server")]
 pub async fn auth_json<T: Serialize>(path: &str, body: &T) -> Result<(u16, serde_json::Value), String> {
     auth_send(http_client().post(format!("{}{path}", session::auth_url())).json(body)).await
 }
 
 /// Sends `req` (to auth) with the service token: the status and the JSON reply (`Null` when
 /// the reply isn't JSON).
-#[cfg(feature = "server")]
 async fn auth_send(req: reqwest_middleware::RequestBuilder) -> Result<(u16, serde_json::Value), String> {
     let resp = req.header("x-service-token", session::service_secret()).send().await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();
@@ -602,20 +482,16 @@ async fn auth_send(req: reqwest_middleware::RequestBuilder) -> Result<(u16, serd
 // next page is the invite page again, which says they're in.
 
 /// Session key: an invite opened while logged out, redeemed on logging in.
-#[cfg(feature = "server")]
 pub const PENDING_INVITE_KEY: &str = "pending_invite";
 /// Session key: the code of the invite a login just redeemed; its page (`/invite#<code>`) opens
 /// right after logging in.
-#[cfg(feature = "server")]
 pub const INVITE_RETURN_KEY: &str = "invite_return";
 
 /// How long an invite opened while logged out waits for a log in. Short, so on a
 /// shared computer the next person to log in doesn't get it.
-#[cfg(feature = "server")]
 const PENDING_INVITE_SECS: u64 = 3600;
 
 /// An invite opened while logged out, kept in the session.
-#[cfg(feature = "server")]
 #[derive(Serialize, Deserialize)]
 pub struct PendingInvite {
     code: String,
@@ -623,12 +499,10 @@ pub struct PendingInvite {
     opened_at: u64,
 }
 
-#[cfg(feature = "server")]
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-#[cfg(feature = "server")]
 impl PendingInvite {
     pub fn new(code: String) -> Self {
         Self { code, opened_at: unix_now() }
@@ -643,7 +517,6 @@ impl PendingInvite {
 /// Redeems the session's pending invite for the account just logged in as `token`, and keeps
 /// its code for the invite page to show next (it also says if the link no longer works).
 /// Only this login's: an earlier login's code, never taken, is dropped first.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.redeem_pending_invite", skip_all)]
 pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) {
     let _ = sess.remove::<String>(INVITE_RETURN_KEY).await;
@@ -670,7 +543,6 @@ pub async fn redeem_pending_invite(sess: &tower_sessions::Session, token: &str) 
 }
 
 /// Why a profile request failed.
-#[cfg(feature = "server")]
 #[derive(Debug)]
 pub enum ProfileError {
     /// Auth refused the value (e.g. a display name that is too long).
@@ -680,7 +552,6 @@ pub enum ProfileError {
     Other(String),
 }
 
-#[cfg(feature = "server")]
 async fn profile_call<T: Serialize>(path: &str, body: &T) -> Result<AccountProfile, ProfileError> {
     use session::{auth_url, service_secret};
 
@@ -708,7 +579,6 @@ async fn profile_call<T: Serialize>(path: &str, body: &T) -> Result<AccountProfi
 }
 
 /// The token's account.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.account_profile", skip_all)]
 pub async fn account_profile(token: &str) -> Result<AccountProfile, ProfileError> {
     #[derive(Serialize)]
@@ -719,7 +589,6 @@ pub async fn account_profile(token: &str) -> Result<AccountProfile, ProfileError
 }
 
 /// Set (or with `None`/blank, clear) the token's account's display name.
-#[cfg(feature = "server")]
 #[tracing::instrument(name = "bff.set_display_name", skip_all)]
 pub async fn set_display_name(token: &str, display_name: Option<&str>) -> Result<AccountProfile, ProfileError> {
     #[derive(Serialize)]
@@ -730,170 +599,9 @@ pub async fn set_display_name(token: &str, display_name: Option<&str>) -> Result
     profile_call("/internal/profile/display_name", &Req { token, display_name }).await
 }
 
-/// Check whether the current user holds a specific permission.
-#[server(prefix = "/bff")]
-#[tracing::instrument(name = "bff.check_permission", skip_all, err, fields(permission = %name))]
-pub async fn check_permission(name: String) -> Result<bool, ServerFnError> {
-    let result = get_my_permissions().await?.contains(&name);
-    tracing::debug!(permission = %name, granted = result, "permission check");
-    Ok(result)
-}
-
-// ---- Ark, Enshrouded and admin: server functions over the same functions as the JSON API ----
-
-/// The session's username and token, for a server function that acts as the user (auth
-/// checks the token's permission).
-#[cfg(feature = "server")]
-async fn session_login() -> Result<(String, String), ServerFnError> {
-    let logged_out = || server_error(ApiError::logged_out());
-    let sess = session::get_session().ok_or_else(logged_out)?;
-    let username: Option<String> = sess.get("username").await.ok().flatten();
-    let token: Option<String> = sess.get("opaque_token").await.ok().flatten();
-    username.zip(token).ok_or_else(logged_out)
-}
-
-/// The session's token, if its user has `manage_permissions`: auth's admin endpoints trust
-/// the website to check (as the JSON API's access layer does).
-#[cfg(feature = "server")]
-async fn admin_token() -> Result<String, ServerFnError> {
-    let sess = session::get_session().ok_or_else(|| server_error(ApiError::logged_out()))?;
-    let viewer = viewer(&sess).await.map_err(|e| {
-        tracing::error!(error = %e, "reading the session failed");
-        server_error(ApiError::login_unavailable())
-    })?;
-    match viewer {
-        Viewer::User { token, permissions, .. }
-            if permissions.iter().any(|p| p.known() == Some(KnownPermission::ManagePermissions)) =>
-        {
-            Ok(token)
-        }
-        Viewer::User { .. } => Err(server_error(ApiError::forbidden())),
-        Viewer::Anonymous => Err(server_error(ApiError::logged_out())),
-        Viewer::Degraded { .. } => Err(server_error(ApiError::login_unavailable())),
-    }
-}
-
-/// The number of players on the Ark server; -1 when it doesn't say (offline).
-#[server(prefix = "/bff")]
-pub async fn ark_player_count() -> Result<i32, ServerFnError> {
-    let (_, token) = session_login().await?;
-    let players = ark::players(&token).await.map_err(server_error)?;
-    Ok(players.count.and_then(|n| i32::try_from(n).ok()).unwrap_or(-1))
-}
-
-/// Starts, stops or restarts the Ark server.
-#[server(prefix = "/bff")]
-pub async fn ark_command(cmd: ArkCommand) -> Result<ArkOutcome, ServerFnError> {
-    let (username, token) = session_login().await?;
-    ark::command(&token, &username, cmd).await.map_err(server_error)
-}
-
-/// The Enshrouded server's state, players, and the latest commands.
-#[server(prefix = "/bff")]
-pub async fn enshrouded_status() -> Result<EnshroudedStatus, ServerFnError> {
-    let (_, token) = session_login().await?;
-    enshrouded::status(&token).await.map_err(server_error)
-}
-
-/// Restarts or force-updates the Enshrouded server.
-#[server(prefix = "/bff")]
-pub async fn enshrouded_command(cmd: EnshroudedCommand) -> Result<(), ServerFnError> {
-    let (_, token) = session_login().await?;
-    enshrouded::command(&token, cmd).await.map_err(server_error)
-}
-
-#[server(prefix = "/bff")]
-pub async fn admin_list_users(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminUser>, ServerFnError> {
-    admin_token().await?;
-    admin::users(&AdminPage { page, limit, search }).await.map_err(server_error)
-}
-
-#[server(prefix = "/bff")]
-pub async fn admin_list_roles(page: u32, limit: u32, search: String) -> Result<PagedResult<AdminRole>, ServerFnError> {
-    admin_token().await?;
-    admin::roles(&AdminPage { page, limit, search }).await.map_err(server_error)
-}
-
-/// Every role, without its permissions (for the pickers).
-#[server(prefix = "/bff")]
-pub async fn admin_list_all_roles() -> Result<Vec<AdminRoleRef>, ServerFnError> {
-    admin_token().await?;
-    admin::all_roles().await.map_err(server_error)
-}
-
-#[server(prefix = "/bff")]
-pub async fn admin_list_permissions() -> Result<Vec<AdminPermission>, ServerFnError> {
-    admin_token().await?;
-    admin::permissions().await.map_err(server_error)
-}
-
-#[server(prefix = "/bff")]
-pub async fn admin_assign_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
-    admin_token().await?;
-    admin::assign_user_role(user_id, role_id).await.map_err(server_error)
-}
-
-#[server(prefix = "/bff")]
-pub async fn admin_revoke_user_role(user_id: i64, role_id: i32) -> Result<(), ServerFnError> {
-    admin_token().await?;
-    admin::revoke_user_role(user_id, role_id).await.map_err(server_error)
-}
-
-#[server(prefix = "/bff")]
-pub async fn admin_assign_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
-    admin_token().await?;
-    admin::assign_role_permission(role_id, permission_id).await.map_err(server_error)
-}
-
-#[server(prefix = "/bff")]
-pub async fn admin_revoke_role_permission(role_id: i32, permission_id: i32) -> Result<(), ServerFnError> {
-    admin_token().await?;
-    admin::revoke_role_permission(role_id, permission_id).await.map_err(server_error)
-}
-
-/// The latest invite links, newest first.
-#[server(prefix = "/bff")]
-pub async fn admin_list_invites() -> Result<Vec<AdminInvite>, ServerFnError> {
-    admin_token().await?;
-    admin::invites().await.map_err(server_error)
-}
-
-/// Makes an invite link that gives `role_id`, working for `days` days and for up
-/// to `max_uses` people (`None`: any number). The reply's `link` is shown only now.
-#[server(prefix = "/bff")]
-pub async fn admin_create_invite(
-    role_id: i32,
-    days: i64,
-    max_uses: Option<i32>,
-    note: Option<String>,
-) -> Result<AdminInvite, ServerFnError> {
-    let token = admin_token().await?;
-    admin::create_invite(&token, &NewInvite { role_id, days, max_uses, note }).await.map_err(server_error)
-}
-
-/// Stops an invite link from letting anyone else in. People who already joined keep the role.
-#[server(prefix = "/bff")]
-pub async fn admin_revoke_invite(invite_id: i32) -> Result<(), ServerFnError> {
-    admin_token().await?;
-    admin::revoke_invite(invite_id).await.map_err(server_error)
-}
-
-#[cfg(all(test, feature = "server"))]
+#[cfg(test)]
 mod tests {
     use super::PendingInvite;
-    use dioxus::prelude::ServerFnError;
-
-    #[test]
-    fn auth_rejections_keep_their_http_status() {
-        use axum::response::IntoResponse;
-        for status in [400, 401, 403, 404, 409, 429] {
-            let error = super::auth_error(status, "Try again");
-            assert_eq!(error.into_response().status().as_u16(), status);
-        }
-        for status in [302, 500, 503] {
-            assert_eq!(super::auth_error(status, "Unavailable").into_response().status().as_u16(), 502);
-        }
-    }
 
     #[test]
     fn password_rejections_distinguish_credentials_from_outages() {
@@ -903,16 +611,6 @@ mod tests {
         for (status, body) in [(401, "Invalid service token"), (500, "internal"), (503, ""), (400, "malformed")] {
             assert_eq!(super::password_login_error(status, body).status(), 502);
         }
-    }
-
-    #[test]
-    fn server_functions_answer_api_errors_with_their_status_and_message() {
-        use axum::response::IntoResponse;
-        let error = super::password_login_error(403, "Invalid credentials");
-        let ServerFnError::ServerError { code, message, .. } = super::server_error(error) else { unreachable!() };
-        assert_eq!((code, message.as_str()), (403, "Incorrect username or password."));
-        let unavailable = super::server_error(super::login_unavailable());
-        assert_eq!(unavailable.into_response().status().as_u16(), 502);
     }
 
     #[tokio::test]
@@ -957,7 +655,7 @@ mod tests {
             assert_eq!(result.unwrap_err().status(), expected);
 
             // In the trace, a wrong password is an answer (the status code is recorded, no
-            // span is an error); auth being unusable fails the server function's span.
+            // span is an error); auth being unusable fails the login's span.
             let spans = exporter.get_finished_spans().unwrap();
             exporter.reset();
             let span = |name: &str| spans.iter().find(|s| s.name == name).unwrap();
@@ -967,7 +665,7 @@ mod tests {
             assert_eq!(recorded.map(|kv| kv.value.to_string()), Some(status.to_string()));
             assert_eq!(failed("bff.login_password"), expected == 502, "{status} {body}");
             // 401 is the token endpoints' expected answer (so is auth's own 401 for a bad
-            // service secret, which the server function's span reports instead).
+            // service secret, which the login's span reports instead).
             assert_eq!(failed("POST /internal/token/exchange"), status != 401, "{status} {body}");
         }
         drop(listener);

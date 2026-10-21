@@ -11,8 +11,9 @@
     "build": "astro build && node scripts/precompress.mjs",
     "check": "astro check",
     "test": "vitest run",
+    "test:trace": "node --test assets/trace.test.mjs",
     "e2e": "playwright test",
-    "api": "cd .. && cargo run -q -p web --features web/server -- openapi > web/src/api/openapi.json && cd web && npm run api:types",
+    "api": "cd .. && cargo run -q -p web -- openapi > web/src/api/openapi.json && cd web && npm run api:types",
     "api:types": "openapi-typescript src/api/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {

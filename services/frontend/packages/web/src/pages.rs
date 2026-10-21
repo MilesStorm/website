@@ -1,5 +1,4 @@
-//! Astro's pages (`web/dist`), served while `FRONTEND_UI=astro`; otherwise Dioxus renders every
-//! page as before. Only the paths in [`api_types::PAGES`] are pages: each is its own route, so
+//! Astro's pages (`web/dist`). Only the paths in [`api_types::PAGES`] are pages: each is its own route, so
 //! its span is named after it (`GET /`). The HTML is read once at startup and split where the
 //! request's data goes: into the `<html` tag (`data-session`, `data-perms`, for the CSS gates)
 //! and at the `<meta name="bff-inject">` marker (the page request's `traceparent`, the
@@ -29,37 +28,12 @@ use crate::json_api;
 pub(crate) const MARKER: &str = r#"<meta name="bff-inject">"#;
 const HTML_OPEN: &str = "<html";
 
-/// Which pages the server answers with: `FRONTEND_UI=astro` or `dioxus` (the default).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ui {
-    Dioxus,
-    Astro,
-}
-
-impl Ui {
-    /// The value of `FRONTEND_UI`; anything else stops the server from starting.
-    pub fn parse(value: Option<&str>) -> anyhow::Result<Self> {
-        match value.map(str::trim) {
-            None | Some("") | Some("dioxus") => Ok(Self::Dioxus),
-            Some("astro") => Ok(Self::Astro),
-            Some(other) => anyhow::bail!("FRONTEND_UI={other:?}: expected \"astro\" or \"dioxus\""),
-        }
-    }
-}
-
-/// The Astro build when `FRONTEND_UI=astro`, read from `WEB_DIST` (default `web/dist`, as in a
-/// checkout). With the flag off the build isn't looked at, so whatever is there can't stop the
-/// server.
-pub fn from_env() -> anyhow::Result<Option<Arc<Built>>> {
-    match Ui::parse(std::env::var("FRONTEND_UI").ok().as_deref())? {
-        Ui::Dioxus => Ok(None),
-        Ui::Astro => {
-            let dir = std::env::var_os("WEB_DIST").map_or_else(|| PathBuf::from("web/dist"), PathBuf::from);
-            let built = Built::load(&dir, PAGES)?;
-            tracing::info!(dir = %dir.display(), pages = PAGES.len(), "serving the Astro pages");
-            Ok(Some(Arc::new(built)))
-        }
-    }
+/// The Astro build, read from `WEB_DIST` (default `web/dist`, as in a checkout).
+pub fn from_env() -> anyhow::Result<Arc<Built>> {
+    let dir = std::env::var_os("WEB_DIST").map_or_else(|| PathBuf::from("web/dist"), PathBuf::from);
+    let built = Built::load(&dir, PAGES)?;
+    tracing::info!(dir = %dir.display(), pages = PAGES.len(), "serving the Astro pages");
+    Ok(Arc::new(built))
 }
 
 /// A page split at its two insertion points.
@@ -197,13 +171,10 @@ fn html_files(root: &Path, dir: &Path, found: &mut BTreeSet<String>) -> std::io:
     Ok(())
 }
 
-/// Adds the pages and `/_astro/*` to `router` when there is a build, and the 404 page as its
-/// fallback (in place of Dioxus's page renderer): every page has its own route now.
-pub fn mount<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Option<Arc<Built>>) -> Router<S> {
-    match built {
-        Some(built) => mount_rows(router, built, PAGES),
-        None => router,
-    }
+/// Adds the pages and `/_astro/*` to `router`, and the 404 page as its fallback: every page has
+/// its own route.
+pub fn mount<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Built>) -> Router<S> {
+    mount_rows(router, built, PAGES)
 }
 
 /// [`mount`] with `rows` for the pages: a page that isn't public gets its [`guard`].
@@ -216,8 +187,7 @@ fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Bu
             _ => route.route_layer(from_fn_with_state((built.clone(), *page), guard)),
         };
         router = router.route(page.path.as_str(), route);
-        // `/asshole/` is the same page: sent to its one address, rather than to Dioxus's
-        // fallback, which would render the Dioxus page under the flag.
+        // `/asshole/` is the same page: sent to its one address.
         if page.path.as_str() != "/" {
             router = router.route(&format!("{}/", page.path.as_str()), axum::routing::get(canonical));
         }
@@ -233,8 +203,8 @@ fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Bu
     router
         .merge(assets)
         .merge(favicon)
-        // Dioxus's server functions are explicit routes: any other `/bff/*` path is an API call
-        // that doesn't exist, answered as `/api/*`'s are.
+        // The old Dioxus app's server functions, which a tab still open from before may call:
+        // an API that doesn't exist, answered as `/api/*`'s are.
         .route("/bff/{*rest}", axum::routing::any(|| async { json_api::no_such_api() }))
         .fallback(move |req: Request| not_found(built.clone(), req))
 }
@@ -247,13 +217,19 @@ async fn a_day(mut res: Response) -> Response {
     res
 }
 
-/// Any other path: the 404 page, spliced like every page, with status 404. A request that isn't
-/// a page load (a file the build doesn't have, such as `/robots.txt`, or a method other than
-/// GET/HEAD) gets a bare 404, and asks auth nothing.
+/// Any other path: the 404 page, spliced like every page, with status 404, its span named
+/// `GET NotFound` (a bounded name, never the path). A request that isn't a page load (a file the
+/// build doesn't have, such as `/robots.txt`, or a method other than GET/HEAD) gets a bare 404,
+/// asks auth nothing, and its span keeps the method alone as its name (no route matched).
 async fn not_found(built: Arc<Built>, req: Request) -> Response {
+    use opentelemetry::trace::TraceContextExt as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
     if !page_like(&req) {
         return StatusCode::NOT_FOUND.into_response();
     }
+    // tracing-opentelemetry takes an `otel.name` recorded only before the span has started; by
+    // now it has, so the started span is renamed itself.
+    tracing::Span::current().context().span().update_name(format!("{} NotFound", req.method()));
     let request = req.extensions().get::<api::trace::RequestTraceContext>().cloned();
     let (mut parts, _) = req.into_parts();
     let bootstrap = match json_api::Viewer::from_request_parts(&mut parts, &()).await {

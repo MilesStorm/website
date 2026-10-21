@@ -8,7 +8,7 @@ import type { Schemas } from '@/api/client';
 // the count, its badge and its line go and for each button, so nothing moves when it arrives
 // (e2e/profile.spec.ts measures it). Free of the API client: rendered when the page is built.
 
-/** The buttons: each command and its label, in Dioxus's order. */
+/** The buttons: each command and its label, in order. */
 export const ARK_BUTTONS: [Schemas['ArkCommand'], string][] = [
   ['restart', 'Restart'],
   ['stop', 'Stop'],

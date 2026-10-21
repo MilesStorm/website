@@ -68,10 +68,6 @@ spec:
                 name: website-secrets
                 key: SURREAL_PASS
                 optional: true
-          # The Astro pages (services/frontend/web), with Astro's 404 page for any other path.
-          # Rollback: remove this (or set "dioxus"); the same image serves the Dioxus pages.
-          - name: FRONTEND_UI
-            value: "astro"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: "http://alloy.monitoring.svc.cluster.local:4317"
           # Read by the OTel SDK into every span's and log's resource; staging overrides it.

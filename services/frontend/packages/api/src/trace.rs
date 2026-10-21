@@ -1,93 +1,27 @@
 //! Trace propagation for the BFF. The conventions are in TRACING.md at the repository root.
 
-use std::future::Future;
-
-use dioxus::fullstack::Transportable;
-use dioxus::prelude::{RenderError, Resource};
-use tracing::instrument::{Instrument as _, Instrumented};
-
-/// `use_server_future`, with the future joined to the page request's trace during SSR.
-///
-/// Dioxus runs server-function requests inside the request's span, but renders SSR on
-/// its local pool without it (dioxus-server 0.7 `ssr.rs`, `spawn_pinned`). A server
-/// future polled during SSR would otherwise start a trace of its own. `name` names its
-/// span. TODO: drop this wrapper once Dioxus instruments the SSR render (check
-/// `rt.spawn_pinned(create_render_future)` in dioxus-server's `ssr.rs` when upgrading).
-#[track_caller]
-#[allow(clippy::disallowed_methods, reason = "trace::use_server_future is the wrapper the lint points to")]
-pub fn use_server_future<T, F, M>(
-    name: &'static str,
-    mut future: impl FnMut() -> F + 'static,
-) -> Result<Resource<T>, RenderError>
-where
-    F: Future<Output = T> + 'static,
-    T: Transportable<M>,
-    M: 'static,
-{
-    dioxus::prelude::use_server_future(move || in_request_trace(name, future()))
-}
-
-/// Runs `fut` in a span that belongs to the current page request's trace. Outside a
-/// request (and in the browser) the span is disabled and `fut` runs as it would anyway.
-pub fn in_request_trace<F: Future>(name: &'static str, fut: F) -> Instrumented<F> {
-    #[cfg(feature = "server")]
-    if let Some(cx) = server::request_context() {
-        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-        // Parented through OTel only, so the span holds no reference that would keep
-        // the request's span open. Fails only without the OTel layer: the span is new.
-        let span = tracing::info_span!(parent: None, "ssr.server_future", otel.name = name);
-        let _ = span.set_parent(cx);
-        return fut.instrument(span);
-    }
-    let _ = name;
-    fut.instrument(tracing::Span::none())
-}
-
-/// The W3C `traceparent` of the page request being served, for the `<meta>` the
-/// browser's tracer continues from (TRACING.md, "Browser"). `None` in the browser,
-/// outside a request, and for unsampled requests: the browser then decides for itself.
-pub fn traceparent() -> Option<String> {
-    #[cfg(feature = "server")]
-    {
-        sampled_traceparent(&server::server_span_context()?)
-    }
-    #[cfg(not(feature = "server"))]
-    None
-}
-
-/// [`traceparent`] for a page served by a plain axum handler (the Astro pages), from the
-/// request's [`RequestTraceContext`]: the request's own span, whatever span is current in the
-/// handler. `None` for an unsampled request.
-#[cfg(feature = "server")]
+/// The W3C `traceparent` of the page request being served, for the `<meta>` the browser's
+/// tracer continues from (TRACING.md, "Browser"), from the request's [`RequestTraceContext`]:
+/// the request's own span, whatever span is current in the handler. `None` for an unsampled
+/// request: the browser then decides for itself.
 pub fn page_traceparent(request: &RequestTraceContext) -> Option<String> {
-    sampled_traceparent(&request.0)
-}
-
-#[cfg(feature = "server")]
-fn sampled_traceparent(cx: &opentelemetry::Context) -> Option<String> {
     use opentelemetry::trace::TraceContextExt as _;
-    let sc = cx.span().span_context().clone();
+    let sc = request.0.span().span_context().clone();
     (sc.is_valid() && sc.is_sampled())
         .then(|| format!("00-{}-{}-{:02x}", sc.trace_id(), sc.span_id(), sc.trace_flags().to_u8()))
 }
 
 /// The commit this build was made from (the image's `GIT_SHA`), for the `<meta>` the
 /// browser's tracer reads its `service.version` from: the browser runs the bundle of the
-/// same build. `None` in the browser and where the image doesn't say.
+/// same build. `None` where the image doesn't say.
 pub fn service_version() -> Option<String> {
-    #[cfg(feature = "server")]
-    {
-        std::env::var("GIT_SHA").ok().filter(|sha| !sha.is_empty())
-    }
-    #[cfg(not(feature = "server"))]
-    None
+    std::env::var("GIT_SHA").ok().filter(|sha| !sha.is_empty())
 }
 
 /// An INFO span for work that outlives the current span: a spawned task, a queued job,
 /// a WebSocket session. It belongs to the current trace, but through OTel only, so it
 /// holds no reference that would keep the current span open (and unexported) until the
 /// work ends. Takes `info_span!` arguments: `detached_span!("name", field = value)`.
-#[cfg(feature = "server")]
 #[macro_export]
 macro_rules! detached_span {
     ($name:literal $(, $($fields:tt)*)?) => {{
@@ -108,7 +42,6 @@ macro_rules! detached_span {
 /// what it belongs to or was caused by ([`here`], a session's open span), since a unit has
 /// no parent. Takes `info_span!` arguments after the link:
 /// `unit_span!(link, "name", field = value)`.
-#[cfg(feature = "server")]
 #[macro_export]
 macro_rules! unit_span {
     ($link:expr, $name:literal $(, $($fields:tt)*)?) => {{
@@ -124,12 +57,10 @@ macro_rules! unit_span {
     }};
 }
 
-#[cfg(feature = "server")]
 #[doc(hidden)]
 pub use tracing as __tracing;
 
 /// Puts `span` in the current span's trace (OTel parent only). Use [`detached_span!`].
-#[cfg(feature = "server")]
 pub fn continue_current_trace(span: &tracing::Span) {
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
     // Fails only without the OTel layer, or once `span` has been entered.
@@ -137,10 +68,8 @@ pub fn continue_current_trace(span: &tracing::Span) {
     server::record_ids(span);
 }
 
-#[cfg(feature = "server")]
 pub use server::*;
 
-#[cfg(feature = "server")]
 mod server {
     use std::borrow::Cow;
     use std::future::Future;
@@ -149,8 +78,7 @@ mod server {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use dioxus::fullstack::FullstackContext;
-    use dioxus::server::axum;
+    use api_types::ApiError;
     use fred::prelude::{Builder, Config, ConnectionConfig, ReconnectPolicy, TracingConfig};
     use opentelemetry::propagation::Injector;
     use opentelemetry::trace::{SpanContext, Status, TraceContextExt as _};
@@ -163,14 +91,14 @@ mod server {
     use tracing::Instrument as _;
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
-    /// The OTel context of the request being served, for work Dioxus runs outside the
-    /// request's span. Set by [`capture_request_context`].
+    /// The OTel context of the request being served, for the page's `traceparent`
+    /// ([`page_traceparent`](super::page_traceparent)). Set by [`capture_request_context`].
     #[derive(Clone)]
     pub struct RequestTraceContext(pub opentelemetry::Context);
 
     /// Axum middleware, layered inside `OtelAxumLayer`: keeps the request span's OTel
-    /// context in the request so [`in_request_trace`](super::in_request_trace) can find
-    /// it, and records the trace ID on the span so every log line of the request has it.
+    /// context in the request for the page's `traceparent`, and records the trace ID on the
+    /// span so every log line of the request has it.
     pub async fn capture_request_context(
         mut req: axum::extract::Request,
         next: axum::middleware::Next,
@@ -183,35 +111,6 @@ mod server {
             req.extensions_mut().insert(RequestTraceContext(cx));
         }
         next.run(req).await
-    }
-
-    /// The OTel context of the `ssr.render` span, for the server futures the render polls.
-    /// Set by [`ssr_render`].
-    #[derive(Clone)]
-    pub struct RenderTraceContext(pub opentelemetry::Context);
-
-    /// Where work Dioxus runs outside the request's span belongs: the page's `ssr.render`
-    /// span while one is open, else the request's span.
-    pub(crate) fn request_context() -> Option<opentelemetry::Context> {
-        let cx = FullstackContext::current()?;
-        cx.extension::<RenderTraceContext>().map(|c| c.0).or_else(|| cx.extension::<RequestTraceContext>().map(|c| c.0))
-    }
-
-    /// The request span's own context, whatever is rendering: what the browser continues from.
-    pub(crate) fn server_span_context() -> Option<opentelemetry::Context> {
-        FullstackContext::current()?.extension::<RequestTraceContext>().map(|c| c.0)
-    }
-
-    /// Axum middleware for the Dioxus page handler: an `ssr.render` span around the render,
-    /// with the server futures it waits for as children. Without it the time a page spends
-    /// rendering is the request span's unexplained own time.
-    pub async fn ssr_render(mut req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
-        let span = tracing::info_span!("ssr.render");
-        let cx = span.context();
-        if cx.span().span_context().is_valid() {
-            req.extensions_mut().insert(RenderTraceContext(cx));
-        }
-        next.run(req).instrument(span).await
     }
 
     /// Axum middleware, layered inside `OtelAxumLayer`: the request's span ends when the
@@ -314,30 +213,12 @@ mod server {
     /// "4xx is a client-span error" (TRACING.md, "Errors").
     pub const WRONG_TOKEN_OK: Expected = Expected(&[401, 404]);
 
-    /// An error that may be an answer to the user (a 4xx) rather than a failure.
-    pub trait Rejection {
-        fn is_answer(&self) -> bool;
-    }
-
-    impl Rejection for dioxus::prelude::ServerFnError {
-        fn is_answer(&self) -> bool {
-            matches!(self, Self::ServerError { code: 400..=499, .. })
-        }
-    }
-
-    impl Rejection for api_types::ApiError {
-        fn is_answer(&self) -> bool {
-            (400..500).contains(&self.status())
-        }
-    }
-
-    /// Runs the body of a server function or API handler whose 4xx replies are answers to
-    /// the user (a wrong password, a used-up link: [`auth_error`](crate::auth_error)), and
-    /// marks the current span failed for any other error. Functions without such replies use
-    /// `#[instrument(err)]` instead.
-    pub async fn rejectable<T, E: Rejection>(body: impl Future<Output = Result<T, E>>) -> Result<T, E> {
+    /// Runs the body of an API handler whose 4xx replies are answers to the user (a wrong
+    /// password, a used-up link), and marks the current span failed for any other error.
+    /// Functions without such replies use `#[instrument(err)]` instead.
+    pub async fn rejectable<T>(body: impl Future<Output = Result<T, ApiError>>) -> Result<T, ApiError> {
         let result = body.await;
-        if result.as_ref().is_err_and(|e| !e.is_answer()) {
+        if result.as_ref().is_err_and(|e| !(400..500).contains(&e.status())) {
             failed("server_function");
         }
         result
@@ -931,32 +812,6 @@ mod server {
             assert_eq!(callee_trace, caller_trace);
         }
 
-        #[tokio::test(flavor = "current_thread")]
-        async fn ssr_future_joins_the_request_trace() {
-            let (closed, _guard) = pipeline();
-            let request = tracing::info_span!("request");
-            let request_cx = request.context();
-
-            let (mut parts, _) = http::Request::new(()).into_parts();
-            parts.extensions.insert(super::RequestTraceContext(request_cx.clone()));
-            let ctx = dioxus::fullstack::FullstackContext::new(parts);
-
-            // As in SSR: no span is current while the future is created and polled.
-            let seen = ctx
-                .scope(async {
-                    super::super::in_request_trace("probe", async {
-                        tracing::Span::current().context().span().span_context().trace_id()
-                    })
-                    .await
-                })
-                .await;
-            assert_eq!(seen, request_cx.span().span_context().trace_id());
-
-            // The SSR span links through OTel only: the request span closes as usual.
-            drop(request);
-            assert!(closed.lock().unwrap().iter().any(|n| n == "request"), "request span held open");
-        }
-
         type Fields = Vec<(String, String)>;
         type Parent = Option<String>;
 
@@ -1048,11 +903,11 @@ mod server {
             assert_eq!(field(fields, "db.operation.name"), Some("session.load"));
         }
 
-        #[tokio::test(flavor = "current_thread")]
-        async fn traceparent_of_sampled_requests_only() {
+        #[test]
+        fn traceparent_of_sampled_requests_only() {
             use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
 
-            async fn in_request(flags: TraceFlags) -> Option<String> {
+            fn in_request(flags: TraceFlags) -> Option<String> {
                 let sc = SpanContext::new(
                     TraceId::from_hex("4bf92f3577b34da6a3ce929d0e0e4736").unwrap(),
                     SpanId::from_hex("00f067aa0ba902b7").unwrap(),
@@ -1061,18 +916,14 @@ mod server {
                     TraceState::default(),
                 );
                 let cx = opentelemetry::Context::new().with_remote_span_context(sc);
-                let (mut parts, _) = http::Request::new(()).into_parts();
-                parts.extensions.insert(super::RequestTraceContext(cx));
-                let ctx = dioxus::fullstack::FullstackContext::new(parts);
-                ctx.scope(async { super::super::traceparent() }).await
+                super::super::page_traceparent(&super::RequestTraceContext(cx))
             }
 
             assert_eq!(
-                in_request(TraceFlags::SAMPLED).await.as_deref(),
+                in_request(TraceFlags::SAMPLED).as_deref(),
                 Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
             );
-            assert_eq!(in_request(TraceFlags::default()).await, None);
-            assert_eq!(super::super::traceparent(), None, "outside a request");
+            assert_eq!(in_request(TraceFlags::default()), None);
         }
 
         #[test]
@@ -1379,7 +1230,6 @@ mod server {
 
         #[tokio::test(flavor = "current_thread")]
         async fn failures_set_the_span_status() {
-            use dioxus::prelude::ServerFnError;
             let (exporter, _guard) = exporting();
 
             tracing::info_span!("store call").in_scope(|| super::failed("redis"));
@@ -1389,40 +1239,29 @@ mod server {
 
             // `#[instrument]` alone: the span stays OK whatever the function returns.
             #[tracing::instrument(name = "plain", skip_all)]
-            async fn plain() -> Result<(), ServerFnError> {
-                Err(ServerFnError::new("down"))
+            async fn plain() -> Result<(), String> {
+                Err("down".into())
             }
             #[tracing::instrument(name = "with err", skip_all, err)]
-            async fn with_err() -> Result<(), ServerFnError> {
-                Err(ServerFnError::new("down"))
-            }
-            #[tracing::instrument(name = "rejectable", skip_all)]
-            async fn rejectable(status: u16) -> Result<(), ServerFnError> {
-                super::rejectable(async move { Err(crate::auth_error(status, "no")) }).await
+            async fn with_err() -> Result<(), String> {
+                Err("down".into())
             }
             let _ = plain().await;
             let _ = with_err().await;
             assert_eq!(span(&exporter, "plain").status, Status::Unset);
             assert!(matches!(span(&exporter, "with err").status, Status::Error { .. }));
 
-            // A wrong password is an answer; auth being down is a failure.
-            let _ = rejectable(401).await;
-            assert_eq!(span(&exporter, "rejectable").status, Status::Unset);
-            exporter.reset();
-            let _ = rejectable(503).await;
-            assert!(matches!(span(&exporter, "rejectable").status, Status::Error { .. }));
-
-            // The same for the JSON API's errors, by their status.
-            #[tracing::instrument(name = "api rejectable", skip_all)]
-            async fn api_rejectable(error: api_types::ApiError) -> Result<(), api_types::ApiError> {
+            // A 4xx is an answer (logged out, a wrong password); anything else is a failure.
+            #[tracing::instrument(name = "rejectable", skip_all)]
+            async fn rejectable(error: api_types::ApiError) -> Result<(), api_types::ApiError> {
                 super::rejectable(async move { Err(error) }).await
             }
             exporter.reset();
-            let _ = api_rejectable(api_types::ApiError::logged_out()).await;
-            assert_eq!(span(&exporter, "api rejectable").status, Status::Unset);
+            let _ = rejectable(api_types::ApiError::logged_out()).await;
+            assert_eq!(span(&exporter, "rejectable").status, Status::Unset);
             exporter.reset();
-            let _ = api_rejectable(api_types::ApiError::internal()).await;
-            assert!(matches!(span(&exporter, "api rejectable").status, Status::Error { .. }));
+            let _ = rejectable(api_types::ApiError::internal()).await;
+            assert!(matches!(span(&exporter, "rejectable").status, Status::Error { .. }));
         }
 
         /// A router as web's: `OtelAxumLayer` outside [`end_span_with_body`](super::end_span_with_body).
@@ -1550,46 +1389,6 @@ mod server {
             assert_eq!(attr(&call, "error.type").as_deref(), Some("backend"));
             // The store's own words can name the session's owner: none of them are kept.
             assert!(!format!("{call:?}").contains("miles"));
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn a_page_render_is_a_span_with_its_server_futures_under_it() {
-            use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
-
-            let (exporter, _guard) = exporting();
-            // As Dioxus's page handler: the render runs outside the request's span, with
-            // the request's parts as its context.
-            let page = |req: axum::extract::Request| async move {
-                let (parts, _) = req.into_parts();
-                let ctx = dioxus::fullstack::FullstackContext::new(parts);
-                let render = ctx.scope(async {
-                    super::super::in_request_trace("load", async {}).await;
-                    super::super::traceparent().unwrap()
-                });
-                render.instrument(tracing::Span::none()).await
-            };
-            let app = axum::Router::new()
-                .fallback(axum::routing::get(page))
-                .layer(axum::middleware::from_fn(super::ssr_render))
-                .layer(axum::middleware::from_fn(super::capture_request_context))
-                .layer(OtelAxumLayer::default());
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let url = format!("http://{}/login", listener.local_addr().unwrap());
-            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-            let client = super::client(TEST_PEER, TIMEOUT, |b| b).unwrap();
-            let meta = client.get(&url).send().await.unwrap().text().await.unwrap();
-            tokio::time::sleep(Duration::from_millis(50)).await;
-
-            let spans = exporter.get_finished_spans().unwrap();
-            let server = spans.iter().find(|s| s.span_kind == SpanKind::Server).unwrap();
-            let render = span(&exporter, "ssr.render");
-            let future = span(&exporter, "load");
-            assert_eq!(render.parent_span_id, server.span_context.span_id());
-            assert_eq!(future.parent_span_id, render.span_context.span_id());
-            // The browser continues from the request's span, not from the render.
-            let sc = &server.span_context;
-            assert_eq!(meta, format!("00-{}-{}-01", sc.trace_id(), sc.span_id()));
         }
 
         /// stdout log lines carry the IDs of spans that aren't requests too (I8).

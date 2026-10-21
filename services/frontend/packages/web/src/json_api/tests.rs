@@ -1,11 +1,10 @@
 //! Contract tests of the JSON API: statuses, the error envelope, access by login, the origin
-//! check and one introspect call to auth per request; and the Dioxus server functions over the
-//! same functions. Auth is a stand-in that answers by token: `all` (every permission, plus one
-//! the site doesn't know), `none`, `lost` (an account auth can't load), `dead` (a token auth
-//! dropped), `down` (auth failing) and `github` (an account without an email). Emailed codes:
-//! `good` works, anything else has expired; invite code `join` is for `arcane_user`. The same
-//! stand-in plays SurrealDB for pictures and shared rolls, and the Ark, Enshrouded and admin
-//! endpoints, which fail while [`Auth::failing`] is set.
+//! check and one introspect call to auth per request. Auth is a stand-in that answers by token:
+//! `all` (every permission, plus one the site doesn't know), `none`, `lost` (an account auth
+//! can't load), `dead` (a token auth dropped), `down` (auth failing) and `github` (an account
+//! without an email). Emailed codes: `good` works, anything else has expired; invite code `join`
+//! is for `arcane_user`. The same stand-in plays SurrealDB for pictures and shared rolls, and the
+//! Ark, Enshrouded and admin endpoints, which fail while [`Auth::failing`] is set.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -493,8 +492,7 @@ async fn account_routes_need_a_login() {
     envelope(&site.json(Method::PUT, "/api/account/display-name", json!({"name": "x"})).await, 401, "logged_out");
     envelope(&site.send(Method::DELETE, "/api/account/picture", Some(SITE), None).await, 401, "logged_out");
     envelope(&site.get("/api/account/picture").await, 401, "logged_out");
-    envelope(&site.get("/api/profile/picture").await, 401, "logged_out");
-    envelope(&site.send(Method::POST, "/api/profile/picture", Some(SITE), Some(("image/png", vec![1]))).await, 401, "logged_out");
+    envelope(&site.send(Method::POST, "/api/account/picture", Some(SITE), Some(("image/png", vec![1]))).await, 401, "logged_out");
 
     // Auth down: the login can't be checked.
     drop(site); // it holds AUTH_ENV
@@ -512,7 +510,7 @@ async fn a_logged_in_account_request_asks_auth_once_who_is_logged_in() {
     assert_eq!(reply.body["shown_name"], "Shown");
     // The access layer and the handler share one resolution.
     assert_eq!(site.auth.introspected("none"), 1);
-    // The same span as the server function's.
+    // The function's own span.
     crate::trace_tests::span(&exporter, "bff.get_account").await;
 }
 
@@ -540,7 +538,7 @@ async fn bad_request_bodies_are_invalid_envelopes() {
     let no_type = Some(("text/plain", b"{}".to_vec()));
     envelope(&site.send(Method::PUT, "/api/account/display-name", Some(SITE), no_type).await, 415, "invalid");
 
-    // Over the upload limit: 413, which the Dioxus profile page shows as "too large".
+    // Over the upload limit: 413.
     let big = Some(("image/png", vec![0; crate::account::PICTURE_MAX_UPLOAD + 1]));
     envelope(&site.send(Method::POST, "/api/account/picture", Some(SITE), big).await, 413, "invalid");
 }
@@ -588,7 +586,7 @@ async fn changes_from_another_site_are_refused() {
     envelope(&site.send(Method::POST, "/api/session/login", evil, Some(("application/json", login.clone()))).await, 403, "forbidden");
     envelope(&site.send(Method::DELETE, "/api/session", evil, None).await, 403, "forbidden");
     envelope(&site.send(Method::DELETE, "/api/account/picture", evil, None).await, 403, "forbidden");
-    envelope(&site.send(Method::POST, "/api/profile/picture", evil, Some(("image/png", vec![1]))).await, 403, "forbidden");
+    envelope(&site.send(Method::POST, "/api/account/picture", evil, Some(("image/png", vec![1]))).await, 403, "forbidden");
     envelope(&site.send(Method::DELETE, "/api/account/sharing/data", evil, None).await, 403, "forbidden");
     for (path, body) in [
         ("/api/deletion/confirm", json!({"code": "good"})),
@@ -623,87 +621,6 @@ fn errors_answer_their_status_with_the_envelope() {
     let error = api_types::ApiError::new(api_types::ErrorCode::Invalid, "too big").with_status(413);
     assert_eq!(super::ApiError(error).into_response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(super::ApiError(api_types::ApiError::internal()).into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-/// Dioxus routes each file of its public dir (as the image has it: dx's bundle). Nothing else
-/// reads DIOXUS_PUBLIC_PATH; it is put back, and the directory removed, either way. Tests that
-/// make one hold [`PUBLIC_ENV`].
-pub(crate) struct Public(std::path::PathBuf, Option<std::ffi::OsString>, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
-
-static PUBLIC_ENV: Mutex<()> = Mutex::new(());
-
-impl Public {
-    pub(crate) fn new(name: &str) -> Self {
-        let guard = PUBLIC_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let public = Public(
-            std::env::temp_dir().join(format!("web-public-{name}-{}", std::process::id())),
-            std::env::var_os("DIOXUS_PUBLIC_PATH"),
-            guard,
-        );
-        std::fs::create_dir_all(public.0.join("assets")).unwrap();
-        // As `dx bundle` makes it: the Dioxus icon is a hashed file under `assets/`, so no
-        // root `favicon.ico` (the Astro build serves that one).
-        std::fs::write(public.0.join("assets/web.js"), "").unwrap();
-        std::env::set_var("DIOXUS_PUBLIC_PATH", &public.0);
-        public
-    }
-}
-
-impl Drop for Public {
-    fn drop(&mut self) {
-        match self.1.take() {
-            Some(old) => std::env::set_var("DIOXUS_PUBLIC_PATH", old),
-            None => std::env::remove_var("DIOXUS_PUBLIC_PATH"),
-        }
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-#[test]
-fn the_api_mounts_beside_the_dioxus_app() {
-    use dioxus::prelude::*;
-    let _public = Public::new("mount");
-    // axum panics on overlapping routes when the router is built.
-    let _ = axum::Router::new()
-        .serve_dioxus_application(ServeConfig::default(), crate::App)
-        .route("/ws/arcane", axum::routing::get(|| async {}))
-        .merge(super::router());
-}
-
-/// The Dioxus pages' calls over HTTP, as the browser makes them: the command enums go over the
-/// wire as auth's names and come back.
-#[tokio::test]
-async fn panel_server_functions_over_http() {
-    use dioxus::prelude::*;
-    let public = Public::new("bff");
-    let app = axum::Router::new().serve_dioxus_application(ServeConfig::default(), crate::App);
-    drop(public);
-    let mut site = Site::serving(app).await.log_in("all").await;
-    let path = |name: &str| {
-        let fns = ServerFunction::collect();
-        let found = fns.iter().find(|f| f.path().strip_prefix("/bff/").and_then(|p| p.strip_prefix(name)).is_some_and(|hash| hash.bytes().all(|b| b.is_ascii_digit())));
-        found.map(|f| f.path()).unwrap_or_else(|| panic!("no server function {name}"))
-    };
-
-    let reply = site.json(Method::POST, path("ark_command"), json!({"cmd": "start"})).await;
-    assert_eq!((reply.status, &reply.body), (StatusCode::OK, &json!("started")));
-    let reply = site.json(Method::POST, path("enshrouded_command"), json!({"cmd": "update_now"})).await;
-    assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.body);
-    let reply = site.json(Method::POST, path("enshrouded_command"), json!({"cmd": "restart"})).await;
-    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-    assert_eq!(
-        site.calls(),
-        [
-            "POST /internal/ark/command \"start\"",
-            "POST /internal/enshrouded/command \"update_now\"",
-            "POST /internal/enshrouded/command \"restart\"",
-        ]
-    );
-    // A name that isn't a command doesn't reach auth (Dioxus answers arguments it can't read
-    // with a 500).
-    let reply = site.json(Method::POST, path("ark_command"), json!({"cmd": "explode"})).await;
-    assert!(!reply.status.is_success(), "{}", reply.status);
-    assert_eq!(site.calls().len(), 3);
 }
 
 #[test]
@@ -850,12 +767,10 @@ async fn a_picture_is_uploaded_served_and_removed() {
     assert_eq!(account["picture_url"], "/api/account/picture?u=user-all&v=1700");
     assert_eq!(site.get("/api/session").await.body["viewer"]["picture_url"], account["picture_url"]);
 
-    for path in ["/api/account/picture?u=user-all&v=1700", "/api/profile/picture"] {
-        let reply = site.get(path).await;
-        assert_eq!(reply.status, StatusCode::OK, "{path}");
-        assert_eq!(reply.content_type.as_deref(), Some("image/jpeg"), "{path}");
-        assert_eq!(image::load_from_memory(&reply.bytes).unwrap().width(), 256, "{path}");
-    }
+    let reply = site.get("/api/account/picture?u=user-all&v=1700").await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.content_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(image::load_from_memory(&reply.bytes).unwrap().width(), 256);
 
     let reply = site.send(Method::DELETE, "/api/account/picture", Some(SITE), None).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
@@ -925,66 +840,6 @@ fn access_by_login_and_permission() {
     assert_eq!(status(Access::LoggedIn, &plain), Ok(()));
     assert_eq!(status(arcane, &plain), Err((403, ErrorCode::Forbidden)));
     assert_eq!(status(arcane, &user(vec![Permission::Known(KnownPermission::Arcane)])), Ok(()));
-}
-
-// ---- The Dioxus server functions over the same functions ----
-
-/// Runs a server function in a request with `session`, as Dioxus does.
-async fn in_request<F: std::future::Future>(session: &Session, call: F) -> F::Output {
-    use dioxus::fullstack::FullstackContext;
-    let (mut parts, ()) = Request::builder().uri("/bff/fn").header(header::HOST, HOST).body(()).unwrap().into_parts();
-    parts.extensions.insert(session.clone());
-    FullstackContext::new(parts).scope(call).await
-}
-
-async fn session_of(token: Option<&str>) -> Session {
-    let session = Session::new(None, Arc::new(MemoryStore::default()), None);
-    if let Some(token) = token {
-        session.insert("opaque_token", token).await.unwrap();
-        session.insert("username", format!("user-{token}")).await.unwrap();
-    }
-    session
-}
-
-#[tokio::test]
-async fn login_status_and_permissions_server_functions() {
-    use ui::data_dir::LoginStatus;
-    let _site = Site::new().await;
-
-    let all = session_of(Some("all")).await;
-    assert_eq!(in_request(&all, api::check_login_status()).await.unwrap(), LoginStatus::LoggedIn("user-all".into()));
-    // Unknown names too: the Dioxus pages show what auth says.
-    assert_eq!(
-        in_request(&all, api::get_my_permissions()).await.unwrap(),
-        ["llama", "enshrouded", "arcane", "manage_permissions", "brand_new"]
-    );
-
-    let down = session_of(Some("down")).await;
-    assert_eq!(in_request(&down, api::check_login_status()).await.unwrap(), LoginStatus::LoggedIn("user-down".into()));
-    assert!(in_request(&down, api::get_my_permissions()).await.unwrap().is_empty());
-
-    let dead = session_of(Some("dead")).await;
-    assert_eq!(in_request(&dead, api::check_login_status()).await.unwrap(), LoginStatus::LoggedOut);
-    assert_eq!(dead.get::<String>("username").await.unwrap(), None, "the session is cleared");
-    assert!(in_request(&session_of(None).await, api::get_my_permissions()).await.unwrap().is_empty());
-
-    in_request(&all, api::logout()).await.unwrap();
-    assert_eq!(all.get::<String>("username").await.unwrap(), None);
-}
-
-#[tokio::test]
-async fn account_server_functions_logged_out_say_so() {
-    use dioxus::prelude::ServerFnError;
-    let _site = Site::new().await;
-    let logged_out = session_of(None).await;
-    let expect = |r: Result<api_types::AccountInfo, ServerFnError>| match r {
-        Err(ServerFnError::ServerError { code, message, .. }) => assert_eq!((code, message.as_str()), (401, "You've been logged out. Log in again.")),
-        other => panic!("{other:?}"),
-    };
-    expect(in_request(&logged_out, crate::account::get_account()).await);
-    expect(in_request(&logged_out, crate::account::set_account_display_name("x".into())).await);
-    // A token auth dropped meanwhile: auth's 401, the same answer.
-    expect(in_request(&session_of(Some("dead")).await, crate::account::get_account()).await);
 }
 
 // ---- Account emails, invites and sharing (PR 2b) ----
@@ -1116,19 +971,13 @@ async fn invites_join_or_wait_for_a_login() {
 #[tokio::test]
 async fn a_login_lands_on_the_invite_page_else_the_page_asked_for_else_home() {
     use api_types::{NextPage, PagePath};
-    let session = session_of(None).await;
+    let session = Session::new(None, Arc::new(MemoryStore::default()), None);
     session.insert(api::INVITE_RETURN_KEY, "join").await.unwrap();
     // The invite wins, once.
     let invite = NextPage { path: PagePath::Invite, fragment: Some("join".into()) };
     assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await, invite);
     assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await.href(), "/asshole");
     assert_eq!(super::next_page(&session, None).await.href(), "/");
-
-    // The Dioxus login's server function is the same, without a page asked for.
-    let _site = Site::new().await;
-    session.insert(api::INVITE_RETURN_KEY, "join").await.unwrap();
-    assert_eq!(in_request(&session, crate::invites::after_login_path()).await.unwrap(), "/invite#join");
-    assert_eq!(in_request(&session, crate::invites::after_login_path()).await.unwrap(), "/");
 }
 
 /// The login pages' call: an invite opened before logging in wins over `next`; a `next` that
@@ -1174,84 +1023,6 @@ async fn sharing_needs_arcane_and_deleting_needs_only_a_username() {
     let mut site = Site::logged_in("down").await.with_pictures();
     let reply = site.send(Method::DELETE, "/api/account/sharing/data", Some(SITE), None).await;
     assert_eq!((reply.status, &reply.body), (StatusCode::OK, &json!({"deleted": 2})));
-}
-
-#[tokio::test]
-async fn email_invite_and_sharing_server_functions() {
-    use dioxus::prelude::ServerFnError;
-    use crate::{emails, invites, sharing};
-    let _site = Site::new().await;
-    let status = |e: ServerFnError| match e {
-        ServerFnError::ServerError { code, message, .. } => (code, message),
-        other => panic!("{other:?}"),
-    };
-    let logged_out = || session_of(None);
-    let all = session_of(Some("all")).await;
-
-    assert_eq!(in_request(&logged_out().await, emails::confirm_email("good".into())).await.unwrap(), "user-all");
-    assert_eq!(status(in_request(&all, emails::confirm_email("used".into())).await.unwrap_err()).0, 404);
-    // Not sent to auth: it can't be a code.
-    assert_eq!(status(in_request(&all, emails::account_to_delete("a&b".into())).await.unwrap_err()).0, 404);
-    in_request(&logged_out().await, emails::forgot_password("anyone".into())).await.unwrap();
-    assert_eq!(status(in_request(&all, emails::forgot_password(" ".into())).await.unwrap_err()).0, 400);
-    assert_eq!(in_request(&all, emails::send_confirmation_email()).await.unwrap(), "a@b.c");
-    assert_eq!(in_request(&all, emails::request_account_deletion()).await.unwrap(), "a@b.c");
-    let (code, message) = status(in_request(&logged_out().await, emails::send_confirmation_email()).await.unwrap_err());
-    assert_eq!((code, message.as_str()), (401, "You've been logged out. Log in again."));
-    assert_eq!(in_request(&logged_out().await, emails::account_to_delete("good".into())).await.unwrap().username, "user-all");
-    let done = in_request(&logged_out().await, emails::delete_account("good".into())).await.unwrap();
-    assert_eq!((done.username.as_str(), done.logged_out), ("user-all", false));
-    let reset = in_request(&all, emails::reset_password("good".into(), "long enough".into())).await.unwrap();
-    assert!(reset.logged_out);
-    assert_eq!(all.get::<String>("username").await.unwrap(), None);
-
-    let github = session_of(Some("github")).await;
-    assert_eq!(status(in_request(&github, emails::delete_account_without_email("x".into())).await.unwrap_err()).0, 400);
-    let done = in_request(&github, emails::delete_account_without_email("user-github".into())).await.unwrap();
-    assert!(done.logged_out);
-
-    let opened = in_request(&logged_out().await, invites::open_invite("join".into())).await.unwrap();
-    assert!(matches!(opened, api_types::Opened::NeedsAccount { .. }));
-    let joined = in_request(&session_of(Some("all")).await, invites::open_invite("join".into())).await.unwrap();
-    assert!(matches!(joined, api_types::Opened::Joined { .. }));
-    assert_eq!(status(in_request(&logged_out().await, invites::open_invite("expired".into())).await.unwrap_err()).0, 404);
-
-    // Sharing: no store configured here.
-    let none = session_of(Some("none")).await;
-    assert!(in_request(&none, sharing::get_dataset_sharing()).await.is_err(), "without arcane");
-    let state = in_request(&session_of(Some("all")).await, sharing::get_dataset_sharing()).await.unwrap();
-    assert_eq!(state, api_types::SharingState { available: false, share: false });
-    let (code, _) = status(in_request(&session_of(Some("all")).await, sharing::delete_my_dataset()).await.unwrap_err());
-    assert_eq!(code, 503);
-    // A token auth dropped: logged out, not deleting by the session's stale username.
-    let (code, _) = status(in_request(&session_of(Some("dead")).await, sharing::delete_my_dataset()).await.unwrap_err());
-    assert_eq!(code, 401);
-}
-
-#[tokio::test]
-async fn login_register_and_picture_server_functions() {
-    use ui::data_dir::LoginStatus;
-    let _site = Site::new().await.with_pictures();
-    let session = session_of(None).await;
-    let status = |r: Result<LoginStatus, dioxus::prelude::ServerFnError>| match r {
-        Err(dioxus::prelude::ServerFnError::ServerError { code, .. }) => code,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(status(in_request(&session, api::login_password("tester".into(), "wrong".into())).await), 401);
-    assert_eq!(status(in_request(&session, api::login_password("outage".into(), "x".into())).await), 502);
-    let ok = in_request(&session, api::login_password("tester".into(), "right".into())).await.unwrap();
-    assert_eq!(ok, LoginStatus::LoggedIn("tester".into()));
-    assert_eq!(session.get::<String>("opaque_token").await.unwrap().as_deref(), Some("all"));
-
-    let fresh = session_of(None).await;
-    assert_eq!(status(in_request(&fresh, api::register_password("taken".into(), "a@b.c".into(), "long enough".into())).await), 409);
-    let new = in_request(&fresh, api::register_password("newcomer".into(), "a@b.c".into(), "long enough".into())).await;
-    assert_eq!(new.unwrap(), LoginStatus::LoggedIn("newcomer".into()));
-
-    let info = in_request(&session_of(Some("all")).await, crate::account::remove_profile_picture()).await.unwrap();
-    assert_eq!(info.picture_version, None);
-    let logged_out = in_request(&session_of(None).await, crate::account::remove_profile_picture()).await;
-    assert!(matches!(logged_out, Err(dioxus::prelude::ServerFnError::ServerError { code: 401, .. })));
 }
 
 // ---- Ark, Enshrouded, admin and Arcane (PR 2c) ----
@@ -1578,39 +1349,4 @@ async fn rolls_stream_and_flags_are_saved() {
         site.json(Method::POST, "/api/arcane/flag", flag("18f3a2b-0badf00d", json!([null, null]))).await;
     }
     envelope(&site.json(Method::POST, "/api/arcane/flag", flag("18f3a2b-0badf00d", json!([null, null]))).await, 429, "rate_limited");
-}
-
-#[tokio::test]
-async fn panel_server_functions() {
-    use dioxus::prelude::ServerFnError;
-    let site = Site::new().await;
-    let code = |e: ServerFnError| match e {
-        ServerFnError::ServerError { code, .. } => code,
-        other => panic!("{other:?}"),
-    };
-    let all = session_of(Some("all")).await;
-    assert_eq!(in_request(&all, api::ark_player_count()).await.unwrap(), 3);
-    assert_eq!(in_request(&all, api::ark_command(api::ArkCommand::Start)).await.unwrap(), api::ArkOutcome::Started);
-    assert_eq!(code(in_request(&session_of(None).await, api::ark_player_count()).await.unwrap_err()), 401);
-    // Auth checks the permission for Ark and Enshrouded.
-    assert_eq!(code(in_request(&session_of(Some("none")).await, api::ark_player_count()).await.unwrap_err()), 403);
-
-    assert_eq!(in_request(&all, api::enshrouded_status()).await.unwrap().state, api_types::EnshroudedState::Online);
-    in_request(&all, api::enshrouded_command(api::EnshroudedCommand::Restart)).await.unwrap();
-    let busy = in_request(&all, api::enshrouded_command(api::EnshroudedCommand::UpdateNow)).await.unwrap_err();
-    assert_eq!(code(busy), 409);
-
-    // The website checks admin rights itself: auth's admin endpoints trust it.
-    let users = in_request(&all, api::admin_list_users(0, 25, String::new())).await.unwrap();
-    assert_eq!(users.items[0].username, "ann");
-    assert_eq!(in_request(&all, api::admin_list_all_roles()).await.unwrap()[0].name, "arcane_user");
-    in_request(&all, api::admin_assign_user_role(5, 2)).await.unwrap();
-    let invite = in_request(&all, api::admin_create_invite(2, 7, None, None)).await.unwrap();
-    assert!(invite.link.is_some());
-    let calls = site.calls().len();
-    for (session, status) in [(session_of(Some("none")).await, 403), (session_of(None).await, 401), (session_of(Some("down")).await, 503)] {
-        assert_eq!(code(in_request(&session, api::admin_list_permissions()).await.unwrap_err()), status);
-        assert_eq!(code(in_request(&session, api::admin_revoke_invite(4)).await.unwrap_err()), status);
-    }
-    assert_eq!(site.calls().len(), calls, "refused before asking auth");
 }

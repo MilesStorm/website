@@ -25,7 +25,7 @@
   // WebSocket, the live dice feed.
   var IGNORE = [/\/faro\//, /\/cdn-cgi\//, /\/ws\//, /\/api\/arcane\/rolls/];
   var QUIET_MS = 300;
-  // Hydration-time server calls can start well after the WASM fetch settles.
+  // The islands' first calls can start well after the page's scripts have loaded.
   var PAGE_QUIET_MS = 1500;
   var MAX_MS = 10000;
   var FIRST_FETCH_MS = 1000;
@@ -45,12 +45,10 @@
     }).join('/') || '/';
   }
 
-  // `POST /bff/login_password` for Faro's fetch spans: Dioxus appends a numeric hash to server
-  // function paths (/bff/login_password1003...), which is dropped.
+  // `POST /api/session/login` for Faro's fetch spans.
   function fetchSpanName(method, url) {
     var path;
     try { path = new URL(url).pathname; } catch (e) { return method; }
-    if (path.indexOf('/bff/') === 0) path = path.replace(/([^\/\d])\d{6,}$/, '$1');
     return method + ' ' + templatePath(path);
   }
 
@@ -124,7 +122,7 @@
   // The Gateway stamps each response `Server-Timing: gateway;dur=<ms>;desc="<epoch ms received>"`;
   // with the browser's requestStart/responseStart for the same request that gives
   //   offset = ((t2 - t1) + (t3 - t4)) / 2, error <= delay / 2, delay = (t4 - t1) - (t3 - t2).
-  // Only responses no cache can replay count: the page's own navigation and /bff/ and /api/ server
+  // Only responses no cache can replay count: the page's own navigation and /api/ server
   // calls (no-store, never cached by the browser or Cloudflare; a GET the browser cache answers
   // has transferSize 0 and is skipped). A replayed stamp would be hours old. HTML
   // must therefore stay uncached at Cloudflare (it is today: cf-cache-status DYNAMIC).
@@ -148,7 +146,7 @@
       if (entry.initiatorType !== 'fetch') return false;
       try {
         var path = new URL(entry.name).pathname;
-        return path.indexOf('/bff/') === 0 || path.indexOf('/api/') === 0;
+        return path.indexOf('/api/') === 0;
       } catch (e) { return false; }
     }
 

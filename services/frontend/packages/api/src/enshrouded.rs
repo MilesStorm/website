@@ -1,5 +1,5 @@
 //! The Enshrouded server panel's calls to auth (`services/auth/src/auth/enshrouded.rs`, which
-//! checks the token's `enshrouded` permission), shared by the JSON API and the server functions.
+//! checks the token's `enshrouded` permission), for the JSON API.
 
 use api_types::{ApiError, EnshroudedCommand, EnshroudedStatus, ErrorCode};
 use serde_json::{json, Value};
