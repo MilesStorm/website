@@ -9,8 +9,9 @@ use api_types::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::session::auth_url;
-use crate::{auth_send, http_client, trace};
+use crate::auth::session::auth_url;
+use crate::auth::{auth_send, http_client};
+use crate::trace;
 
 /// Most rows a page may ask for.
 const MAX_PAGE: u32 = 100;

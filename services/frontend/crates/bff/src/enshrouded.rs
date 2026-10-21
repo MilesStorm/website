@@ -4,7 +4,8 @@
 use api_types::{ApiError, EnshroudedCommand, EnshroudedStatus, ErrorCode};
 use serde_json::{json, Value};
 
-use crate::{auth_json, trace};
+use crate::auth::auth_json;
+use crate::trace;
 
 fn offline() -> ApiError {
     ApiError::new(ErrorCode::Upstream, "The website can't reach the server right now.")

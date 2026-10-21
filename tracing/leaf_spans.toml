@@ -166,7 +166,7 @@ reason = "an Astro file (hashed) sent from disk: the read and the send, with not
 # Astro's pages, one entry per page, never a glob: a broader one would hide
 # childless API GETs. A request without a session is childless whatever the page's access: a
 # public page is served, a guarded one redirects to /login?next=, a guest-only one is served. A
-# Rust test (packages/web/src/pages/tests.rs) checks every page in PAGES has one.
+# Rust test (crates/bff/src/pages/tests.rs) checks every page in PAGES has one.
 [[leaf]]
 service = "frontend"
 name = "GET /"

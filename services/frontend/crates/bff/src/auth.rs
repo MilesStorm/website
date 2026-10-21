@@ -4,15 +4,7 @@
 use api_types::{ApiError, ErrorCode, Permission};
 use serde::{Deserialize, Serialize};
 
-pub use api_types::{
-    AdminInvite, AdminPage, AdminPermission, AdminRole, AdminRoleRef, AdminUser, AdminUserRole, ArkCommand, ArkOutcome,
-    EnshroudedCommand, EnshroudedStatus, NewInvite, PagedResult,
-};
-
-pub mod admin;
-pub mod ark;
-pub mod enshrouded;
-pub mod trace;
+use crate::trace;
 
 fn password_login_error(status: u16, body: &str) -> ApiError {
     // Auth also uses 401 for a bad BFF service secret. That is an outage, not
@@ -26,7 +18,7 @@ fn password_login_error(status: u16, body: &str) -> ApiError {
 
 // ---- Session helpers ----
 
-mod session {
+pub(crate) mod session {
     pub fn auth_url() -> String {
         std::env::var("AUTH_SERVICE_URL")
             .unwrap_or_else(|_| "http://localhost:7070".to_string())
@@ -55,7 +47,7 @@ const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The BFF's client for calls to auth: every request gets a CLIENT span and carries
 /// the trace context (see `trace::client`).
-fn http_client() -> &'static trace::TracedClient {
+pub(crate) fn http_client() -> &'static trace::TracedClient {
     static CLIENT: std::sync::OnceLock<trace::TracedClient> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
         trace::client(trace::Peer { service: "auth", system: None }, AUTH_TIMEOUT, |b| b)
@@ -69,7 +61,7 @@ pub fn init_http_client() {
     http_client();
 }
 
-// ---- OAuth, for the web crate's handlers ----
+// ---- OAuth, for main.rs's handlers ----
 
 /// Ask the auth service to begin an OAuth flow. Returns `(auth_url, csrf_state)`.
 #[tracing::instrument(name = "bff.start_oauth", skip_all, err, fields(provider = %provider))]
@@ -468,7 +460,7 @@ pub async fn auth_json<T: Serialize>(path: &str, body: &T) -> Result<(u16, serde
 
 /// Sends `req` (to auth) with the service token: the status and the JSON reply (`Null` when
 /// the reply isn't JSON).
-async fn auth_send(req: reqwest_middleware::RequestBuilder) -> Result<(u16, serde_json::Value), String> {
+pub(crate) async fn auth_send(req: reqwest_middleware::RequestBuilder) -> Result<(u16, serde_json::Value), String> {
     let resp = req.header("x-service-token", session::service_secret()).send().await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();
     let json = resp.json().await.unwrap_or(serde_json::Value::Null);
@@ -628,6 +620,8 @@ mod tests {
             tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test"))),
         );
 
+        // The variables are the process's: the JSON API's tests point them elsewhere meanwhile.
+        let _env = crate::json_api::tests::AUTH_ENV.lock().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let old_url = std::env::var_os("AUTH_SERVICE_URL");

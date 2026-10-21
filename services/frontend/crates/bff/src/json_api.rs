@@ -1,5 +1,5 @@
 //! The JSON API under `/api/*` (types in crates/api-types). Plain axum handlers registered
-//! through aide, so the OpenAPI document (`web openapi`, committed as web/src/api/openapi.json)
+//! through aide, so the OpenAPI document (`server openapi`, committed as web/src/api/openapi.json)
 //! is read off their signatures: handlers return `Result<Json<T>, ApiError>`, never `impl
 //! IntoApiResponse`, which aide can't see through. The functions they call keep their
 //! `bff.<fn>` spans.
@@ -51,11 +51,11 @@ impl From<api_types::ApiError> for ApiError {
 }
 
 impl IntoResponse for ApiError {
-    /// As `api::trace::rejectable`: a 4xx is an answer, anything else fails the current span.
+    /// As `crate::trace::rejectable`: a 4xx is an answer, anything else fails the current span.
     fn into_response(self) -> Response {
         let status = StatusCode::from_u16(self.0.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         if !status.is_client_error() {
-            api::trace::failed("api");
+            crate::trace::failed("api");
         }
         (status, Json(self.0)).into_response()
     }
@@ -218,23 +218,23 @@ impl OperationInput for Bytes {
 /// Who the request comes from: resolved once per request (one introspect call to auth) and
 /// kept in its extensions, so the access layer and the handler share it.
 #[derive(Debug, Clone)]
-pub struct Viewer(pub api::Viewer);
+pub struct Viewer(pub crate::auth::Viewer);
 
 impl Viewer {
     /// The logged-in user's token; `logged_out`, or `unavailable` while auth can't be asked.
     pub fn token(&self) -> Result<&str, ApiError> {
         match &self.0 {
-            api::Viewer::User { token, .. } => Ok(token),
-            api::Viewer::Anonymous => Err(api_types::ApiError::logged_out().into()),
-            api::Viewer::Degraded { .. } => Err(api_types::ApiError::login_unavailable().into()),
+            crate::auth::Viewer::User { token, .. } => Ok(token),
+            crate::auth::Viewer::Anonymous => Err(api_types::ApiError::logged_out().into()),
+            crate::auth::Viewer::Degraded { .. } => Err(api_types::ApiError::login_unavailable().into()),
         }
     }
 
     /// The session's username, also while auth can't be asked; `logged_out` without one.
     pub fn username(&self) -> Result<&str, ApiError> {
         match &self.0 {
-            api::Viewer::User { username, .. } | api::Viewer::Degraded { username } => Ok(username),
-            api::Viewer::Anonymous => Err(api_types::ApiError::logged_out().into()),
+            crate::auth::Viewer::User { username, .. } | crate::auth::Viewer::Degraded { username } => Ok(username),
+            crate::auth::Viewer::Anonymous => Err(api_types::ApiError::logged_out().into()),
         }
     }
 }
@@ -243,14 +243,14 @@ impl<S: Send + Sync> FromRequestParts<S> for Viewer {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, ApiError> {
-        if let Some(viewer) = parts.extensions.get::<api::Viewer>() {
+        if let Some(viewer) = parts.extensions.get::<crate::auth::Viewer>() {
             return Ok(Self(viewer.clone()));
         }
         let Some(session) = parts.extensions.get::<Session>() else {
             tracing::error!("no session on an API request: the session layer is missing");
             return Err(api_types::ApiError::internal().into());
         };
-        let viewer = api::viewer(session).await.map_err(|e| {
+        let viewer = crate::auth::viewer(session).await.map_err(|e| {
             tracing::error!(error = %e, "reading the session failed");
             ApiError::from(api_types::ApiError::login_unavailable())
         })?;
@@ -281,7 +281,7 @@ pub(crate) fn allowed(access: Access, viewer: &Viewer) -> Result<(), ApiError> {
         return Ok(());
     }
     let permissions = match &viewer.0 {
-        api::Viewer::User { permissions, .. } => permissions,
+        crate::auth::Viewer::User { permissions, .. } => permissions,
         _ => return viewer.token().map(|_| ()),
     };
     match access {
@@ -345,13 +345,13 @@ async fn session(viewer: Viewer) -> Json<Bootstrap> {
 }
 
 /// What a page and `GET /api/session` say about `viewer`: the same value either way.
-pub(crate) async fn bootstrap(viewer: api::Viewer) -> Bootstrap {
+pub(crate) async fn bootstrap(viewer: crate::auth::Viewer) -> Bootstrap {
     let viewer = match viewer {
-        api::Viewer::Anonymous => None,
-        api::Viewer::Degraded { username } => {
+        crate::auth::Viewer::Anonymous => None,
+        crate::auth::Viewer::Degraded { username } => {
             Some(api_types::Viewer { shown_name: username.clone(), username, picture_url: None, permissions: vec![] })
         }
-        api::Viewer::User { username, token, permissions } => {
+        crate::auth::Viewer::User { username, token, permissions } => {
             // Without the account (auth or the picture store is down) the name is shown.
             let (shown_name, picture_url) = match account::account(&token).await {
                 Ok(a) => (a.shown_name, a.picture_url),
@@ -368,7 +368,7 @@ pub(crate) async fn bootstrap(viewer: api::Viewer) -> Bootstrap {
 /// `requested`, else `/`. Takes the invite out of the session. Every login uses it: the OAuth
 /// callback and the login pages' after-login call.
 pub(crate) async fn next_page(session: &Session, requested: Option<PagePath>) -> NextPage {
-    let invite: Option<String> = session.remove(api::INVITE_RETURN_KEY).await.ok().flatten();
+    let invite: Option<String> = session.remove(crate::auth::INVITE_RETURN_KEY).await.ok().flatten();
     match invite {
         Some(code) => NextPage { path: PagePath::Invite, fragment: Some(code) },
         None => NextPage { path: requested.unwrap_or(PagePath::Home), fragment: None },
@@ -384,19 +384,19 @@ async fn after_login(NoApi(session): NoApi<Session>, Body(a): Body<AfterLogin>) 
 
 /// `POST /api/session/login`.
 async fn login(NoApi(session): NoApi<Session>, Body(login): Body<Login>) -> Result<Json<LoggedIn>, ApiError> {
-    let username = api::log_in(&session, login.username, login.password).await?;
+    let username = crate::auth::log_in(&session, login.username, login.password).await?;
     Ok(Json(LoggedIn { username }))
 }
 
 /// `POST /api/session/register`.
 async fn register(NoApi(session): NoApi<Session>, Body(r): Body<Registration>) -> Result<Json<LoggedIn>, ApiError> {
-    let username = api::register(&session, r.username, r.email, r.password).await?;
+    let username = crate::auth::register(&session, r.username, r.email, r.password).await?;
     Ok(Json(LoggedIn { username }))
 }
 
 /// `DELETE /api/session`: log out.
 async fn logout(NoApi(session): NoApi<Session>) -> Result<NoContent, ApiError> {
-    api::log_out(&session).await?;
+    crate::auth::log_out(&session).await?;
     Ok(NoContent)
 }
 
@@ -506,12 +506,12 @@ async fn delete_shared(viewer: Viewer, NoApi(hub): Hub) -> Result<Json<Deleted>,
 
 /// `GET /api/ark/players`.
 async fn ark_players(viewer: Viewer) -> Result<Json<ArkPlayers>, ApiError> {
-    Ok(Json(api::ark::players(viewer.token()?).await?))
+    Ok(Json(crate::ark::players(viewer.token()?).await?))
 }
 
 /// `POST /api/ark/command`.
 async fn ark_command(viewer: Viewer, Body(c): Body<ArkCommandRequest>) -> Result<Json<ArkResult>, ApiError> {
-    let outcome = api::ark::command(viewer.token()?, viewer.username()?, c.cmd).await?;
+    let outcome = crate::ark::command(viewer.token()?, viewer.username()?, c.cmd).await?;
     Ok(Json(ArkResult { outcome }))
 }
 
@@ -519,12 +519,12 @@ async fn ark_command(viewer: Viewer, Body(c): Body<ArkCommandRequest>) -> Result
 
 /// `GET /api/enshrouded`.
 async fn enshrouded_status(viewer: Viewer) -> Result<Json<EnshroudedStatus>, ApiError> {
-    Ok(Json(api::enshrouded::status(viewer.token()?).await?))
+    Ok(Json(crate::enshrouded::status(viewer.token()?).await?))
 }
 
 /// `POST /api/enshrouded/command`.
 async fn enshrouded_command(viewer: Viewer, Body(c): Body<EnshroudedCommandRequest>) -> Result<NoContent, ApiError> {
-    api::enshrouded::command(viewer.token()?, c.cmd).await?;
+    crate::enshrouded::command(viewer.token()?, c.cmd).await?;
     Ok(NoContent)
 }
 
@@ -534,61 +534,61 @@ async fn enshrouded_command(viewer: Viewer, Body(c): Body<EnshroudedCommandReque
 
 /// `GET /api/admin/users?page&limit&search`.
 async fn admin_users(Query(p): Query<AdminPage>) -> Result<Json<PagedResult<AdminUser>>, ApiError> {
-    Ok(Json(api::admin::users(&p).await?))
+    Ok(Json(crate::admin::users(&p).await?))
 }
 
 /// `GET /api/admin/roles?page&limit&search`.
 async fn admin_roles(Query(p): Query<AdminPage>) -> Result<Json<PagedResult<AdminRole>>, ApiError> {
-    Ok(Json(api::admin::roles(&p).await?))
+    Ok(Json(crate::admin::roles(&p).await?))
 }
 
 /// `GET /api/admin/roles/all`: every role, without its permissions.
 async fn admin_all_roles() -> Result<Json<Vec<AdminRoleRef>>, ApiError> {
-    Ok(Json(api::admin::all_roles().await?))
+    Ok(Json(crate::admin::all_roles().await?))
 }
 
 /// `GET /api/admin/permissions`.
 async fn admin_permissions() -> Result<Json<Vec<AdminPermission>>, ApiError> {
-    Ok(Json(api::admin::permissions().await?))
+    Ok(Json(crate::admin::permissions().await?))
 }
 
 /// `PUT /api/admin/users/{user_id}/roles/{role_id}`.
 async fn assign_user_role(Path(p): Path<UserRolePath>) -> Result<NoContent, ApiError> {
-    api::admin::assign_user_role(p.user_id, p.role_id).await?;
+    crate::admin::assign_user_role(p.user_id, p.role_id).await?;
     Ok(NoContent)
 }
 
 /// `DELETE /api/admin/users/{user_id}/roles/{role_id}`.
 async fn revoke_user_role(Path(p): Path<UserRolePath>) -> Result<NoContent, ApiError> {
-    api::admin::revoke_user_role(p.user_id, p.role_id).await?;
+    crate::admin::revoke_user_role(p.user_id, p.role_id).await?;
     Ok(NoContent)
 }
 
 /// `PUT /api/admin/roles/{role_id}/permissions/{permission_id}`.
 async fn assign_role_permission(Path(p): Path<RolePermissionPath>) -> Result<NoContent, ApiError> {
-    api::admin::assign_role_permission(p.role_id, p.permission_id).await?;
+    crate::admin::assign_role_permission(p.role_id, p.permission_id).await?;
     Ok(NoContent)
 }
 
 /// `DELETE /api/admin/roles/{role_id}/permissions/{permission_id}`.
 async fn revoke_role_permission(Path(p): Path<RolePermissionPath>) -> Result<NoContent, ApiError> {
-    api::admin::revoke_role_permission(p.role_id, p.permission_id).await?;
+    crate::admin::revoke_role_permission(p.role_id, p.permission_id).await?;
     Ok(NoContent)
 }
 
 /// `GET /api/admin/invites`: the latest, newest first.
 async fn admin_invites() -> Result<Json<Vec<AdminInvite>>, ApiError> {
-    Ok(Json(api::admin::invites().await?))
+    Ok(Json(crate::admin::invites().await?))
 }
 
 /// `POST /api/admin/invites`: the new link is in the reply, and only there.
 async fn create_invite(viewer: Viewer, Body(invite): Body<NewInvite>) -> Result<Json<AdminInvite>, ApiError> {
-    Ok(Json(api::admin::create_invite(viewer.token()?, &invite).await?))
+    Ok(Json(crate::admin::create_invite(viewer.token()?, &invite).await?))
 }
 
 /// `DELETE /api/admin/invites/{invite_id}`.
 async fn revoke_invite(Path(p): Path<InvitePath>) -> Result<NoContent, ApiError> {
-    api::admin::revoke_invite(p.invite_id).await?;
+    crate::admin::revoke_invite(p.invite_id).await?;
     Ok(NoContent)
 }
 
@@ -763,7 +763,7 @@ pub(crate) fn no_such_api() -> ApiError {
     ApiError::from(api_types::ApiError::new(ErrorCode::NotFound, "There is no such API."))
 }
 
-/// The OpenAPI document as `web openapi` prints it (and web/src/api/openapi.json holds it).
+/// The OpenAPI document as `server openapi` prints it (and web/src/api/openapi.json holds it).
 pub fn openapi_json() -> String {
     let mut json = serde_json::to_string_pretty(&finish("").1).expect("the OpenAPI document serializes");
     json.push('\n');

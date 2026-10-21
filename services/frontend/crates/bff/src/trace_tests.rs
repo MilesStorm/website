@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use api::trace::{Carried, RedisTracing};
+use crate::trace::{Carried, RedisTracing};
 use axum::response::IntoResponse as _;
 use futures_util::{SinkExt as _, StreamExt as _};
 use opentelemetry::trace::{SpanContext, SpanId, SpanKind, Status, TraceContextExt as _, TracerProvider as _};
@@ -38,7 +38,7 @@ pub(crate) fn exporting() -> (InMemorySpanExporter, tracing::subscriber::Default
         .build();
     let subscriber =
         tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
-    api::trace::several_subscribers();
+    crate::trace::several_subscribers();
     (exporter, tracing::subscriber::set_default(subscriber))
 }
 
@@ -79,7 +79,7 @@ pub(crate) async fn redis() -> (ContainerAsync<Redis>, Config) {
 
 /// The pool and hub as `router` builds them.
 pub(crate) async fn hub(config: &Config, shutdown: CancellationToken) -> (RollHub, Pool) {
-    let pool = api::trace::redis_pool(config.clone(), ConnectionConfig::default(), 2, RedisTracing::Commands).unwrap();
+    let pool = crate::trace::redis_pool(config.clone(), ConnectionConfig::default(), 2, RedisTracing::Commands).unwrap();
     pool.connect();
     pool.wait_for_connect().await.unwrap();
     let hub = RollHub::connect(config.clone(), ConnectionConfig::default(), pool.clone(), shutdown).await.unwrap();
@@ -103,7 +103,7 @@ async fn a_roll_is_one_trace_from_the_camera_to_every_stream() {
     let (hub, pool) = hub(&config, CancellationToken::new()).await;
 
     // What goes over Redis, seen by a plain subscriber.
-    let wire = api::trace::redis_subscriber(config.clone(), ConnectionConfig::default(), RedisTracing::Off).unwrap();
+    let wire = crate::trace::redis_subscriber(config.clone(), ConnectionConfig::default(), RedisTracing::Off).unwrap();
     wire.init().await.unwrap();
     wire.subscribe("arcane:rolls:miles").await.unwrap();
     let mut on_wire = wire.message_rx();
@@ -192,8 +192,8 @@ async fn a_roll_is_one_trace_from_the_camera_to_every_stream() {
 async fn only_clients_built_with_tracing_make_command_spans() {
     let (exporter, _guard) = exporting();
     let (_node, config) = redis().await;
-    let traced = api::trace::redis_client(config.clone(), ConnectionConfig::default(), RedisTracing::Commands).unwrap();
-    let untraced = api::trace::redis_client(config, ConnectionConfig::default(), RedisTracing::Off).unwrap();
+    let traced = crate::trace::redis_client(config.clone(), ConnectionConfig::default(), RedisTracing::Commands).unwrap();
+    let untraced = crate::trace::redis_client(config, ConnectionConfig::default(), RedisTracing::Off).unwrap();
     for client in [&traced, &untraced] {
         client.connect();
         client.wait_for_connect().await.unwrap();
@@ -231,7 +231,7 @@ async fn ai_pipeline(roll: String, seen: Arc<Mutex<Seen>>) -> String {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/", listener.local_addr().unwrap());
-    api::trace::spawn_loop("test: stand-in ai_pipeline", async move {
+    crate::trace::spawn_loop("test: stand-in ai_pipeline", async move {
         let (socket, _) = listener.accept().await.unwrap();
         let handshake = move |req: &Request, res: Response| -> Result<Response, ErrorResponse> {
             let traceparent = req.headers().get("traceparent").and_then(|v| v.to_str().ok());
@@ -264,7 +264,7 @@ async fn auth_and_surrealdb(seen: Arc<Mutex<Seen>>) -> String {
         .route("/rpc", post(rpc));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    api::trace::spawn_loop("test: stand-in auth and SurrealDB", async move { axum::serve(listener, app).await.unwrap() });
+    crate::trace::spawn_loop("test: stand-in auth and SurrealDB", async move { axum::serve(listener, app).await.unwrap() });
     base
 }
 
@@ -294,19 +294,19 @@ async fn a_camera_session_traces_each_roll_and_keeps_the_trace_field_to_itself()
     let proxy = {
         let hub = hub.clone();
         move |ws: axum::extract::ws::WebSocketUpgrade| async move {
-            let open = api::detached_span!("arcane.ws_session", otel.name = "session open", user = "miles");
+            let open = crate::detached_span!("arcane.ws_session", otel.name = "session open", user = "miles");
             ws.on_upgrade(move |socket| {
-                api::trace::session(crate::proxy_ws(socket, ai_url, hub, "miles".into(), "token".into(), None, open))
+                crate::trace::session(crate::proxy_ws(socket, ai_url, hub, "miles".into(), "token".into(), None, open))
             })
         }
     };
     let app = axum::Router::new().route("/ws/arcane", axum::routing::get(proxy));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/ws/arcane", listener.local_addr().unwrap());
-    api::trace::spawn_loop("test: the proxy", async move { axum::serve(listener, app).await.unwrap() });
+    crate::trace::spawn_loop("test: the proxy", async move { axum::serve(listener, app).await.unwrap() });
 
     // The browser: one camera frame (a JPEG by its first bytes), then what comes back.
-    let mut browser = api::trace::connect_ws(&url, "frontend", TIMEOUT).await.unwrap();
+    let mut browser = crate::trace::connect_ws(&url, "frontend", TIMEOUT).await.unwrap();
     browser.send(Message::Binary(vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3].into())).await.unwrap();
     let mut replies = Vec::new();
     while replies.len() < 2 {
@@ -443,14 +443,14 @@ async fn serving(shutdown: CancellationToken, wait: Duration) -> (String, tokio:
         .route("/stuck", axum::routing::get(stream(false)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let server = api::trace::spawn_loop("test: the server", crate::serve_until(listener, app, shutdown, wait));
+    let server = crate::trace::spawn_loop("test: the server", crate::serve_until(listener, app, shutdown, wait));
     (base, server)
 }
 
 #[tokio::test]
 async fn shutdown_ends_streams_and_waits_for_open_requests_only_so_long() {
-    let peer = api::trace::Peer { service: "frontend", system: None };
-    let client = api::trace::client(peer, Duration::from_secs(30), |b| b).unwrap();
+    let peer = crate::trace::Peer { service: "frontend", system: None };
+    let client = crate::trace::client(peer, Duration::from_secs(30), |b| b).unwrap();
 
     // Streams that watch the shutdown end, and the server stops once they have.
     let shutdown = CancellationToken::new();

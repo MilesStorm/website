@@ -1,7 +1,7 @@
 //! Training-data capture (server only): opted-in users' rolls are sampled, and any
 //! user can flag a wrong roll, into SurrealDB (schema: `surreal/database/schema/`, managed with surrealkit).
 //! Storage split: the opt-in choice lives with the account in auth's PostgreSQL
-//! (`api::dataset_consent`); the picture held for flagging and rate counters live in
+//! (`crate::auth::dataset_consent`); the picture held for flagging and rate counters live in
 //! Redis (`capture.rs`); saved rolls, pictures and the deletion log live here.
 //!
 //! Talks to SurrealDB's HTTP `/rpc` endpoint with JSON as the database-level `dice`
@@ -30,7 +30,7 @@ const DEFAULT_SAMPLE_EVERY: u32 = 20;
 /// Per request; a slow store only delays the capture worker, never live rolls.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// Names SurrealDB on the client spans (and in Tempo's service graph).
-const SURREALDB: api::trace::Peer = api::trace::Peer { service: "surrealdb", system: Some("surrealdb") };
+const SURREALDB: crate::trace::Peer = crate::trace::Peer { service: "surrealdb", system: Some("surrealdb") };
 
 // The table definitions, compiled in (`build.rs` rebuilds when files are added).
 surrealkit::embed_schema!("../../surreal/database/schema");
@@ -116,7 +116,7 @@ pub async fn start(store: Dataset, redis: Client) {
         attempt_no += 1;
         let attempt = tracing::Instrument::instrument(
             store.apply_schema(),
-            api::unit_span!(
+            crate::unit_span!(
                 None,
                 "dataset.apply_schema",
                 purpose = "startup: sync the SurrealDB schema (surrealkit)",
@@ -224,7 +224,7 @@ pub struct Dataset {
 }
 
 struct Inner {
-    http: api::trace::TracedClient,
+    http: crate::trace::TracedClient,
     /// Server base URL (`SURREAL_URL`).
     url: String,
     rpc_url: String,
@@ -290,7 +290,7 @@ impl Dataset {
             .unwrap_or(DEFAULT_SAMPLE_EVERY);
         Some(Self {
             inner: Arc::new(Inner {
-                http: api::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).ok()?,
+                http: crate::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).ok()?,
                 rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
                 url,
                 user: var("SURREAL_USER")?,
@@ -308,7 +308,7 @@ impl Dataset {
     pub(crate) fn for_tests(url: String, pass: &str) -> Self {
         Self {
             inner: Arc::new(Inner {
-                http: api::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).unwrap(),
+                http: crate::trace::client(SURREALDB, REQUEST_TIMEOUT, |b| b).unwrap(),
                 rpc_url: format!("{}/rpc", url.trim_end_matches('/')),
                 url,
                 user: "dice".into(),
@@ -405,7 +405,7 @@ impl Dataset {
                     *self.inner.token.lock().await = Some(t.clone());
                     Ok(t)
                 },
-                api::unit_span!(
+                crate::unit_span!(
                     None,
                     "surrealdb.token_refresh",
                     purpose = "background: renew the SurrealDB token before it expires",
@@ -456,7 +456,7 @@ impl Dataset {
         let resp = i
             .http
             .post(format!("{}/signin", i.url.trim_end_matches('/')))
-            .with_extension(api::trace::DbCall { name: "surrealdb.signin", operation: "SIGNIN".into() })
+            .with_extension(crate::trace::DbCall { name: "surrealdb.signin", operation: "SIGNIN".into() })
             .header("Accept", "application/json")
             .json(&json!({"NS": i.ns, "DB": i.db, "user": i.user, "pass": i.pass}))
             .send()
@@ -476,7 +476,7 @@ impl Dataset {
     async fn query(&self, sql: &str, vars: Value) -> anyhow::Result<Vec<Value>> {
         let result = self.run_query(sql, vars).await;
         if result.is_err() {
-            api::trace::failed("surrealdb");
+            crate::trace::failed("surrealdb");
         }
         result
     }
@@ -515,7 +515,7 @@ impl Dataset {
         Ok(i
             .http
             .post(&i.rpc_url)
-            .with_extension(api::trace::DbCall { name: "surrealdb.query", operation: statement_kind(sql) })
+            .with_extension(crate::trace::DbCall { name: "surrealdb.query", operation: statement_kind(sql) })
             .bearer_auth(token)
             .header("Accept", "application/json")
             .header("surreal-ns", &i.ns)
@@ -672,7 +672,7 @@ fn statement_kind(sql: &str) -> String {
 /// Whether the session's user shares roll pictures (asked fresh each time, so
 /// switching it off applies on every replica at once). Bounded like store calls.
 pub async fn shares(token: &str) -> anyhow::Result<bool> {
-    match tokio::time::timeout(REQUEST_TIMEOUT, api::dataset_consent(token)).await {
+    match tokio::time::timeout(REQUEST_TIMEOUT, crate::auth::dataset_consent(token)).await {
         Ok(Ok(share)) => Ok(share),
         Ok(Err(e)) => anyhow::bail!("consent lookup: {e}"),
         Err(_) => anyhow::bail!("consent lookup timed out"),
@@ -784,7 +784,7 @@ mod auth_tests {
             .with_state(fake.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
-        api::trace::spawn_loop("test: stand-in SurrealDB", async move { axum::serve(listener, app).await.unwrap() });
+        crate::trace::spawn_loop("test: stand-in SurrealDB", async move { axum::serve(listener, app).await.unwrap() });
         let ds = Dataset::for_tests(url, pass);
         (ds, fake)
     }
@@ -942,7 +942,7 @@ mod auth_tests {
     #[tokio::test]
     async fn keeping_signed_in_takes_the_sign_in_out_of_queries() {
         let (ds, fake) = serve("pw").await;
-        let refresher = api::trace::spawn_loop("test: token refresh", ds.clone().keep_signed_in());
+        let refresher = crate::trace::spawn_loop("test: token refresh", ds.clone().keep_signed_in());
         while fake.lock().unwrap().signins == 0 {
             tokio::task::yield_now().await;
         }

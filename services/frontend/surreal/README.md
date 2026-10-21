@@ -5,12 +5,12 @@ Storage is split across three stores:
 | Store | Holds | Defined in |
 |---|---|---|
 | **PostgreSQL** (auth) | The opt-in choice (`dataset_consent`, deleted with the account) | `services/auth/migrations`, applied by auth at startup |
-| **Redis** | The picture of each user's latest roll, held 10 minutes for "flag as wrong roll"; rate counters | `packages/web/src/capture.rs` |
+| **Redis** | The picture of each user's latest roll, held 10 minutes for "flag as wrong roll"; rate counters | `crates/bff/src/capture.rs` |
 | **SurrealDB** | Saved rolls, their pictures, and the deletion log; each account's profile picture | `database/schema/`, applied by the website at startup |
 
 ## How the tables get there
 The website applies `database/schema/` itself every time it starts, the same way auth
-applies its PostgreSQL migrations (`packages/web/src/dataset.rs`, using the
+applies its PostgreSQL migrations (`crates/bff/src/dataset.rs`, using the
 [surrealkit](https://crates.io/crates/surrealkit) library). So a table change ships like
 any other website change: merge to `main`, CI builds, Argo deploys.
 
@@ -75,7 +75,7 @@ env SURREALDB_HOST=http://127.0.0.1:8000 SURREALDB_USER=root SURREALDB_PASSWORD=
 Expected: `cases: 6 total, 6 passed, 0 failed`.
 
 ## Profile pictures
-`profile_picture:<user id>` holds one 256x256 JPEG per account (`packages/web/src/account.rs`).
+`profile_picture:<user id>` holds one 256x256 JPEG per account (`crates/bff/src/account.rs`).
 The website re-encodes every upload, so no hidden data such as location is kept.
 It's keyed by auth's permanent user id, not the username. The training tool's
 read-only login (`dice_reader`) can read this table too: a SurrealDB database user can

@@ -203,7 +203,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
         .route("/internal/register", post(register));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    api::trace::spawn_loop("test: stand-in auth", async move { axum::serve(listener, app).await.unwrap() });
+    crate::trace::spawn_loop("test: stand-in auth", async move { axum::serve(listener, app).await.unwrap() });
     base
 }
 
@@ -826,11 +826,11 @@ async fn unknown_api_paths_and_methods_get_the_envelope_and_plain_routes_still_m
 #[test]
 fn access_by_login_and_permission() {
     use api_types::{Access, ErrorCode, KnownPermission, Permission};
-    let user = |permissions| super::Viewer(api::Viewer::User { username: "u".into(), token: "t".into(), permissions });
+    let user = |permissions| super::Viewer(crate::auth::Viewer::User { username: "u".into(), token: "t".into(), permissions });
     let status = |access, viewer: &super::Viewer| super::allowed(access, viewer).map_err(|e| (e.0.status(), e.0.error));
 
-    let anonymous = super::Viewer(api::Viewer::Anonymous);
-    let degraded = super::Viewer(api::Viewer::Degraded { username: "u".into() });
+    let anonymous = super::Viewer(crate::auth::Viewer::Anonymous);
+    let degraded = super::Viewer(crate::auth::Viewer::Degraded { username: "u".into() });
     let arcane = Access::Perm(KnownPermission::Arcane);
     for access in [Access::LoggedIn, arcane] {
         assert_eq!(status(access, &anonymous), Err((401, ErrorCode::LoggedOut)));
@@ -972,7 +972,7 @@ async fn invites_join_or_wait_for_a_login() {
 async fn a_login_lands_on_the_invite_page_else_the_page_asked_for_else_home() {
     use api_types::{NextPage, PagePath};
     let session = Session::new(None, Arc::new(MemoryStore::default()), None);
-    session.insert(api::INVITE_RETURN_KEY, "join").await.unwrap();
+    session.insert(crate::auth::INVITE_RETURN_KEY, "join").await.unwrap();
     // The invite wins, once.
     let invite = NextPage { path: PagePath::Invite, fragment: Some("join".into()) };
     assert_eq!(super::next_page(&session, Some(PagePath::Asshole)).await, invite);

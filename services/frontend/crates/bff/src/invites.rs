@@ -4,7 +4,7 @@
 //! (`services/auth/src/auth/invites.rs`).
 //!
 //! Someone logged out gets the code kept in their session; logging in or signing up
-//! next (password, GitHub or Google) redeems it (`api::redeem_pending_invite`) and
+//! next (password, GitHub or Google) redeems it (`crate::auth::redeem_pending_invite`) and
 //! brings them back to the invite page, which then says they're in.
 
 pub use api_types::Opened;
@@ -42,7 +42,7 @@ enum Refused {
 /// Calls auth; the reply's `role` on 2xx. By status rather than error code (unlike
 /// `emails::call`) because `open` must tell "logged out" apart.
 async fn call(path: &str, body: Value) -> Result<String, Refused> {
-    let (status, reply) = api::auth_json(path, &body).await.map_err(|e| {
+    let (status, reply) = crate::auth::auth_json(path, &body).await.map_err(|e| {
         tracing::error!(error = %e, path, "reaching auth failed");
         Refused::Other(crate::emails::offline())
     })?;
@@ -74,7 +74,7 @@ fn message(r: Refused) -> ApiError {
 /// keeps the invite in the session for after logging in or signing up.
 #[tracing::instrument(name = "bff.open_invite", skip_all)]
 pub async fn open(session: &Session, code: &str) -> Result<Opened, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         if !crate::emails::code_ok(code) {
             return Err(ApiError::new(ErrorCode::Invalid, INVALID));
         }
@@ -90,7 +90,7 @@ pub async fn open(session: &Session, code: &str) -> Result<Opened, ApiError> {
             }
         }
         let role = call("/internal/invite/check", json!({ "code": code })).await.map_err(message)?;
-        session.insert(api::PENDING_INVITE_KEY, api::PendingInvite::new(code.to_string())).await.map_err(|e| {
+        session.insert(crate::auth::PENDING_INVITE_KEY, crate::auth::PendingInvite::new(code.to_string())).await.map_err(|e| {
             tracing::error!(error = %e, "keeping the invite in the session failed");
             ApiError::internal()
         })?;

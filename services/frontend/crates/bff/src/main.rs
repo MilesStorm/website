@@ -1,26 +1,31 @@
 use std::collections::HashMap;
 
-mod rolls;
+mod account;
+mod admin;
+mod ark;
+mod auth;
 mod capture;
 mod dataset;
-mod sharing;
-#[cfg(test)]
-mod trace_tests;
-mod account;
 mod emails;
+mod enshrouded;
 mod invites;
 mod json_api;
 mod pages;
+mod rolls;
+mod sharing;
+mod trace;
+#[cfg(test)]
+mod trace_tests;
 
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
-        // `web openapi`: the JSON API's OpenAPI document, with no .env, Redis or network.
+        // `server openapi`: the JSON API's OpenAPI document, with no .env, Redis or network.
         Some("openapi") => {
             print!("{}", json_api::openapi_json());
             return std::process::ExitCode::SUCCESS;
         }
-        // `web check-pages <dir>`: whether an Astro build has exactly the pages (the image's
+        // `server check-pages <dir>`: whether an Astro build has exactly the pages (the image's
         // verify stage; the server checks the same at startup).
         Some("check-pages") => {
             let dir = std::path::PathBuf::from(args.next().unwrap_or_else(|| "web/dist".into()));
@@ -149,7 +154,7 @@ fn server_launch() {
         .init();
 
     // Startup work stays out of requests (TRACING.md, "Rules for new code").
-    api::init_http_client();
+    crate::auth::init_http_client();
 
     let store = dataset::Dataset::from_env();
     if store.is_none() {
@@ -196,7 +201,7 @@ where
     let router = app().await.expect("failed to build the router");
 
     let stop = shutdown.clone();
-    api::trace::spawn_loop("shutdown: waits for SIGTERM or Ctrl-C", async move {
+    crate::trace::spawn_loop("shutdown: waits for SIGTERM or Ctrl-C", async move {
         terminated().await;
         tracing::info!("shutting down: closing streams and waiting for open requests");
         stop.cancel();
@@ -206,7 +211,7 @@ where
 
 /// Serves until `shutdown` is cancelled, then waits at most `wait` for what is still
 /// running: open requests (roll streams end by themselves: they watch `shutdown` too), then
-/// camera sessions and detached tasks (`api::trace`), which axum doesn't count.
+/// camera sessions and detached tasks (`crate::trace`), which axum doesn't count.
 async fn serve_until(
     listener: tokio::net::TcpListener,
     router: axum::Router,
@@ -218,7 +223,7 @@ async fn serve_until(
         if let Err(e) = server.await {
             tracing::error!(error = %e, "the server stopped with an error");
         }
-        api::trace::drain(wait).await
+        crate::trace::drain(wait).await
     };
     let deadline = async {
         shutdown.cancelled().await;
@@ -258,7 +263,7 @@ async fn router(
     store: Option<dataset::Dataset>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<axum::Router> {
-    use api::trace::RedisTracing;
+    use crate::trace::RedisTracing;
     use axum::{routing::get, Router};
     use axum_prometheus::PrometheusMetricLayer;
     use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
@@ -284,7 +289,7 @@ async fn router(
         ..Default::default()
     };
     // Every command of the pool is used inside a span (a request, a roll, a recheck).
-    let pool = api::trace::redis_pool(config.clone(), con_conf.clone(), 6, RedisTracing::Commands)
+    let pool = crate::trace::redis_pool(config.clone(), con_conf.clone(), 6, RedisTracing::Commands)
         .expect("failed to build Redis pool");
     pool.connect();
     pool.wait_for_connect()
@@ -292,20 +297,20 @@ async fn router(
         .expect("failed to connect to Redis");
     if let Some(store) = store {
         // The schema lock is polled and renewed in a loop: a client without command spans.
-        let lock_redis = api::trace::redis_client(config.clone(), con_conf.clone(), RedisTracing::Off)
+        let lock_redis = crate::trace::redis_client(config.clone(), con_conf.clone(), RedisTracing::Off)
             .expect("failed to build the Redis client");
         lock_redis.connect();
         lock_redis
             .wait_for_connect()
             .await
             .expect("failed to connect to Redis");
-        api::trace::spawn_loop("SurrealDB token: renewed before it expires", store.clone().keep_signed_in());
-        api::trace::spawn_loop("roll-sharing schema: applied once at startup", dataset::start(store, lock_redis));
+        crate::trace::spawn_loop("SurrealDB token: renewed before it expires", store.clone().keep_signed_in());
+        crate::trace::spawn_loop("roll-sharing schema: applied once at startup", dataset::start(store, lock_redis));
     }
     let roll_hub = rolls::RollHub::connect(config, con_conf, pool.clone(), shutdown)
         .await
         .expect("failed to start the arcane roll subscriber");
-    let session_store = api::trace::TracedStore::new(RedisStore::new(pool), "redis");
+    let session_store = crate::trace::TracedStore::new(RedisStore::new(pool), "redis");
 
     let layer = SessionManagerLayer::new(session_store)
         .with_secure(!cfg!(debug_assertions))
@@ -330,8 +335,8 @@ async fn router(
         .layer(axum::Extension(roll_hub))
         .layer(axum::middleware::from_fn(no_store))
         .layer(layer)
-        .layer(axum::middleware::from_fn(api::trace::capture_request_context))
-        .layer(axum::middleware::from_fn(api::trace::end_span_with_body))
+        .layer(axum::middleware::from_fn(crate::trace::capture_request_context))
+        .layer(axum::middleware::from_fn(crate::trace::end_span_with_body))
         .layer(OtelInResponseLayer)
         // Prometheus scrapes every 15s; a trace each would bury the real ones.
         .layer(OtelAxumLayer::default().filter(|path| path != "/metrics"))
@@ -453,15 +458,15 @@ async fn arcane_ws_proxy(
     // The camera session outlives this request (it ends at the 101). This span is its short
     // open span, in the request's trace: it ends once ai_pipeline is connected (whose
     // connection span joins it). What the session does after that is traced per roll.
-    let open = api::detached_span!("arcane.ws_session", otel.name = "session open", user = %user);
+    let open = crate::detached_span!("arcane.ws_session", otel.name = "session open", user = %user);
     // The browser's `camera session` span (assets/trace.js), passed in the URL.
     if let Some(tp) = query_traceparent(&uri) {
-        api::trace::link_traceparent(&open, tp);
+        crate::trace::link_traceparent(&open, tp);
     }
     // Camera frames are a few hundred KB; anything much larger isn't a frame.
     // axum spawns the callback itself; `session` makes it a task shutdown waits for.
     ws.max_message_size(4 * 1024 * 1024).on_upgrade(move |socket| {
-        api::trace::session(proxy_ws(socket, ai_url, hub, user, token, session_id, open))
+        crate::trace::session(proxy_ws(socket, ai_url, hub, user, token, session_id, open))
     })
 }
 
@@ -477,13 +482,13 @@ async fn proxy_ws(
     session_id: Option<tower_sessions::session::Id>,
     open: tracing::Span,
 ) {
-    use api::trace::Carried;
+    use crate::trace::Carried;
     use axum::extract::ws::Message as AxMsg;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TngMsg;
     use tracing::Instrument as _;
 
-    let connected = api::trace::connect_ws(&upstream_url, "ai-pipeline", UPSTREAM_CONNECT_TIMEOUT)
+    let connected = crate::trace::connect_ws(&upstream_url, "ai-pipeline", UPSTREAM_CONNECT_TIMEOUT)
         .instrument(open.clone())
         .await;
     let session = rolls::Session::open("arcane.ws_session", &open);
@@ -492,7 +497,7 @@ async fn proxy_ws(
         Err(e) => {
             open.in_scope(|| {
                 tracing::error!(error = %e, upstream = %upstream_url, "ai_pipeline connect failed");
-                api::trace::failed("upstream_connect");
+                crate::trace::failed("upstream_connect");
             });
             session.set_reason("ai_pipeline connect failed");
             return;
@@ -552,7 +557,7 @@ async fn proxy_ws(
                                 trace_id = tracing::field::Empty,
                                 span_id = tracing::field::Empty,
                             );
-                            api::trace::continue_from(&receive, trace.cx);
+                            crate::trace::continue_from(&receive, trace.cx);
                             session.unit(&receive);
                             let received = tracing_opentelemetry::OpenTelemetrySpanExt::context(&receive);
                             let _receiving = receive.enter();
@@ -575,7 +580,7 @@ async fn proxy_ws(
                                         trace_id = tracing::field::Empty,
                                         span_id = tracing::field::Empty,
                                     );
-                                    api::trace::continue_from(&span, received);
+                                    crate::trace::continue_from(&span, received);
                                     session.unit(&span);
                                     permit.send(span.in_scope(|| Carried::new(capture::CaptureJob {
                                         roll: t.to_string(),
@@ -662,7 +667,7 @@ async fn oauth_start(
         }
     });
 
-    match api::start_oauth(&provider).await {
+    match crate::auth::start_oauth(&provider).await {
         Ok((auth_url, state)) => {
             if let Err(e) = session.insert(OAUTH_CSRF_KEY, &state).await {
                 tracing::error!(error = %e, %provider, "oauth_start: failed to write CSRF state");
@@ -684,7 +689,7 @@ async fn oauth_start(
             Redirect::to(&auth_url).into_response()
         }
         Err(e) => {
-            tracing::error!(error = %e, %provider, "oauth_start: api::start_oauth failed");
+            tracing::error!(error = %e, %provider, "oauth_start: crate::auth::start_oauth failed");
             Redirect::to(&api_types::OAuthError::StartFailed.login_page()).into_response()
         }
     }
@@ -719,9 +724,9 @@ async fn oauth_callback(
         return Redirect::to(&api_types::OAuthError::CsrfMismatch.login_page()).into_response();
     }
 
-    match api::exchange_oauth_code(&provider, &code).await {
+    match crate::auth::exchange_oauth_code(&provider, &code).await {
         Ok((token, username)) => {
-            if api::fresh_session_id(&session).await.is_err() {
+            if crate::auth::fresh_session_id(&session).await.is_err() {
                 return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             if let Err(e) = session.insert("opaque_token", &token).await {
@@ -733,7 +738,7 @@ async fn oauth_callback(
                 return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             // Came from an invite link: back to it (the invite was just redeemed).
-            api::redeem_pending_invite(&session, &token).await;
+            crate::auth::redeem_pending_invite(&session, &token).await;
             Redirect::to(&json_api::next_page(&session, next).await.href()).into_response()
         }
         Err(e) if e.contains("email_exists") || e.contains("Email already in use") => {
@@ -753,9 +758,9 @@ mod tests {
     use tracing_opentelemetry::OpenTelemetrySpanExt as _;
     use tracing_subscriber::layer::SubscriberExt as _;
 
-    fn test_client() -> api::trace::TracedClient {
-        let peer = api::trace::Peer { service: "frontend", system: None };
-        api::trace::client(peer, std::time::Duration::from_secs(5), |b| b).unwrap()
+    fn test_client() -> crate::trace::TracedClient {
+        let peer = crate::trace::Peer { service: "frontend", system: None };
+        crate::trace::client(peer, std::time::Duration::from_secs(5), |b| b).unwrap()
     }
 
     #[test]
@@ -782,7 +787,7 @@ mod tests {
             .layer(axum::middleware::from_fn(super::no_store));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        api::trace::spawn_loop("test: stand-in server", async move { axum::serve(listener, app).await.unwrap() });
+        crate::trace::spawn_loop("test: stand-in server", async move { axum::serve(listener, app).await.unwrap() });
 
         let client = test_client();
         let cache_control = |res: reqwest::Response| {
@@ -922,7 +927,7 @@ mod tests {
         site.json(Method::POST, "/api/invites/open", serde_json::json!({"code": "join"})).await;
         let login = site.json(Method::POST, "/api/session/login", serde_json::json!({"username": "tester", "password": "right"})).await;
         assert_eq!(login.status, StatusCode::OK);
-        assert_eq!(site.session_data().await[api::INVITE_RETURN_KEY], "join");
+        assert_eq!(site.session_data().await[crate::auth::INVITE_RETURN_KEY], "join");
         assert_eq!(round_trip(&mut site, "?next=/asshole").await, "/asshole");
     }
 }

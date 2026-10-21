@@ -139,9 +139,7 @@ fn every_raw_io_allow_is_in_the_registry() {
     let this_file = Path::new(file!()).file_name().unwrap();
 
     let mut files = Vec::new();
-    for package in ["packages/api", "packages/web"] {
-        rust_files(&frontend.join(package), &mut files);
-    }
+    rust_files(&frontend.join("crates/bff"), &mut files);
     let mut found = Vec::new();
     for path in files.iter().filter(|p| p.file_name() != Some(this_file)) {
         let relative = path.strip_prefix(&frontend).unwrap().to_string_lossy().replace('\\', "/");

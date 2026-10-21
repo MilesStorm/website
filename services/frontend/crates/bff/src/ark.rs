@@ -5,7 +5,8 @@ use api_types::{ApiError, ArkCommand, ArkOutcome, ArkPlayers, ErrorCode};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{auth_json, trace};
+use crate::auth::auth_json;
+use crate::trace;
 
 /// Auth's reply to an Ark call: the game host's result, in its own names.
 #[derive(Deserialize)]

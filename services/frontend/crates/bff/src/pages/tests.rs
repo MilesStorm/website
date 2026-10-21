@@ -294,7 +294,7 @@ async fn the_page_traceparent_is_the_request_span() {
     let app = super::mount(axum::Router::new(), dist.built())
         // As the server layers them: the session's own spans are current in the handler.
         .layer(tower_sessions::SessionManagerLayer::new(tower_sessions::MemoryStore::default()))
-        .layer(axum::middleware::from_fn(api::trace::capture_request_context))
+        .layer(axum::middleware::from_fn(crate::trace::capture_request_context))
         .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
     let res = app.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
     let html = String::from_utf8(axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
@@ -363,7 +363,7 @@ async fn check(app: axum::Router, access: Access, token: Option<&str>, path: &st
 
 #[test]
 fn the_guard_rule_fails_closed() {
-    use api::Viewer as V;
+    use crate::auth::Viewer as V;
     use api_types::Permission;
     let user = |permissions: Vec<Permission>| {
         crate::json_api::Viewer(V::User { username: "u".into(), token: "t".into(), permissions })

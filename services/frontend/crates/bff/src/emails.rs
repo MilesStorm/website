@@ -47,7 +47,7 @@ pub(crate) fn offline() -> ApiError {
 /// auth gave, with auth's status when it is a 4xx (a refusal is an answer, also one this
 /// doesn't know); anything else is a gateway error.
 async fn call(path: &str, body: Value) -> Result<Value, ApiError> {
-    let (status, reply) = api::auth_json(path, &body).await.map_err(|e| {
+    let (status, reply) = crate::auth::auth_json(path, &body).await.map_err(|e| {
         tracing::error!(error = %e, path, "reaching auth failed");
         offline()
     })?;
@@ -127,7 +127,7 @@ async fn forget(user_id: i64, username: &str, hub: Option<&RollHub>) -> Result<(
 /// Emails the token's user a link to confirm their address; returns the address.
 #[tracing::instrument(name = "bff.send_confirmation_email", skip_all)]
 pub async fn send_confirmation(token: &str) -> Result<String, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         let reply = call("/internal/email/verify/send", json!({ "token": token })).await?;
         Ok(text(&reply, "email"))
     })
@@ -137,7 +137,7 @@ pub async fn send_confirmation(token: &str) -> Result<String, ApiError> {
 /// Confirms an address with the code from the emailed link; returns the username.
 #[tracing::instrument(name = "bff.confirm_email", skip_all)]
 pub async fn confirm(code: &str) -> Result<String, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         let reply = call("/internal/email/verify/confirm", json!({ "code": checked(code)? })).await?;
         Ok(text(&reply, "username"))
     })
@@ -148,7 +148,7 @@ pub async fn confirm(code: &str) -> Result<String, ApiError> {
 /// account with an address. Succeeds either way, to not tell who has an account.
 #[tracing::instrument(name = "bff.forgot_password", skip_all)]
 pub async fn forgot(login: &str) -> Result<(), ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         // Auth's own limit: the longest email address.
         if login.trim().is_empty() || login.trim().len() > 254 {
             return Err(ApiError::new(ErrorCode::Invalid, "Enter your username or email."));
@@ -163,7 +163,7 @@ pub async fn forgot(login: &str) -> Result<(), ApiError> {
 /// out everywhere, including here if this browser was logged in as it.
 #[tracing::instrument(name = "bff.reset_password", skip_all)]
 pub async fn reset(session: Option<&Session>, code: &str, password: &str) -> Result<Done, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         let reply = call("/internal/password/reset", json!({ "code": checked(code)?, "password": password })).await?;
         let username = text(&reply, "username");
         let logged_out = log_out_if(session, &username).await;
@@ -175,7 +175,7 @@ pub async fn reset(session: Option<&Session>, code: &str, password: &str) -> Res
 /// Emails the token's user a link to delete their account; returns the address.
 #[tracing::instrument(name = "bff.request_account_deletion", skip_all)]
 pub async fn request_deletion(token: &str) -> Result<String, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         let reply = call("/internal/account/delete/request", json!({ "token": token })).await?;
         Ok(text(&reply, "email"))
     })
@@ -185,7 +185,7 @@ pub async fn request_deletion(token: &str) -> Result<String, ApiError> {
 /// Which account a delete link is for, without using it.
 #[tracing::instrument(name = "bff.account_to_delete", skip_all)]
 pub async fn deletion(code: &str) -> Result<Deletion, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         let reply = call("/internal/account/delete/check", json!({ "code": checked(code)? })).await?;
         Ok(Deletion { username: text(&reply, "username") })
     })
@@ -195,7 +195,7 @@ pub async fn deletion(code: &str) -> Result<Deletion, ApiError> {
 /// Deletes the account a delete link is for.
 #[tracing::instrument(name = "bff.delete_account", skip_all)]
 pub async fn delete(session: Option<&Session>, hub: Option<&RollHub>, code: &str) -> Result<Done, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         let reply = call("/internal/account/delete/check", json!({ "code": checked(code)? })).await?;
         let user_id = reply.get("user_id").and_then(Value::as_i64).ok_or_else(|| {
             tracing::error!("deleting an account: auth's reply has no user_id");
@@ -228,10 +228,10 @@ pub async fn delete_direct(
     token: &str,
     confirm: &str,
 ) -> Result<Done, ApiError> {
-    api::trace::rejectable(async {
-        let profile = match api::account_profile(token).await {
+    crate::trace::rejectable(async {
+        let profile = match crate::auth::account_profile(token).await {
             Ok(p) => p,
-            Err(api::ProfileError::LoggedOut) => return Err(ApiError::logged_out()),
+            Err(crate::auth::ProfileError::LoggedOut) => return Err(ApiError::logged_out()),
             Err(e) => {
                 tracing::error!(error = ?e, "reading the account from auth failed");
                 return Err(offline());

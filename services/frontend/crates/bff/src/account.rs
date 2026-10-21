@@ -25,10 +25,10 @@ pub const PICTURE_MAX_UPLOAD: usize = 5 * 1024 * 1024;
 const PICTURE_SIDE: u32 = 256;
 
 /// The token's account, looked up with auth.
-async fn profile(token: &str) -> Result<api::AccountProfile, ApiError> {
-    match api::account_profile(token).await {
+async fn profile(token: &str) -> Result<crate::auth::AccountProfile, ApiError> {
+    match crate::auth::account_profile(token).await {
         Ok(p) => Ok(p),
-        Err(api::ProfileError::LoggedOut) => Err(ApiError::logged_out()),
+        Err(crate::auth::ProfileError::LoggedOut) => Err(ApiError::logged_out()),
         Err(e) => {
             tracing::error!(error = ?e, "reading the account from auth failed");
             Err(ApiError::new(ErrorCode::Upstream, "Your account can't be loaded right now. Try again later."))
@@ -36,7 +36,7 @@ async fn profile(token: &str) -> Result<api::AccountProfile, ApiError> {
     }
 }
 
-async fn info(profile: api::AccountProfile) -> AccountInfo {
+async fn info(profile: crate::auth::AccountProfile) -> AccountInfo {
     let (picture_version, pictures_available) = match crate::dataset::dataset() {
         Some(ds) => match ds.profile_picture_version(profile.user_id).await {
             Ok(v) => (v, true),
@@ -62,21 +62,21 @@ async fn info(profile: api::AccountProfile) -> AccountInfo {
 /// The token's account settings.
 #[tracing::instrument(name = "bff.get_account", skip_all)]
 pub async fn account(token: &str) -> Result<AccountInfo, ApiError> {
-    api::trace::rejectable(async { Ok(info(profile(token).await?).await) }).await
+    crate::trace::rejectable(async { Ok(info(profile(token).await?).await) }).await
 }
 
 /// Set the display name; blank clears it. Errors carry a message for the page.
 #[tracing::instrument(name = "bff.set_account_display_name", skip_all)]
 pub async fn set_name(token: &str, name: &str) -> Result<AccountInfo, ApiError> {
-    api::trace::rejectable(async {
-        match api::set_display_name(token, Some(name)).await {
+    crate::trace::rejectable(async {
+        match crate::auth::set_display_name(token, Some(name)).await {
             Ok(profile) => Ok(info(profile).await),
-            Err(api::ProfileError::Invalid) => Err(ApiError::new(
+            Err(crate::auth::ProfileError::Invalid) => Err(ApiError::new(
                 ErrorCode::Invalid,
                 "Use at most 40 characters, without line breaks or hidden characters.",
             )),
-            Err(api::ProfileError::LoggedOut) => Err(ApiError::logged_out()),
-            Err(api::ProfileError::Other(e)) => {
+            Err(crate::auth::ProfileError::LoggedOut) => Err(ApiError::logged_out()),
+            Err(crate::auth::ProfileError::Other(e)) => {
                 tracing::error!(error = %e, "saving the display name failed");
                 Err(ApiError::new(ErrorCode::Upstream, "Couldn't save your name. Try again."))
             }
@@ -88,7 +88,7 @@ pub async fn set_name(token: &str, name: &str) -> Result<AccountInfo, ApiError> 
 /// Remove the profile picture (back to the default one).
 #[tracing::instrument(name = "bff.remove_profile_picture", skip_all)]
 pub async fn remove_picture(token: &str) -> Result<AccountInfo, ApiError> {
-    api::trace::rejectable(async {
+    crate::trace::rejectable(async {
         let profile = profile(token).await?;
         let ds = crate::dataset::dataset().ok_or_else(pictures_unavailable)?;
         ds.delete_profile_picture(profile.user_id).await.map_err(|e| {
@@ -149,7 +149,7 @@ pub async fn upload_picture(
         tracing::Span::current().set_attribute("bytes", body.len() as i64);
         to_profile_jpeg(&body)
     };
-    let jpeg = match api::trace::spawn_blocking("profile_picture.convert", convert).await {
+    let jpeg = match crate::trace::spawn_blocking("profile_picture.convert", convert).await {
         Ok(Ok(jpeg)) => jpeg,
         Ok(Err(e)) => {
             tracing::info!(error = %e, "profile picture upload is not a usable image");

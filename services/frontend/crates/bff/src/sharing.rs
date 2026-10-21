@@ -26,7 +26,7 @@ pub async fn sharing(token: &str) -> Result<SharingState, ApiError> {
     if crate::dataset::dataset().is_none() {
         return Ok(SharingState { available: false, share: false });
     }
-    let share = api::dataset_consent(token).await.map_err(store_error)?;
+    let share = crate::auth::dataset_consent(token).await.map_err(store_error)?;
     Ok(SharingState { available: true, share })
 }
 
@@ -35,7 +35,7 @@ pub async fn set_sharing(token: &str, share: bool) -> Result<SharingState, ApiEr
     if crate::dataset::dataset().is_none() {
         return Err(unavailable());
     }
-    api::set_dataset_consent(token, share, crate::dataset::CONSENT_VERSION).await.map_err(store_error)?;
+    crate::auth::set_dataset_consent(token, share, crate::dataset::CONSENT_VERSION).await.map_err(store_error)?;
     tracing::info!(share, "roll sharing changed");
     Ok(SharingState { available: true, share })
 }
@@ -53,7 +53,7 @@ pub async fn delete_shared(user: String, token: Option<&str>, hub: Option<RollHu
     let ds = crate::dataset::configured().ok_or_else(unavailable)?;
     // Stop new samples first (best effort), then delete what exists.
     if let Some(token) = token {
-        if let Err(e) = api::set_dataset_consent(token, false, crate::dataset::CONSENT_VERSION).await {
+        if let Err(e) = crate::auth::set_dataset_consent(token, false, crate::dataset::CONSENT_VERSION).await {
             tracing::warn!(error = %e, "turning sharing off failed during delete; deleting anyway");
         }
     }
@@ -63,7 +63,7 @@ pub async fn delete_shared(user: String, token: Option<&str>, hub: Option<RollHu
     let n = ds.delete_user_data(&user).await.map_err(store_error)?;
     tracing::info!(rolls = n, "user deleted shared roll pictures");
     let ds = ds.clone();
-    api::trace::spawn_in_trace("dataset.delete_again", async move {
+    crate::trace::spawn_in_trace("dataset.delete_again", async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         if let Some(hub) = &hub {
             hub.clear_held(&user).await;

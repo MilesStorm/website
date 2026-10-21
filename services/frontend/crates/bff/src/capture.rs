@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tower_sessions_redis_store::fred::prelude::*;
 
-use api::trace::Carried;
+use crate::trace::Carried;
 use tracing::Instrument as _;
 
 use crate::dataset::{auto_reason, clean_values, dataset, is_roll_id, shares, Capture};
@@ -103,7 +103,7 @@ impl RollHub {
     /// A capture queue for one camera connection; the worker ends with the sender.
     /// `token` is the connection's session token, used to look up the user's choice.
     pub fn capturer(&self, user: String, token: String) -> mpsc::Sender<Carried<CaptureJob>> {
-        let (tx, mut rx) = api::trace::channel::<CaptureJob>(CAPTURE_QUEUE);
+        let (tx, mut rx) = crate::trace::channel::<CaptureJob>(CAPTURE_QUEUE);
         let hub = self.clone();
         let worker = async move {
             let mut paused_until: Option<Instant> = None;
@@ -152,7 +152,7 @@ impl RollHub {
                         Ok(false) => return,
                         Err(e) => {
                             tracing::warn!(error = %e, "dataset consent lookup failed; pausing samples");
-                            api::trace::failed("consent_lookup");
+                            crate::trace::failed("consent_lookup");
                             paused_until = Some(Instant::now() + ERROR_PAUSE);
                             return;
                         }
@@ -167,7 +167,7 @@ impl RollHub {
                     }
                     if let Err(e) = ds.save(&user, &capture, Some(reason), None).await {
                         tracing::warn!(error = %e, "saving dataset sample failed; pausing samples");
-                        api::trace::failed("surrealdb");
+                        crate::trace::failed("surrealdb");
                         paused_until = Some(Instant::now() + ERROR_PAUSE);
                     }
                 }
@@ -176,7 +176,7 @@ impl RollHub {
             }
         };
         // Per connection, not per process: shutdown waits for the captures still queued.
-        api::trace::spawn_loop("camera session: keeps roll pictures", api::trace::session(worker));
+        crate::trace::spawn_loop("camera session: keeps roll pictures", crate::trace::session(worker));
         tx
     }
 
@@ -195,7 +195,7 @@ impl RollHub {
         .await;
         if let Err(e) = queued {
             tracing::warn!(error = %e, "holding roll picture failed");
-            api::trace::failed("redis");
+            crate::trace::failed("redis");
         }
     }
 
@@ -207,7 +207,7 @@ impl RollHub {
             .next()
             .mget(vec![held_meta_key(user), held_jpeg_key(user)])
             .await
-            .inspect_err(|_| api::trace::failed("redis"))
+            .inspect_err(|_| crate::trace::failed("redis"))
             .ok()?;
         let [meta, jpeg]: [Option<Bytes>; 2] = both.try_into().ok()?;
         let meta: Value = serde_json::from_slice(&meta?).ok()?;
@@ -226,7 +226,7 @@ impl RollHub {
         let r: Result<i64, _> = self.pool.next().del(vec![held_meta_key(user), held_jpeg_key(user)]).await;
         if let Err(e) = r {
             tracing::warn!(error = %e, "clearing held roll failed");
-            api::trace::failed("redis");
+            crate::trace::failed("redis");
         }
     }
 
@@ -240,7 +240,7 @@ impl RollHub {
             format!("arcane:auto_count:{user}"),
             format!("arcane:flag_count:{user}"),
         ];
-        let _: i64 = self.pool.next().del(keys).await.inspect_err(|_| api::trace::failed("redis"))?;
+        let _: i64 = self.pool.next().del(keys).await.inspect_err(|_| crate::trace::failed("redis"))?;
         Ok(())
     }
 
@@ -254,7 +254,7 @@ impl RollHub {
             .await;
         if let Err(e) = created {
             tracing::warn!(error = %e, "rate counter failed");
-            api::trace::failed("redis");
+            crate::trace::failed("redis");
             return None;
         }
         client
@@ -262,7 +262,7 @@ impl RollHub {
             .await
             .inspect_err(|e| {
                 tracing::warn!(error = %e, "rate counter failed");
-                api::trace::failed("redis");
+                crate::trace::failed("redis");
             })
             .ok()
     }

@@ -36,13 +36,13 @@ jobs:
       # The committed API contract is what the handlers say (web/src/api/openapi.json), and the
       # TypeScript types are generated from it: regenerate both with `npm run api` in web/.
       - name: OpenAPI document is current
-        run: cargo run -q -p web -- openapi | diff - web/src/api/openapi.json
+        run: cargo run -q -p bff --bin server -- openapi | diff - web/src/api/openapi.json
       - name: TypeScript API types are current
         working-directory: services/frontend/web
         run: npm ci && npm run api:types && git diff --exit-code -- src/api/schema.d.ts
       # aide can't read a response type through `impl IntoApiResponse`: handlers name theirs.
       - name: API handlers return concrete types
-        run: '! grep -rn "impl IntoApiResponse" packages/web/src'
+        run: '! grep -rn "impl IntoApiResponse" crates/bff/src'
       # The Astro pages: typed against schema.d.ts, their component tests, and a build with
       # exactly the pages in PAGES, each with the marker the server splices at.
       - name: Astro pages type-check
@@ -59,7 +59,7 @@ jobs:
       - name: Astro build has exactly the pages
         env:
           ASTRO_TELEMETRY_DISABLED: 1
-        run: (cd web && npm run build) && cargo run -q -p web -- check-pages web/dist
+        run: (cd web && npm run build) && cargo run -q -p bff --bin server -- check-pages web/dist
 
   # The browser extension's scripts, type-checked (tsconfig.json); a job of its own so it runs
   # beside the frontend's.

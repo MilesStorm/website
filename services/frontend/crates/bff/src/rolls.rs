@@ -34,7 +34,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::stream;
-use api::trace::{Carried, RedisTracing};
+use crate::trace::{Carried, RedisTracing};
 use opentelemetry::trace::SpanContext;
 use opentelemetry::KeyValue;
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -123,7 +123,7 @@ pub fn split_trace(text: &str) -> (Envelope, Cow<'_, str>) {
     };
     let trace: TraceField = serde_json::from_str(&trace).unwrap_or_default();
     let envelope = Envelope {
-        cx: trace.traceparent.as_deref().map(api::trace::context_from_traceparent).unwrap_or_default(),
+        cx: trace.traceparent.as_deref().map(crate::trace::context_from_traceparent).unwrap_or_default(),
         published: trace.published_ms.and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms))),
     };
     (envelope, Cow::Owned(rest))
@@ -151,7 +151,7 @@ fn without_member(text: &str, value: &str) -> Option<String> {
 /// receive it take the field off again and have `roll` byte for byte. `roll` as it is when
 /// it isn't a JSON object or there is no trace to carry.
 fn with_trace(roll: &str, span: &tracing::Span) -> String {
-    let Some(traceparent) = api::trace::traceparent_of(span) else { return roll.to_string() };
+    let Some(traceparent) = crate::trace::traceparent_of(span) else { return roll.to_string() };
     let end = roll.trim_end().len();
     let object = roll.trim_start().strip_prefix('{').zip(roll[..end].strip_suffix('}'));
     let Some((members, head)) = object.filter(|_| serde_json::from_str::<serde::de::IgnoredAny>(roll).is_ok()) else {
@@ -195,7 +195,7 @@ impl Session {
         Self {
             name,
             id,
-            open: api::trace::span_context(open),
+            open: crate::trace::span_context(open),
             started: Instant::now(),
             reason: Mutex::new("disconnected"),
             frames: AtomicU64::new(0),
@@ -247,7 +247,7 @@ impl Session {
 impl Drop for Session {
     /// The close span: a trace of its own, with what the session did.
     fn drop(&mut self) {
-        let close = api::unit_span!(
+        let close = crate::unit_span!(
             None,
             "arcane.session_close",
             otel.name = "session close",
@@ -293,7 +293,7 @@ impl RollHub {
     ) -> anyhow::Result<Self> {
         // No command spans: after start-up it only sends the liveness PING below, from a
         // loop. fred makes no span for a received message either way.
-        let subscriber = api::trace::redis_subscriber(config, connection, RedisTracing::Off)?;
+        let subscriber = crate::trace::redis_subscriber(config, connection, RedisTracing::Off)?;
         subscriber.init().await?;
         // Re-issues the PSUBSCRIBE after every reconnect.
         subscriber.manage_subscriptions();
@@ -309,7 +309,7 @@ impl RollHub {
 
         // Liveness: a PING that fails or hangs forces a reconnect.
         let pinger = subscriber.clone();
-        api::trace::spawn_loop("arcane roll subscriber: liveness PING", async move {
+        crate::trace::spawn_loop("arcane roll subscriber: liveness PING", async move {
             let mut every = interval_at(Instant::now() + SUBSCRIBER_PING, SUBSCRIBER_PING);
             loop {
                 every.tick().await;
@@ -327,11 +327,11 @@ impl RollHub {
         // each watched user's stored last roll (viewers drop exact repeats).
         let mut reconnects = subscriber.reconnect_rx();
         let replay = hub.clone();
-        api::trace::spawn_loop("arcane roll subscriber: replays last rolls after a reconnect", async move {
+        crate::trace::spawn_loop("arcane roll subscriber: replays last rolls after a reconnect", async move {
             while reconnects.recv().await.is_ok() {
                 let watched: Vec<String> = replay.users.lock().unwrap().keys().cloned().collect();
                 // One trace per reconnect; each stream's delivery links to it.
-                let span = api::unit_span!(None, "arcane.rolls_replay", users = watched.len());
+                let span = crate::unit_span!(None, "arcane.rolls_replay", users = watched.len());
                 async {
                     for user in watched {
                         if let Some(roll) = replay.last_roll(&user).await {
@@ -348,7 +348,7 @@ impl RollHub {
 
         let mut messages = subscriber.message_rx();
         let users = hub.users.clone();
-        api::trace::spawn_loop("arcane roll subscriber: fans rolls out to open streams", async move {
+        crate::trace::spawn_loop("arcane roll subscriber: fans rolls out to open streams", async move {
             loop {
                 let msg = match messages.recv().await {
                     Ok(m) => m,
@@ -389,7 +389,7 @@ impl RollHub {
     /// Each roll is sent with the context of its trace (ai_pipeline's, from the message);
     /// `session` is the camera session's open span, which every roll links to.
     pub fn publisher(&self, user: String, session: Option<SpanContext>) -> mpsc::Sender<Carried<String>> {
-        let (tx, mut rx) = api::trace::channel::<String>(PUBLISH_QUEUE);
+        let (tx, mut rx) = crate::trace::channel::<String>(PUBLISH_QUEUE);
         let client = self.pool.next().clone();
         let writer = async move {
             while let Some(roll) = rx.recv().await {
@@ -415,14 +415,14 @@ impl RollHub {
             }
         };
         // Per connection, not per process: shutdown waits for the rolls still queued.
-        api::trace::spawn_loop("camera session: writes its rolls to Redis in order", api::trace::session(writer));
+        crate::trace::spawn_loop("camera session: writes its rolls to Redis in order", crate::trace::session(writer));
         tx
     }
 
     /// One permission recheck of a long-lived connection ([`Self::still_allowed`]), as a
     /// trace of its own, linked to the connection's `session`.
     pub async fn recheck(&self, session: &Session, session_id: Option<Id>, user: &str) -> bool {
-        let span = api::unit_span!(None, "arcane.recheck", otel.name = "permission recheck");
+        let span = crate::unit_span!(None, "arcane.recheck", otel.name = "permission recheck");
         session.unit(&span);
         self.still_allowed(session_id, user).instrument(span).await
     }
@@ -436,7 +436,7 @@ impl RollHub {
             Err(e) => {
                 // A Redis hiccup shouldn't drop everyone; the next check decides.
                 tracing::warn!(error = %e, "arcane session re-check failed");
-                api::trace::failed("redis");
+                crate::trace::failed("redis");
                 true
             }
         }
@@ -444,7 +444,7 @@ impl RollHub {
 }
 
 /// [`RollHub::still_allowed`] for the stored session `data` (`None`: gone): its viewer, built
-/// as for a request ([`api::login_viewer`]), with the `/api/arcane/*` rule. Auth not answering
+/// as for a request ([`crate::auth::login_viewer`]), with the `/api/arcane/*` rule. Auth not answering
 /// (`Degraded`) keeps the connection, as a Redis hiccup does; the next check decides.
 pub(crate) async fn record_allowed(data: Option<&HashMap<String, serde_json::Value>>, user: &str) -> bool {
     let Some(data) = data else { return false };
@@ -453,7 +453,7 @@ pub(crate) async fn record_allowed(data: Option<&HashMap<String, serde_json::Val
     if name != Some(user) {
         return false;
     }
-    let Some(viewer) = api::login_viewer(user, token).await else { return false };
+    let Some(viewer) = crate::auth::login_viewer(user, token).await else { return false };
     match json_api::allowed(Access::Perm(KnownPermission::Arcane), &Viewer(viewer)) {
         Ok(()) => true,
         Err(e) => e.0.error == ErrorCode::Unavailable,
@@ -477,13 +477,13 @@ async fn publish(client: &Client, user: &str, payload: String) {
         .await;
     if let Err(e) = set {
         tracing::error!(error = %e, "storing last arcane roll failed");
-        api::trace::failed("redis");
+        crate::trace::failed("redis");
     }
     let message = with_trace(&payload, &tracing::Span::current());
     let published: Result<i64, _> = client.publish(format!("{CHANNEL_PREFIX}{user}"), message).await;
     if let Err(e) = published {
         tracing::error!(error = %e, "publishing arcane roll failed");
-        api::trace::failed("redis");
+        crate::trace::failed("redis");
     }
 }
 
@@ -494,7 +494,7 @@ impl RollHub {
         users.retain(|_, tx| tx.receiver_count() > 0);
         let tx = users
             .entry(user.to_string())
-            .or_insert_with(|| api::trace::broadcast(PER_USER_BUFFER));
+            .or_insert_with(|| crate::trace::broadcast(PER_USER_BUFFER));
         (tx.receiver_count() < MAX_STREAMS_PER_USER).then(|| tx.subscribe())
     }
 
@@ -502,7 +502,7 @@ impl RollHub {
         let got: Result<Option<String>, _> = self.pool.next().get(format!("{LAST_ROLL_PREFIX}{user}")).await;
         let roll = got.unwrap_or_else(|e| {
             tracing::error!(error = %e, "reading last arcane roll failed");
-            api::trace::failed("redis");
+            crate::trace::failed("redis");
             None
         })?;
         // Stored without `_trace`; a replica from before that rule may have left one.
@@ -523,7 +523,7 @@ pub fn is_roll(text: &str) -> bool {
 
 /// Browsers always send `Origin` on WebSocket handshakes; the page and the socket are
 /// served by the same host, so the origin's host must match `Host`, over HTTPS.
-/// Plain-http origins are accepted only in debug builds (local `dx serve`). Extra
+/// Plain-http origins are accepted only in debug builds (local development). Extra
 /// origins (e.g. the dev proxy) can be listed in `ARCANE_ALLOWED_ORIGINS`,
 /// comma-separated. Clients that send no `Origin` are not browsers and carry no
 /// ambient cookies, so they are let through to the normal session check.
@@ -555,14 +555,14 @@ fn no_store(mut resp: Response) -> Response {
 /// down" without CORS or redirect handling.
 pub async fn arcane_me(NoApi(viewer): NoApi<Result<Viewer, json_api::ApiError>>) -> Json<ArcaneMe> {
     Json(match viewer.map(|v| v.0) {
-        Ok(api::Viewer::User { username, permissions, .. }) => ArcaneMe {
+        Ok(crate::auth::Viewer::User { username, permissions, .. }) => ArcaneMe {
             logged_in: true,
             has_arcane: permissions.iter().any(|p| p.known() == Some(KnownPermission::Arcane)),
             username: Some(username),
         },
         // Auth can't say: as today without the permission.
-        Ok(api::Viewer::Degraded { username }) => ArcaneMe { logged_in: true, username: Some(username), has_arcane: false },
-        Ok(api::Viewer::Anonymous) | Err(_) => ArcaneMe { logged_in: false, username: None, has_arcane: false },
+        Ok(crate::auth::Viewer::Degraded { username }) => ArcaneMe { logged_in: true, username: Some(username), has_arcane: false },
+        Ok(crate::auth::Viewer::Anonymous) | Err(_) => ArcaneMe { logged_in: false, username: None, has_arcane: false },
     })
 }
 
@@ -604,7 +604,7 @@ fn deliver_span(session: &Session, roll: Carried<Delivery>, replay: bool) -> (tr
     let delivery = if live {
         roll.enter(&span)
     } else {
-        api::trace::start_unit(&span, roll.span_context());
+        crate::trace::start_unit(&span, roll.span_context());
         roll.into_inner()
     };
     session.unit(&span);

@@ -349,6 +349,7 @@ mod server {
 
     /// The current span's context, to link a unit of work ([`unit_span!`], [`spawn`]) to
     /// what caused it. `None` outside a sampled span.
+    #[allow(dead_code, reason = "a chokepoint for new code (TRACING.md); nothing spawns a unit yet")]
     pub fn here() -> Option<SpanContext> {
         span_context(&tracing::Span::current())
     }
@@ -409,6 +410,7 @@ mod server {
     /// `link` (what caused it; [`here`]). Clippy bans `tokio::spawn`: a bare task has no
     /// span, so its work is either invisible or scattered over one-span traces.
     #[allow(clippy::disallowed_methods, reason = "trace::spawn is the chokepoint for units of background work")]
+    #[allow(dead_code, reason = "a chokepoint for new code (TRACING.md); nothing spawns a unit yet")]
     pub fn spawn<F>(name: &'static str, link: Option<SpanContext>, fut: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -669,11 +671,11 @@ mod server {
         }
     }
 
-    /// For tests (here so that web's can use it too): call before `set_default`. While a
-    /// test's subscriber is the only one alive, tracing asks whichever thread reaches a span first whether anyone wants it, and keeps
+    /// For tests: call before `set_default`. While a test's subscriber is the only one alive,
+    /// tracing asks whichever thread reaches a span first whether anyone wants it, and keeps
     /// the answer: another test's thread says no, and the span is never made (the flaky "no
     /// span" failure). With a second subscriber alive it asks each thread's own.
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn several_subscribers() {
         static SECOND: std::sync::LazyLock<tracing::Dispatch> =
             std::sync::LazyLock::new(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
@@ -784,7 +786,7 @@ mod server {
             assert!(closed.iter().any(|n| n == "HTTP request"), "client span held open: {closed:?}");
         }
 
-        /// The callee side of the hop: `OtelAxumLayer` (as in web's and auth's routers)
+        /// The callee side of the hop: `OtelAxumLayer` (as in the bff's and auth's routers)
         /// continues the trace that [`client`](super::client) sent.
         #[tokio::test(flavor = "current_thread")]
         async fn server_continues_the_clients_trace() {
@@ -1264,7 +1266,7 @@ mod server {
             assert!(matches!(span(&exporter, "rejectable").status, Status::Error { .. }));
         }
 
-        /// A router as web's: `OtelAxumLayer` outside [`end_span_with_body`](super::end_span_with_body).
+        /// A router as the bff's: `OtelAxumLayer` outside [`end_span_with_body`](super::end_span_with_body).
         /// `/stream` and `/events` send one chunk, then wait for the returned sender.
         async fn streaming_server() -> (String, tokio::sync::mpsc::UnboundedSender<&'static str>) {
             use axum::http::header::CONTENT_TYPE;

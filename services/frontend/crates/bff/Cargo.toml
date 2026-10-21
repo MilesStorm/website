@@ -1,10 +1,14 @@
 [package]
-name = "web"
-version = "0.2.2"
+name = "bff"
+version = "0.3.0"
 edition = "2021"
 
+# The website's server: Astro's pages, the JSON API, the camera WebSocket and the OAuth routes.
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
 [dependencies]
-api = { workspace = true }
 api-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
@@ -30,17 +34,29 @@ opentelemetry-otlp = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 axum-tracing-opentelemetry = { workspace = true }
+# Calls to auth and SurrealDB get a CLIENT span each and carry the trace context (src/trace.rs).
+reqwest-middleware = { workspace = true }
+reqwest-tracing = { workspace = true }
+# The session store's calls as CLIENT spans (trace::TracedStore): SessionStore is an
+# #[async_trait] trait.
+async-trait = "0.1.89"
+http = "1"
+# The response body that holds the request's span (trace::end_span_with_body).
+http-body = "1"
+metrics = "0.24"
 
 # Metrics (Prometheus exposition format → Alloy → Mimir)
 axum-prometheus = "0.10"
 # `signal`: SIGTERM starts the graceful shutdown (src/main.rs).
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
-# CancellationToken: tells the long-lived streams to close on shutdown.
-tokio-util = "0.7"
+# CancellationToken: tells the long-lived streams to close on shutdown; `rt`: TaskTracker (the
+# tasks a shutdown waits for, src/trace.rs).
+tokio-util = { version = "0.7", features = ["rt"] }
 # Same fred the session store re-exports; `subscriber-client` adds the
 # auto-resubscribing client used for live arcane rolls (src/rolls.rs); `i-scripts`
-# the compare-and-delete of the schema lock (src/dataset.rs).
-fred = { version = "10.1", default-features = false, features = ["subscriber-client", "i-scripts"] }
+# the compare-and-delete of the schema lock (src/dataset.rs); `partial-tracing` a `fred.command`
+# span per command, on the clients src/trace.rs builds with tracing on.
+fred = { version = "10.1", default-features = false, features = ["subscriber-client", "i-scripts", "partial-tracing"] }
 # fred's socket2, with `all` for `TcpKeepalive::with_retries` (src/main.rs). tonic 0.12 (OTel
 # 0.27) used to turn it on for us.
 socket2 = { version = "0.5", features = ["all"] }
@@ -55,13 +71,14 @@ tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 [dev-dependencies]
+# Stand-in servers in the trace tests (src/trace.rs).
+tokio = { version = "1", features = ["net", "io-util"] }
 # InMemoryLogExporter for the log bridge test, the in-memory span exporter for the trace tests
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # A real Redis for the roll hub's trace tests (needs Docker).
 testcontainers-modules = { version = "0.15", features = ["redis"] }
 # `oneshot`: requests to the API router in its contract tests (src/json_api/tests.rs).
 tower = { version = "0.5", features = ["util"] }
-# Reads tracing/leaf_spans.toml (src/pages/tests.rs).
+# Reads tracing/leaf_spans.toml (src/pages/tests.rs) and allowed_raw_io.toml
+# (tests/allowed_raw_io.rs).
 toml = "0.8"
-# A session store that can't be read (src/pages/tests.rs): SessionStore is an #[async_trait] trait.
-async-trait = "0.1.89"

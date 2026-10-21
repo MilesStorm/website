@@ -144,38 +144,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "api"
-version = "0.2.1"
-dependencies = [
- "api-types",
- "async-trait",
- "axum",
- "axum-tracing-opentelemetry",
- "fred",
- "futures-util",
- "http",
- "http-body",
- "jsonwebtoken",
- "metrics",
- "opentelemetry",
- "opentelemetry_sdk",
- "reqwest 0.13.3",
- "reqwest-middleware",
- "reqwest-tracing",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tokio-util",
- "toml",
- "tower-sessions",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "ulid",
-]
-
-[[package]]
 name = "api-types"
 version = "0.1.0"
 dependencies = [
@@ -466,6 +434,51 @@ dependencies = [
  "getrandom 0.3.4",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "bff"
+version = "0.3.0"
+dependencies = [
+ "aide",
+ "anyhow",
+ "api-types",
+ "async-trait",
+ "axum",
+ "axum-prometheus",
+ "axum-tracing-opentelemetry",
+ "base64 0.22.1",
+ "dotenvy",
+ "fred",
+ "futures-util",
+ "http",
+ "http-body",
+ "image",
+ "metrics",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "reqwest 0.13.3",
+ "reqwest-middleware",
+ "reqwest-tracing",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "socket2 0.5.10",
+ "surrealkit",
+ "testcontainers-modules",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+ "toml",
+ "tower",
+ "tower-http",
+ "tower-sessions",
+ "tower-sessions-redis-store",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -6521,47 +6534,6 @@ dependencies = [
  "parking_lot",
  "pin-utils",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "web"
-version = "0.2.2"
-dependencies = [
- "aide",
- "anyhow",
- "api",
- "api-types",
- "async-trait",
- "axum",
- "axum-prometheus",
- "axum-tracing-opentelemetry",
- "base64 0.22.1",
- "dotenvy",
- "fred",
- "futures-util",
- "image",
- "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "reqwest 0.13.3",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "socket2 0.5.10",
- "surrealkit",
- "testcontainers-modules",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "tokio-util",
- "toml",
- "tower",
- "tower-http",
- "tower-sessions",
- "tower-sessions-redis-store",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -231,7 +231,7 @@ async fn not_found(built: Arc<Built>, req: Request) -> Response {
     // tracing-opentelemetry takes an `otel.name` recorded only before the span has started; by
     // now it has, so the started span is renamed itself.
     tracing::Span::current().context().span().update_name(format!("{} NotFound", req.method()));
-    let request = req.extensions().get::<api::trace::RequestTraceContext>().cloned();
+    let request = req.extensions().get::<crate::trace::RequestTraceContext>().cloned();
     let (mut parts, _) = req.into_parts();
     let bootstrap = match json_api::Viewer::from_request_parts(&mut parts, &()).await {
         Ok(viewer) => json_api::bootstrap(viewer.0).await,
@@ -269,7 +269,7 @@ enum Verdict {
 /// `viewer` is `None` when the session can't be read. Fails closed: whatever isn't known to be
 /// allowed is no page.
 fn verdict(access: Access, viewer: Option<&json_api::Viewer>) -> Verdict {
-    let logged_in = |v: &json_api::Viewer| !matches!(v.0, api::Viewer::Anonymous);
+    let logged_in = |v: &json_api::Viewer| !matches!(v.0, crate::auth::Viewer::Anonymous);
     match (access, viewer) {
         (Access::Public, _) => Verdict::Serve,
         // Unknown counts as logged out: the page shows the logged-out navbar too.
@@ -299,7 +299,7 @@ async fn guard(State((built, page)): State<(Arc<Built>, Page)>, req: Request, ne
             // The page shows what was decided here: a session that can't be read is logged out
             // (a guest-only page), not read a second time.
             if viewer.is_none() {
-                parts.extensions.insert(api::Viewer::Anonymous);
+                parts.extensions.insert(crate::auth::Viewer::Anonymous);
             }
             return next.run(Request::from_parts(parts, body)).await;
         }
@@ -313,7 +313,7 @@ async fn guard(State((built, page)): State<(Arc<Built>, Page)>, req: Request, ne
         Some(viewer) => json_api::bootstrap(viewer.0).await,
         None => Bootstrap { viewer: None },
     };
-    let request = parts.extensions.get::<api::trace::RequestTraceContext>();
+    let request = parts.extensions.get::<crate::trace::RequestTraceContext>();
     let mut res = respond(&built, file, status, request, &bootstrap);
     if status == StatusCode::SERVICE_UNAVAILABLE {
         // Auth is usually back within moments.
@@ -348,7 +348,7 @@ async fn immutable(mut res: Response) -> Response {
 /// A page, with this request's data spliced in.
 async fn serve(
     State((built, file)): State<(Arc<Built>, &'static str)>,
-    request: Option<axum::Extension<api::trace::RequestTraceContext>>,
+    request: Option<axum::Extension<crate::trace::RequestTraceContext>>,
     viewer: Result<json_api::Viewer, json_api::ApiError>,
 ) -> Response {
     let bootstrap = match viewer {
@@ -364,11 +364,11 @@ fn respond(
     built: &Built,
     file: &str,
     status: StatusCode,
-    request: Option<&api::trace::RequestTraceContext>,
+    request: Option<&crate::trace::RequestTraceContext>,
     bootstrap: &Bootstrap,
 ) -> Response {
-    let traceparent = request.and_then(api::trace::page_traceparent);
-    let version = api::trace::service_version();
+    let traceparent = request.and_then(crate::trace::page_traceparent);
+    let version = crate::trace::service_version();
     let html = built.page(file).render(&Injected {
         traceparent: traceparent.as_deref(),
         version: version.as_deref(),
