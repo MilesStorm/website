@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import { ChevronLeft, ChevronRight, CircleCheck, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CircleCheck, Plus, X } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -14,13 +14,35 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { TabsContent } from '@/components/ui/tabs';
 import { FormAlert } from '@/components/FormAlert';
+import {
+  AdminTabs,
+  EmptyCard,
+  INVITES_HEAD,
+  INVITE_CELLS,
+  ListingFooter,
+  ListingSkeleton,
+  PlaceholderRows,
+  ROLES_HEAD,
+  ROLE_CELLS,
+  SearchField,
+  TableCard,
+  USERS_HEAD,
+  USER_CELLS,
+} from '@/islands/AdminSkeleton';
 import { client, type Schemas } from '@/api/client';
 import { readBootstrap } from '@/api/session';
 import {
@@ -54,29 +76,32 @@ export function AdminPanel() {
     void attempt(client.GET('/api/admin/permissions')).then(setPermissions);
   }, []);
 
-  if (!roles || !permissions) return <Skeleton className="h-96 w-full rounded-xl" role="status" aria-label="Loading" />;
-  const allRoles = roles.ok ? roles.data : [];
-  const allPermissions = permissions.ok ? permissions.data : [];
+  // Until both are in, each tab is its placeholder (islands/AdminSkeleton.tsx); the tabs work
+  // meanwhile.
+  const loading = !roles || !permissions;
+  const allRoles = roles?.ok ? roles.data : [];
+  const allPermissions = permissions?.ok ? permissions.data : [];
   return (
     <div className="flex flex-col gap-4">
-      {!roles.ok && <FormAlert message={`Roles: ${roles.message}`} />}
-      {!permissions.ok && <FormAlert message={`Permissions: ${permissions.message}`} />}
-      <Tabs defaultValue="users">
-        <TabsList>
-          <TabsTrigger value="users">Users</TabsTrigger>
-          <TabsTrigger value="roles">Roles</TabsTrigger>
-          <TabsTrigger value="invites">Invites</TabsTrigger>
-        </TabsList>
+      {roles && !roles.ok && <FormAlert message={`Roles: ${roles.message}`} />}
+      {permissions && !permissions.ok && <FormAlert message={`Permissions: ${permissions.message}`} />}
+      <AdminTabs defaultValue="users">
         <TabsContent value="users">
-          <UsersTab allRoles={allRoles} me={me} />
+          {loading ? <ListingSkeleton head={USERS_HEAD} cells={USER_CELLS} /> : <UsersTab allRoles={allRoles} me={me} />}
         </TabsContent>
         <TabsContent value="roles">
-          <RolesTab allPermissions={allPermissions} />
+          {loading ? <ListingSkeleton head={ROLES_HEAD} cells={ROLE_CELLS} /> : <RolesTab allPermissions={allPermissions} />}
         </TabsContent>
         <TabsContent value="invites">
-          <InvitesTab allRoles={allRoles} />
+          {loading ? (
+            <TableCard head={INVITES_HEAD} actions>
+              <PlaceholderRows cells={INVITE_CELLS} rows={3} />
+            </TableCard>
+          ) : (
+            <InvitesTab allRoles={allRoles} />
+          )}
         </TabsContent>
-      </Tabs>
+      </AdminTabs>
     </div>
   );
 }
@@ -135,12 +160,13 @@ function UsersTab({ allRoles, me }: { allRoles: RoleRef[]; me: string | null }) 
       noun="user"
       list={list}
       error={error}
-      head={['Username', 'Email', 'Roles']}
+      head={USERS_HEAD}
+      cells={USER_CELLS}
       row={(user) => (
         <TableRow key={user.id}>
           <TableCell className="font-medium">{user.username}</TableCell>
           <TableCell className="text-muted-foreground">{user.email ?? '—'}</TableCell>
-          <TableCell>
+          <TableCell className="w-full min-w-56 whitespace-normal">
             <Assigned
               owner={user.username}
               kind="role"
@@ -179,11 +205,12 @@ function RolesTab({ allPermissions }: { allPermissions: Permission[] }) {
       noun="role"
       list={list}
       error={error}
-      head={['Role', 'Permissions']}
+      head={ROLES_HEAD}
+      cells={ROLE_CELLS}
       row={(role) => (
         <TableRow key={role.id}>
           <TableCell className="font-medium">{role.name}</TableCell>
-          <TableCell>
+          <TableCell className="w-full min-w-56 whitespace-normal">
             <Assigned
               owner={role.name}
               kind="permission"
@@ -212,7 +239,8 @@ function RolesTab({ allPermissions }: { allPermissions: Permission[] }) {
   );
 }
 
-/** A search box, the count, the table and the pager of a listing. */
+/** A search box, the table, the count and the pager of a listing. `cells`: the shape of a row's
+ * cells while it loads (AdminSkeleton's PlaceholderRows). */
 function Listing<T>({
   label,
   placeholder,
@@ -220,6 +248,7 @@ function Listing<T>({
   list,
   error,
   head,
+  cells,
   row,
 }: {
   label: string;
@@ -228,50 +257,37 @@ function Listing<T>({
   list: ReturnType<typeof useListing<T>>;
   error: string | null;
   head: string[];
+  cells: string[];
   row: (item: T) => React.ReactNode;
 }) {
   const id = useId();
   const result = list.result;
   const total = result?.ok ? result.data.total : 0;
   return (
-    <div className="flex flex-col gap-3 pt-2">
-      <div className="flex flex-wrap items-center gap-3">
-        <label htmlFor={id} className="sr-only">
-          {label}
-        </label>
-        <Input
-          id={id}
-          type="search"
-          className="max-w-sm"
-          placeholder={placeholder}
-          value={list.search}
-          onChange={(e) => list.setSearch(e.target.value)}
-        />
+    <div className="flex flex-col gap-4">
+      <label htmlFor={id} className="sr-only">
+        {label}
+      </label>
+      <SearchField id={id} placeholder={placeholder} value={list.search} onChange={(e) => list.setSearch(e.target.value)} />
+      <FormAlert message={error} />
+      {result !== null && !result.ok ? (
+        <FormAlert message={result.message} />
+      ) : result?.data.items.length === 0 ? (
+        <EmptyCard>No {noun}s found.</EmptyCard>
+      ) : (
+        <TableCard head={head}>
+          {result === null ? <PlaceholderRows cells={cells} rows={PAGE_SIZE} fill /> : result.data.items.map(row)}
+        </TableCard>
+      )}
+      <ListingFooter>
         {result?.ok && (
-          <span className="shrink-0 text-sm text-muted-foreground" aria-live="polite">
+          <p className="text-sm text-muted-foreground" aria-live="polite">
             {total} {noun}
             {total === 1 ? '' : 's'}
-          </span>
+          </p>
         )}
-      </div>
-      <FormAlert message={error} />
-      {result === null ? (
-        <Skeleton className="h-48 w-full" role="status" aria-label="Loading" />
-      ) : !result.ok ? (
-        <FormAlert message={result.message} />
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {head.map((h) => (
-                <TableHead key={h}>{h}</TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>{result.data.items.map(row)}</TableBody>
-        </Table>
-      )}
-      <Pager page={list.page} total={total} onPage={list.setPage} />
+        <Pager page={list.page} total={total} onPage={list.setPage} />
+      </ListingFooter>
     </div>
   );
 }
@@ -283,9 +299,9 @@ export const OWN_ROLE =
 export const MANAGE_PERMISSIONS =
   "manage_permissions is what lets anyone use this page. If your account has admin rights only through this role, you'll lose access to it and can't give it back yourself.";
 
-/** What a user or role has (each removable), and a picker to add one more. A permission auth
+/** What a user or role has (each removable), and a menu to add one more. A permission auth
  * has and this site doesn't know is marked, since nothing here checks it. A removal `warn` has
- * a reason for asks first. */
+ * a reason for asks first. At least the add button's height, so a row without it is the same. */
 function Assigned({
   owner,
   kind,
@@ -304,11 +320,9 @@ function Assigned({
   remove: (id: number) => void;
 }) {
   const missing = all.filter((a) => !have.some((h) => h.id === a.id));
-  const [chosen, setChosen] = useState<number | null>(null);
-  const pick = chosen !== null && missing.some((m) => m.id === chosen) ? chosen : (missing[0]?.id ?? null);
   const unknown = (name: string) => kind === 'permission' && !isKnownPermission(name);
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="flex min-h-6 flex-wrap items-center gap-1.5">
       {have.map((h) => (
         <Badge
           key={h.id}
@@ -325,25 +339,24 @@ function Assigned({
           />
         </Badge>
       ))}
-      {missing.length > 0 && pick !== null && (
-        <span className="flex items-center gap-1">
-          <NativeSelect
-            size="sm"
-            aria-label={`${kind === 'role' ? 'Role' : 'Permission'} to add to ${owner}`}
-            value={pick}
-            onChange={(e) => setChosen(Number(e.target.value))}
-          >
+      {missing.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="xs" variant="outline" className="border-dashed" aria-label={`Add ${kind} to ${owner}`}>
+              <Plus data-icon="inline-start" aria-hidden="true" />
+              Add
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-auto">
+            <DropdownMenuLabel>{kind === 'role' ? 'Give a role' : 'Grant a permission'}</DropdownMenuLabel>
             {missing.map((m) => (
-              <NativeSelectOption key={m.id} value={m.id}>
+              <DropdownMenuItem key={m.id} onSelect={() => add(m.id)}>
                 {m.name}
-                {unknown(m.name) ? ' (unused)' : ''}
-              </NativeSelectOption>
+                {unknown(m.name) && <span className="text-muted-foreground">(unused)</span>}
+              </DropdownMenuItem>
             ))}
-          </NativeSelect>
-          <Button size="sm" variant="outline" aria-label={`Add ${kind} to ${owner}`} onClick={() => add(pick)}>
-            Add
-          </Button>
-        </span>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
     </div>
   );
@@ -352,8 +365,13 @@ function Assigned({
 /** A badge's remove button; with a `warning`, it asks first and says why. */
 function RemoveButton({ label, title, warning, remove }: { label: string; title: string; warning: string | null; remove: () => void }) {
   const button = (
-    <button type="button" className="-mr-1 rounded-sm p-0.5 hover:bg-muted" aria-label={label} onClick={warning ? undefined : remove}>
-      <X aria-hidden="true" />
+    <button
+      type="button"
+      className="-mr-1 rounded-full p-0.5 text-muted-foreground outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      aria-label={label}
+      onClick={warning ? undefined : remove}
+    >
+      <X aria-hidden="true" className="size-3" />
     </button>
   );
   if (!warning) return button;
@@ -410,6 +428,14 @@ function Pager({ page, total, onPage }: { page: number; total: number; onPage: (
   );
 }
 
+/** How each invite status shows: a live link stands out, a turned-off one is in the warning colour. */
+const STATUS_BADGE = {
+  Active: 'default',
+  'Turned off': 'destructive',
+  'Used up': 'secondary',
+  Expired: 'outline',
+} as const;
+
 function InvitesTab({ allRoles }: { allRoles: RoleRef[] }) {
   const [invites, setInvites] = useState<Outcome<Schemas['AdminInvite'][]> | null>(null);
   const [round, setRound] = useState(0);
@@ -419,34 +445,20 @@ function InvitesTab({ allRoles }: { allRoles: RoleRef[] }) {
   const reload = () => setRound((n) => n + 1);
 
   return (
-    <div className="flex flex-col gap-6 pt-2">
+    <div className="flex flex-col gap-6">
       <NewInviteForm allRoles={allRoles} made={reload} />
-      {invites === null ? (
-        <Skeleton className="h-48 w-full" role="status" aria-label="Loading" />
-      ) : !invites.ok ? (
+      {invites !== null && !invites.ok ? (
         <FormAlert message={invites.message} />
-      ) : invites.data.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No invite links yet.</p>
+      ) : invites?.data.length === 0 ? (
+        <EmptyCard>No invite links yet.</EmptyCard>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Note</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Used</TableHead>
-              <TableHead>Until (UTC)</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>
-                <span className="sr-only">Actions</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {invites.data.map((invite) => (
-              <InviteRow key={invite.id} invite={invite} changed={reload} />
-            ))}
-          </TableBody>
-        </Table>
+        <TableCard head={INVITES_HEAD} actions>
+          {invites === null ? (
+            <PlaceholderRows cells={INVITE_CELLS} rows={3} />
+          ) : (
+            invites.data.map((invite) => <InviteRow key={invite.id} invite={invite} changed={reload} />)
+          )}
+        </TableCard>
       )}
     </div>
   );
@@ -491,73 +503,82 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
   };
 
   return (
-    <form
-      className="flex flex-col gap-4 rounded-xl border p-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void create();
-      }}
-    >
-      <h2 className="font-semibold">New invite link</h2>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field>
-          <FieldLabel htmlFor={ids.role}>Gives the role</FieldLabel>
-          <NativeSelect id={ids.role} className="w-full" value={roleId} onChange={(e) => setRoleId(Number(e.target.value))}>
-            {roleId === 0 && (
-              <NativeSelectOption value={0} disabled>
-                Choose a role…
-              </NativeSelectOption>
-            )}
-            {allRoles.map((r) => (
-              <NativeSelectOption key={r.id} value={r.id}>
-                {r.name}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor={ids.note}>Note (who it's for)</FieldLabel>
-          <Input
-            id={ids.note}
-            maxLength={100}
-            placeholder="e.g. Sam, or the Discord group"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor={ids.days}>Works for (days)</FieldLabel>
-          <Input id={ids.days} type="number" min={1} max={365} required value={days} onChange={(e) => setDays(e.target.value)} />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor={ids.uses}>How many people can use it (empty = no limit)</FieldLabel>
-          <Input id={ids.uses} type="number" min={1} max={1000} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} />
-        </Field>
-      </div>
-      <Button type="submit" className="self-start" disabled={busy}>
-        Make link
-      </Button>
-      <FormAlert message={error} />
-      {link && (
-        <Alert>
-          <CircleCheck aria-hidden="true" />
-          <AlertDescription className="flex flex-col gap-2">
-            <p>
-              Copy it now: it won't be shown again. Send it to the people you're inviting. Don't open it yourself while
-              logged in: that would use it.
-            </p>
-            {/* In the text colour: maia's input and outline button take the muted one around them. */}
-            <div className="flex gap-2 text-foreground">
-              <Input readOnly aria-label="New invite link" className="font-mono" value={link} />
-              <Button type="button" variant="outline" onClick={() => void copy()}>
-                {copied ? 'Copied' : 'Copy'}
-              </Button>
-            </div>
-            {copied === false && <p>Couldn't copy it: select the link and copy it yourself.</p>}
-          </AlertDescription>
-        </Alert>
-      )}
-    </form>
+    <Card>
+      <form
+        className="flex flex-col gap-(--card-spacing)"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void create();
+        }}
+      >
+        <CardHeader>
+          <CardTitle>
+            <h2>New invite link</h2>
+          </CardTitle>
+          <CardDescription>Whoever opens it gets the role: logged out, they log in or sign up first.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor={ids.role}>Gives the role</FieldLabel>
+            <NativeSelect id={ids.role} className="w-full" value={roleId} onChange={(e) => setRoleId(Number(e.target.value))}>
+              {roleId === 0 && (
+                <NativeSelectOption value={0} disabled>
+                  Choose a role…
+                </NativeSelectOption>
+              )}
+              {allRoles.map((r) => (
+                <NativeSelectOption key={r.id} value={r.id}>
+                  {r.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={ids.note}>Note (who it's for)</FieldLabel>
+            <Input
+              id={ids.note}
+              maxLength={100}
+              placeholder="e.g. Sam, or the Discord group"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={ids.days}>Works for (days)</FieldLabel>
+            <Input id={ids.days} type="number" min={1} max={365} required value={days} onChange={(e) => setDays(e.target.value)} />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={ids.uses}>How many people can use it (empty = no limit)</FieldLabel>
+            <Input id={ids.uses} type="number" min={1} max={1000} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} />
+          </Field>
+        </CardContent>
+        <CardFooter className="flex-col items-stretch gap-4">
+          <Button type="submit" className="self-start" disabled={busy}>
+            Make link
+          </Button>
+          <FormAlert message={error} />
+          {link && (
+            <Alert>
+              <CircleCheck aria-hidden="true" />
+              <AlertDescription className="flex flex-col gap-2">
+                <p>
+                  Copy it now: it won't be shown again. Send it to the people you're inviting. Don't open it yourself while
+                  logged in: that would use it.
+                </p>
+                {/* In the text colour: maia's input and outline button take the muted one around them. */}
+                <div className="flex gap-2 text-foreground">
+                  <Input readOnly aria-label="New invite link" className="font-mono" value={link} />
+                  <Button type="button" variant="outline" onClick={() => void copy()}>
+                    {copied ? 'Copied' : 'Copy'}
+                  </Button>
+                </div>
+                {copied === false && <p>Couldn't copy it: select the link and copy it yourself.</p>}
+              </AlertDescription>
+            </Alert>
+          )}
+        </CardFooter>
+      </form>
+    </Card>
   );
 }
 
@@ -580,12 +601,12 @@ function InviteRow({ invite, changed }: { invite: Schemas['AdminInvite']; change
       <TableCell>
         <Badge variant="secondary">{invite.role}</Badge>
       </TableCell>
-      <TableCell>{inviteUses(invite)}</TableCell>
-      <TableCell>{utcDate(invite.expires_at)}</TableCell>
+      <TableCell className="tabular-nums">{inviteUses(invite)}</TableCell>
+      <TableCell className="tabular-nums">{utcDate(invite.expires_at)}</TableCell>
       <TableCell>
-        <Badge variant={status === 'Active' ? 'default' : 'outline'}>{status}</Badge>
+        <Badge variant={STATUS_BADGE[status]}>{status}</Badge>
       </TableCell>
-      <TableCell>
+      <TableCell className="text-right">
         {invite.live && (
           // Turning a link off can't be undone: it asks first.
           <AlertDialog>

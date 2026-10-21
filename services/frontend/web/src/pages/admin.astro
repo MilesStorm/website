@@ -1,14 +1,14 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 import Page from '@/components/Page.astro';
-import { Skeleton } from '@/components/ui/skeleton';
 import { AdminPanel } from '@/islands/AdminPanel';
+import { AdminSkeleton } from '@/islands/AdminSkeleton';
 ---
 
 <Layout title="Admin">
-  <Page title="Admin" width="wide">
+  <Page title="Admin" description="Who has an account, what each role may do, and invite links." width="wide">
     <AdminPanel client:only="react">
-      <Skeleton slot="fallback" className="h-96 w-full rounded-xl" />
+      <AdminSkeleton slot="fallback" />
     </AdminPanel>
   </Page>
 </Layout>
