@@ -175,6 +175,6 @@ GitHub Actions builds the frontend, auth, and AI service images into GHCR when t
 | [crds/](crds/) | Kubernetes deployments, services, and routing for the application |
 | [.github/workflows/](.github/workflows/) | Container builds and extension release automation |
 
-Astro's files under `/_astro/` are named by a hash of their content, and the frontend sends them `public, max-age=31536000, immutable`. Cloudflare caches them through a cache rule made by hand in its dashboard (there is no Cloudflare configuration in code): URI path starts with `/_astro/`, eligible for cache, edge TTL from the origin's header. Pages are per request (`private, no-cache`) and never cached at the edge.
+Astro's files under `/_astro/` are named by a hash of their content, and the frontend sends them `public, max-age=31536000, immutable`. Cloudflare caches them through a cache rule made by hand in its dashboard (there is no Cloudflare configuration in code): URI path starts with `/_astro/`, eligible for cache, edge TTL from the origin's header. Pages are per request (`private, no-cache`) and never cached at the edge. So a deploy purges nothing: the pages aren't in Cloudflare's cache, and a changed asset has a new name.
 
 For a change, start in the relevant component, run its checks, and open a pull request. Include what changed, how it was verified, and any environment or migration requirements.

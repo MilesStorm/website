@@ -197,7 +197,8 @@ fn html_files(root: &Path, dir: &Path, found: &mut BTreeSet<String>) -> std::io:
     Ok(())
 }
 
-/// Adds the pages and `/_astro/*` to `router` when there is a build.
+/// Adds the pages and `/_astro/*` to `router` when there is a build, and the 404 page as its
+/// fallback (in place of Dioxus's page renderer): every page has its own route now.
 pub fn mount<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Option<Arc<Built>>) -> Router<S> {
     match built {
         Some(built) => mount_rows(router, built, PAGES),
@@ -225,7 +226,20 @@ fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Bu
     let assets = Router::new()
         .route_service("/_astro/{*path}", files)
         .layer(axum::middleware::map_response(immutable));
-    router.merge(assets)
+    router.merge(assets).fallback(move |request, viewer| not_found(built.clone(), request, viewer))
+}
+
+/// Any other path: the 404 page, spliced like every page, with status 404.
+async fn not_found(
+    built: Arc<Built>,
+    request: Option<axum::Extension<api::trace::RequestTraceContext>>,
+    viewer: Result<json_api::Viewer, json_api::ApiError>,
+) -> Response {
+    let bootstrap = match viewer {
+        Ok(viewer) => json_api::bootstrap(viewer.0).await,
+        Err(_) => Bootstrap { viewer: None },
+    };
+    respond(&built, "404.html", StatusCode::NOT_FOUND, request.as_ref().map(|r| &r.0), &bootstrap)
 }
 
 /// What a page that isn't public answers a viewer.

@@ -1,49 +1,3 @@
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: frontend-cloudflare-cache
-  namespace: frontend
-  annotations:
-    argocd.argoproj.io/hook: PostSync
-    argocd.argoproj.io/hook-delete-policy: HookSucceeded
-spec:
-  template:
-    metadata:
-      annotations:
-        sidecar.istio.io/inject: "false"
-    spec:
-      containers:
-        - name: cloudflare-cache-hook
-          image: curlimages/curl
-          command:
-              - "sh"
-              - "-c"
-              - |
-               curl -v --request POST \
-                   --url "$CLOUDFLARE_URL" \
-                   --header "Content-Type: application/json" \
-                   --header "X-Auth-Email: $CLOUDFLARE_EMAIL" \
-                   --header "X-Auth-Key: $CLOUDFLARE_TOKEN" \
-                   --data '{"purge_everything":true}'
-          env:
-            - name: CLOUDFLARE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: cloudflare-secrets
-                  key: url
-            - name: CLOUDFLARE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: cloudflare-secrets
-                  key: token
-            - name: CLOUDFLARE_EMAIL
-              valueFrom:
-                secretKeyRef:
-                  name: cloudflare-secrets
-                  key: email
-      restartPolicy: Never
-  backoffLimit: 2
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -114,6 +68,10 @@ spec:
                 name: website-secrets
                 key: SURREAL_PASS
                 optional: true
+          # The Astro pages (services/frontend/web), with Astro's 404 page for any other path.
+          # Rollback: remove this (or set "dioxus"); the same image serves the Dioxus pages.
+          - name: FRONTEND_UI
+            value: "astro"
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: "http://alloy.monitoring.svc.cluster.local:4317"
           # Read by the OTel SDK into every span's and log's resource; staging overrides it.

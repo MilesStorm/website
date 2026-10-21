@@ -358,8 +358,10 @@ async fn router(
         .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
-    // FRONTEND_UI=astro: Astro's pages instead of Dioxus's, where there is one.
+    // FRONTEND_UI=astro: Astro's pages instead of Dioxus's, and Astro's 404 page for any other
+    // path.
     let astro = pages::from_env()?;
+    let astro_on = astro.is_some();
 
     let routes = Router::new()
         .serve_dioxus_application(ServeConfig::default(), App)
@@ -372,12 +374,12 @@ async fn router(
             get(move || async move { metric_handle.render() }),
         );
     let router = pages::mount(routes, astro)
-        .layer(axum::middleware::from_fn(render_span))
+        .layer(axum::middleware::from_fn_with_state(astro_on, render_span))
         .layer(axum::Extension(roll_hub))
         .layer(axum::middleware::from_fn(no_store))
         .layer(layer)
         .layer(axum::middleware::from_fn(api::trace::capture_request_context))
-        .layer(axum::middleware::from_fn(name_page_span))
+        .layer(axum::middleware::from_fn_with_state(astro_on, name_page_span))
         .layer(axum::middleware::from_fn(api::trace::end_span_with_body))
         .layer(OtelInResponseLayer)
         // Prometheus scrapes every 15s; a trace each would bury the real ones.
@@ -417,18 +419,28 @@ where
 /// bounded set, unlike raw paths (span names become Tempo span-metrics labels).
 /// Server functions are named by their path without Dioxus's hash ([`server_fn_route`]).
 #[cfg(not(target_arch = "wasm32"))]
-async fn name_page_span(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+async fn name_page_span(
+    axum::extract::State(astro): axum::extract::State<bool>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use opentelemetry::trace::TraceContextExt as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
     let method = req.method();
     let span = tracing::Span::current();
+    // tracing-opentelemetry takes an `otel.name` recorded only before the span has started; by
+    // now it has (the layer above entered it), so the started span is renamed itself.
+    let rename = |name: String| span.context().span().update_name(name);
     let matched = req.extensions().get::<axum::extract::MatchedPath>();
     // Only a path that reached a server function: any other is the client's own string,
     // and span names become span-metrics labels.
     if let Some(route) = matched.and_then(|m| server_fn_route(m.as_str())) {
-        span.record("otel.name", format!("{method} {route}"));
+        rename(format!("{method} {route}"));
         span.record("http.route", route);
     } else if is_page(&req) {
-        let page = page_name(req.uri().path());
-        span.record("otel.name", format!("{method} {page}"));
+        // With Astro's pages every page has a route: the fallback is the 404 page.
+        let page = if astro { "NotFound".to_string() } else { page_name(req.uri().path()) };
+        rename(format!("{method} {page}"));
     }
     next.run(req).await
 }
@@ -442,10 +454,15 @@ fn is_page(req: &axum::extract::Request) -> bool {
         && req.extensions().get::<axum::extract::MatchedPath>().is_none()
 }
 
-/// The innermost layer: a page render gets its `ssr.render` span (`api::trace::ssr_render`).
+/// The innermost layer: a Dioxus page render gets its `ssr.render` span
+/// (`api::trace::ssr_render`). With Astro's pages there is none: the fallback is the 404 page.
 #[cfg(not(target_arch = "wasm32"))]
-async fn render_span(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
-    if is_page(&req) {
+async fn render_span(
+    axum::extract::State(astro): axum::extract::State<bool>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if !astro && is_page(&req) {
         api::trace::ssr_render(req, next).await
     } else {
         next.run(req).await

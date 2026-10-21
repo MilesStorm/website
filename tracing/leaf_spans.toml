@@ -156,6 +156,11 @@ reason = "a static file sent from disk: the span is the read and the send, with 
 
 [[leaf]]
 service = "frontend"
+name = "GET NotFound"
+reason = "Astro's 404 page for an unknown path (FRONTEND_UI=astro): childless for a request without a session"
+
+[[leaf]]
+service = "frontend"
 name = "GET /_astro/*"
 reason = "an Astro file (hashed) sent from disk: the read and the send, with nothing of ours inside"
 

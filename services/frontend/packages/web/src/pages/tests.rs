@@ -168,14 +168,20 @@ async fn the_pages_mount_beside_the_dioxus_app_and_the_api() {
             let res = app.clone().oneshot(Request::get("/asshole/?a=1").body(Body::empty()).unwrap()).await.unwrap();
             assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
             assert_eq!(res.headers()[header::LOCATION], "/asshole?a=1");
-            // Routes match the path as sent: an encoded or upper-case spelling of a page is no
-            // page, so until cutover it is Dioxus's (as every unknown path is), never Astro's.
-            for path in ["/%61sshole", "/ASSHOLE"] {
+            // Any other path is Astro's 404 page, never Dioxus's renderer: an unknown path, and
+            // an encoded or upper-case spelling of a page (routes match the path as sent).
+            for path in ["/nope", "/%61sshole", "/ASSHOLE", "/index.html"] {
                 let res = app.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+                assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
                 let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
                 let html = String::from_utf8_lossy(&body);
-                assert!(!html.contains(r#"id="bootstrap""#) && !html.contains("asshole.html"), "{path}: {html}");
+                assert!(html.contains("<body>404.html</body>") && html.contains(r#"id="bootstrap""#), "{path}: {html}");
             }
+        } else {
+            // Without the flag, Dioxus renders it (a 200 with its own page).
+            let res = app.clone().oneshot(Request::get("/nope").body(Body::empty()).unwrap()).await.unwrap();
+            let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains("404.html"));
         }
     }
 }
@@ -288,6 +294,7 @@ fn every_page_is_a_leaf_span() {
         }
     }
     assert!(leaf("GET /_astro/*"), "no [[leaf]] for Astro's files");
+    assert!(leaf("GET NotFound"), "no [[leaf]] for the 404 page");
 }
 
 /// The browser continues the page request's own SERVER span (TRACING.md, "Browser").
@@ -478,4 +485,37 @@ async fn an_unreadable_session_is_read_once() {
         assert!(html.contains(&format!("<body>{file}</body>")) && html.contains(r#"data-session="out""#), "{access:?}: {html}");
         assert_eq!(store.0.load(std::sync::atomic::Ordering::SeqCst), 1, "{access:?}");
     }
+}
+
+/// An unknown path: the 404 page with the viewer, private, as a 404; its span is `GET NotFound`
+/// (a bounded name, never the path), and it has no `ssr.render` child.
+#[tokio::test]
+async fn an_unknown_path_is_the_404_page_and_its_span_is_named_for_it() {
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let dist = Dist::new("notfound");
+    let app = super::mount(axum::Router::new(), Some(dist.built()))
+        .layer(axum::middleware::from_fn_with_state(true, crate::render_span))
+        .layer(axum::middleware::from_fn_with_state(true, crate::name_page_span))
+        .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
+    let mut site = Site::serving(app).await.log_in("all").await;
+    let reply = site.get("/no/such/page?x=1").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(reply.headers[header::CACHE_CONTROL], "private, no-cache");
+    let html = String::from_utf8(reply.bytes).unwrap();
+    assert!(html.contains("<body>404.html</body>") && html.contains(r#"<html data-session="in""#), "{html}");
+    crate::trace_tests::span(&exporter, "GET NotFound").await;
+    assert!(crate::trace_tests::spans(&exporter, "ssr.render").is_empty());
+}
+
+/// Without the flag a page request's span is named after its Dioxus route (the started span is
+/// renamed: tracing-opentelemetry takes no `otel.name` once a span has started).
+#[tokio::test]
+async fn without_the_flag_a_page_span_is_named_after_its_dioxus_route() {
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let app = axum::Router::new()
+        .fallback(|| async { "a Dioxus page" })
+        .layer(axum::middleware::from_fn_with_state(false, crate::name_page_span))
+        .layer(axum_tracing_opentelemetry::middleware::OtelAxumLayer::default());
+    app.oneshot(Request::get("/enshrouded").body(Body::empty()).unwrap()).await.unwrap();
+    crate::trace_tests::span(&exporter, &format!("GET {}", crate::page_name("/enshrouded"))).await;
 }

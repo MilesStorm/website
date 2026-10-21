@@ -70,11 +70,25 @@ test('Astro files are cached for good, and only they are served from the build',
   const asset = await request.get(css!);
   expect(asset.status()).toBe(200);
   expect(asset.headers()['cache-control']).toBe('public, max-age=31536000, immutable');
-  // These go to the Dioxus app (its "not found" page), never to a file of the Astro build. (A
-  // path through `/_astro/..` is the server's own test: the browser would tidy it away.)
+  // These are the 404 page, never a file of the Astro build. (A path through `/_astro/..` is the
+  // server's own test: the browser would tidy it away.)
   for (const path of ['/index.html', '/asshole.html', '/404.html', '/403.html', '/503.html']) {
-    const body = await (await request.get(path)).text();
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(404);
+    const body = await res.text();
     expect(body).not.toContain('bff-inject');
-    expect(body).not.toContain('id="bootstrap"');
+    expect(body).toContain('404: not found');
+  }
+});
+
+test('any other path is the 404 page, for every kind of viewer', async ({ context, page }) => {
+  for (const who of ['anonymous', 'plain'] as const) {
+    await logIn(context, who);
+    const res = await page.goto('/no/such/page');
+    expect(res?.status()).toBe(404);
+    expect(res?.headers()['cache-control']).toBe('private, no-cache');
+    await expect(page.getByRole('heading', { name: '404: not found' })).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('data-session', who === 'anonymous' ? 'out' : 'in');
+    await expectAccessible(page);
   }
 });

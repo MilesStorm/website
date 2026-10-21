@@ -6,7 +6,7 @@
 #   website-staging/manifests)
 # - the newest sha-* build of each image; production only runs builds promoted to prod-sha-*
 #   (approval on the build workflow)
-# - no Cloudflare cache purge, no email (no RESEND_API_KEY), one replica each
+# - no email (no RESEND_API_KEY), one replica each
 # - lowest priority: production pods may evict staging pods (e.g. for the GPU during a rollout)
 # The Argo project website-staging only lets this deploy Deployments, Services and ConfigMaps
 # into website-staging.
@@ -24,14 +24,6 @@ images:
   - {name: ghcr.io/milesstorm/auth, newTag: latest}
   - {name: ghcr.io/milesstorm/ai-pipeline, newTag: latest}
 patches:
-  # The PostSync hook purges the production Cloudflare zone.
-  - target: {kind: Job, name: frontend-cloudflare-cache}
-    patch: |
-      $patch: delete
-      apiVersion: batch/v1
-      kind: Job
-      metadata:
-        name: frontend-cloudflare-cache
   # The public route lives in the homelab repo (website-staging/manifests/route.yaml): the
   # website-staging Argo project may not create routes, so this overlay can't claim production hosts.
   - target: {kind: HTTPRoute, name: frontend}
