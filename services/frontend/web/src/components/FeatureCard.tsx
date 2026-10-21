@@ -15,7 +15,7 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
   const open = state === 'open';
   // From the link, not useId: Astro renders each card on its own, so useId's would repeat. Only
   // open cards have it: the logged-out page's previews (hidden, but there) would repeat it too.
-  const id = open ? `feature${feature.to.replace('/', '-')}` : undefined;
+  const id = open ? `feature${feature.to.replaceAll('/', '-')}` : undefined;
   return (
     <Card
       className={cn(
