@@ -18,11 +18,6 @@ reason = "trace::connect_ws is the traced WebSocket connect"
 [[allow]]
 file = "crates/bff/src/trace.rs"
 lints = ["disallowed_methods"]
-reason = "trace::spawn is the chokepoint for units of background work"
-
-[[allow]]
-file = "crates/bff/src/trace.rs"
-lints = ["disallowed_methods"]
 reason = "trace::spawn_in_trace is the chokepoint for a request's detached work"
 
 [[allow]]

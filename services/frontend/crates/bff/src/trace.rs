@@ -39,7 +39,7 @@ macro_rules! detached_span {
 
 /// An INFO span that roots a trace of its own: one unit of work inside something
 /// long-lived (a roll in a camera session, one pass of a background loop). `link` names
-/// what it belongs to or was caused by ([`here`], a session's open span), since a unit has
+/// what it belongs to or was caused by (a session's open span), since a unit has
 /// no parent. Takes `info_span!` arguments after the link:
 /// `unit_span!(link, "name", field = value)`.
 #[macro_export]
@@ -347,13 +347,6 @@ mod server {
         span.set_status(Status::error(error_type));
     }
 
-    /// The current span's context, to link a unit of work ([`unit_span!`], [`spawn`]) to
-    /// what caused it. `None` outside a sampled span.
-    #[allow(dead_code, reason = "a chokepoint for new code (TRACING.md); nothing spawns a unit yet")]
-    pub fn here() -> Option<SpanContext> {
-        span_context(&tracing::Span::current())
-    }
-
     /// `span`'s OTel context, to link other spans to it. `None` without the OTel layer.
     pub fn span_context(span: &tracing::Span) -> Option<SpanContext> {
         let sc = span.context().span().span_context().clone();
@@ -406,21 +399,8 @@ mod server {
     /// The tasks a shutdown waits for ([`drain`]): everything spawned here except loops.
     static TASKS: LazyLock<TaskTracker> = LazyLock::new(TaskTracker::new);
 
-    /// Spawns one unit of background work as a trace of its own, named `name` and linked to
-    /// `link` (what caused it; [`here`]). Clippy bans `tokio::spawn`: a bare task has no
-    /// span, so its work is either invisible or scattered over one-span traces.
-    #[allow(clippy::disallowed_methods, reason = "trace::spawn is the chokepoint for units of background work")]
-    #[allow(dead_code, reason = "a chokepoint for new code (TRACING.md); nothing spawns a unit yet")]
-    pub fn spawn<F>(name: &'static str, link: Option<SpanContext>, fut: F) -> JoinHandle<F::Output>
-    where
-        F: Future + Send + 'static,
-        F::Output: Send + 'static,
-    {
-        TASKS.spawn(fut.instrument(crate::unit_span!(link, "task", otel.name = name)))
-    }
-
     /// Spawns work a request started but doesn't wait for, as a span named `name` in the
-    /// request's trace, so nothing leaves the click's trace view. It may outlive its parent
+    /// request's trace (clippy bans `tokio::spawn`: a bare task has no span), so nothing leaves the click's trace view. It may outlive its parent
     /// (TRACING.md: `trace.relation=follows`).
     #[allow(clippy::disallowed_methods, reason = "trace::spawn_in_trace is the chokepoint for a request's detached work")]
     pub fn spawn_in_trace<F>(name: &'static str, fut: F) -> JoinHandle<F::Output>
@@ -432,7 +412,7 @@ mod server {
     }
 
     /// Spawns a loop that runs for the life of the process, with no span of its own: each
-    /// pass that does I/O starts its own trace ([`unit_span!`], [`spawn`]) or stays on
+    /// pass that does I/O starts its own trace ([`unit_span!`]) or stays on
     /// untraced clients. `reason` says why it runs. Not waited for at shutdown.
     #[allow(clippy::disallowed_methods, reason = "trace::spawn_loop is the chokepoint for background loops")]
     pub fn spawn_loop<F>(reason: &'static str, fut: F) -> JoinHandle<F::Output>
@@ -1117,14 +1097,13 @@ mod server {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn spawned_units_are_linked_roots_and_request_work_stays_in_its_trace() {
+        async fn request_work_stays_in_its_trace_and_loops_have_no_span() {
             let (exporter, _guard) = exporting();
             let request = tracing::info_span!("request");
             let request_sc = request.context().span().span_context().clone();
 
-            let (unit, detached, looped) = request.in_scope(|| {
+            let (detached, looped) = request.in_scope(|| {
                 (
-                    super::spawn("unit", super::here(), async {}),
                     super::spawn_in_trace("detached", async {}),
                     super::spawn_loop("test", async { tracing::Span::current().is_none() }),
                 )
@@ -1132,16 +1111,8 @@ mod server {
             // Neither task holds the request's span open.
             drop(request);
             assert_eq!(span(&exporter, "request").span_context, request_sc);
-            unit.await.unwrap();
             detached.await.unwrap();
             assert!(looped.await.unwrap(), "a loop has no span of its own");
-
-            let unit = span(&exporter, "unit");
-            assert_eq!(unit.parent_span_id, SpanId::INVALID, "a trace of its own");
-            assert_ne!(unit.span_context.trace_id(), request_sc.trace_id());
-            let links: Vec<_> = unit.links.iter().map(|l| l.span_context.clone()).collect();
-            assert_eq!(links.as_slice(), std::slice::from_ref(&request_sc));
-            assert_eq!(attr(&unit, "trace_id"), Some(unit.span_context.trace_id().to_string()), "for log lines");
 
             let detached = span(&exporter, "detached");
             assert_eq!(detached.parent_span_id, request_sc.span_id());
@@ -1152,9 +1123,9 @@ mod server {
         #[tokio::test(flavor = "current_thread")]
         async fn drain_waits_for_spawned_work_but_not_for_loops() {
             let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-            let work = super::spawn("slow unit", None, async { rx.await.ok() });
+            let work = super::spawn_in_trace("slow work", async { rx.await.ok() });
             let _forever = super::spawn_loop("test", std::future::pending::<()>());
-            assert!(!super::drain(Duration::from_millis(50)).await, "the unit is still running");
+            assert!(!super::drain(Duration::from_millis(50)).await, "the work is still running");
             tx.send(()).unwrap();
             work.await.unwrap();
             // Other tests' tasks are in the same tracker: generous, but not forever.
