@@ -27,8 +27,11 @@ if (!STAGING) {
       for (const fresh of [false, 'nobuild']) {
         test(`the placeholder is the heading's, figures' and controls' size${fresh ? ', with the latest build unknown' : ''}`, async ({
           browser,
+          viewport,
         }) => {
-          const height = (ready: string | null) => shownHeight(browser, '/enshrouded', '[data-overview]', ready, 'all', fresh);
+          expect(viewport?.width).toBe(width);
+          const height = (ready: string | null) =>
+            shownHeight(browser, '/enshrouded', '[data-overview]', ready, 'all', fresh, viewport);
           expect(await height(null)).toBeCloseTo(await height('[data-slot="badge"]'), 0);
         });
       }

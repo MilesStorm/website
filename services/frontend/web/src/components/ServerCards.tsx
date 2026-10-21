@@ -34,7 +34,12 @@ export function StatCard({
     <Card className="@container/card">
       <CardHeader>
         <CardDescription>{heading ? <h2>{label}</h2> : label}</CardDescription>
-        <CardTitle className={`${FIGURE} truncate font-semibold tabular-nums`} aria-live={live ? 'polite' : undefined}>
+        <CardTitle
+          className={`${FIGURE} truncate font-semibold tabular-nums`}
+          aria-live={live ? 'polite' : undefined}
+          // Cut short in a narrow card: the whole figure on hover.
+          title={typeof value === 'string' ? value : undefined}
+        >
           {value}
         </CardTitle>
         {action && <CardAction>{action}</CardAction>}
@@ -44,9 +49,13 @@ export function StatCard({
   );
 }
 
-/** A muted line under a figure, kept to one line. */
-export function StatNote({ children }: { children: ReactNode }) {
-  return <p className="truncate text-muted-foreground">{children}</p>;
+/** A muted line under a figure, kept to one line (the whole line on hover). */
+export function StatNote({ children }: { children: string }) {
+  return (
+    <p className="truncate text-muted-foreground" title={children}>
+      {children}
+    </p>
+  );
 }
 
 /** A pulse for a figure's muted line. */
