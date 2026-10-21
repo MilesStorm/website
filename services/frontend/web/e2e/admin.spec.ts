@@ -153,8 +153,14 @@ if (!STAGING) {
     await page.goto('/admin');
     const pages = page.getByRole('navigation', { name: 'Pages' });
     await expect(pages.getByRole('button', { name: 'Page 1' })).toHaveAttribute('aria-current', 'page');
+    // Page 2 holds other users. Which ones depends on how many accounts the stand-in has seen log
+    // in by now (it lists every one), so only the change is checked.
+    const firstUser = page.getByRole('row').nth(1).getByRole('cell').first();
+    await expect(firstUser).not.toBeEmpty();
+    const onPageOne = await firstUser.innerText();
     await pages.getByRole('button', { name: 'Next page' }).click();
     await expect(pages.getByRole('button', { name: 'Page 2' })).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('cell', { name: /^player-/ }).first()).toBeVisible();
+    await expect(firstUser).not.toHaveText(onPageOne);
+    await expect(firstUser).not.toBeEmpty();
   });
 }
