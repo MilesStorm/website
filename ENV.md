@@ -39,20 +39,19 @@
 |---|---|---|
 | `AUTH_SERVICE_URL` | `http://localhost:7070` | Internal URL of the auth service used for server-to-server calls. In the cluster set to `http://auth-service.auth.svc.cluster.local`. |
 | `PUBLIC_AUTH_URL` | `http://localhost:7070` | Public base URL of the auth service used for browser-facing OAuth redirects. In production set to `https://milesstorm.com` (Istio routes `/auth/*` to auth). |
-| `IP` | `127.0.0.1` | Bind address for the Dioxus fullstack server. Set to `0.0.0.0` in the Dockerfile so the istio sidecar (and any in-cluster traffic) can reach the pod. |
-| `PORT` | `8080` | Port the Dioxus fullstack server binds to. Set to `80` in the Dockerfile so K8s manifests don't need changing. |
+| `IP` | `127.0.0.1` | Bind address of the server. Set to `0.0.0.0` in the Dockerfile so the istio sidecar (and any in-cluster traffic) can reach the pod. |
+| `PORT` | `8080` | Port the server binds to. Set to `80` in the Dockerfile so K8s manifests don't need changing. |
 | `REDIS_HOST` | `127.0.0.1` | Hostname of the Redis instance used as the `tower-sessions` store. In the cluster set to `redis-master.redis.svc.cluster.local`. Required in any multi-replica deploy — `MemoryStore` is per-process and breaks under `replicas > 1`. |
 | `REDIS_PORT` | `6379` | Redis port. |
 | `REDIS_PASSWORD` | _(empty)_ | Redis AUTH password. Empty/unset disables AUTH (fine for local Docker Compose). In the cluster injected from the `redis` secret (key `redis-password`), mirrored into the `frontend` namespace by Reflector. |
-| `RUST_LOG` | `info,dioxus=warn,tower_sessions=warn` | Log filter string. |
+| `RUST_LOG` | `info,tower_sessions=warn,opentelemetry=warn` | Log filter string. |
 | `SURREAL_URL` | _(unset)_ | SurrealDB base URL for shared/flagged roll pictures (`services/frontend/surreal/README.md`). In the cluster: `http://surrealdb.surreal.svc.cluster.local:8000`. If this, `SURREAL_USER` or `SURREAL_PASS` is unset, roll sharing and "flag as wrong roll" are switched off. |
 | `SURREAL_USER` / `SURREAL_PASS` | _(unset)_ | The database-level `dice` login (EDITOR on `milesstorm`/`arcane` only; created by the infrastructure). `SURREAL_USER` is `dice` (set in the deployment); `SURREAL_PASS` comes from key `SURREAL_PASS` in `website-secrets`. The website creates its tables with this login at startup. |
 | `SURREAL_NS` / `SURREAL_DB` | `milesstorm` / `arcane` | Where the roll-sharing tables live. |
 | `DATASET_SAMPLE_EVERY` | `20` | For users who opted in, keep about one in N confident rolls (rolls the model is unsure about are always kept). |
-| `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins the Arcane and Dioxus routes accept requests from, comma-separated: `/ws/arcane`, `/api/arcane/flag` (the browser extension's one change; its own `moz-extension://`/`chrome-extension://` origin is always let in there) and the Dioxus pages' email, invite, sharing and profile server functions. Not the JSON API's other routes (`DEV_ALLOWED_ORIGINS`). Same-host origins are always allowed; plain-http ones only in debug builds. Needed for local `dx serve`, whose proxy changes the host the server sees: `http://localhost:8080,http://127.0.0.1:8080`. |
-| `DEV_ALLOWED_ORIGINS` | _(empty)_ | **Debug builds only; release builds ignore it.** Extra page origins the JSON API (`/api/session/*`, `/api/account/*`, including the picture at `/api/account/picture` and `/api/profile/picture`) accepts changes from, comma-separated. For local dev proxies that change the host the server sees: `dx serve` (`http://localhost:8080,http://127.0.0.1:8080`) and later `astro dev` (`http://localhost:4321`). |
-| `FRONTEND_UI` | `dioxus` | `astro` serves the Astro pages (`services/frontend/web`) at the paths in `PAGES` (`crates/api-types`) instead of Dioxus's, and Astro's 404 page (status 404) for any other path. The server then refuses to start unless `WEB_DIST` has exactly those pages and the status pages. Any other value refuses to start. On in production (`crds/frontend/deployment.yaml`) and so in staging, which reuses it. Rollback is removing it: the same image serves the Dioxus pages. |
-| `WEB_DIST` | `web/dist` | Where the Astro build is. Set to `/app/web` in the Dockerfile. Only read with `FRONTEND_UI=astro`. |
+| `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins the Arcane routes accept requests from, comma-separated: `/ws/arcane` and `/api/arcane/flag` (the browser extension's one change; its own `moz-extension://`/`chrome-extension://` origin is always let in there). Not the JSON API's other routes (`DEV_ALLOWED_ORIGINS`). Same-host origins are always allowed; plain-http ones only in debug builds. |
+| `DEV_ALLOWED_ORIGINS` | _(empty)_ | **Debug builds only; release builds ignore it.** Extra page origins the JSON API (`/api/session/*`, `/api/account/*`, including the picture at `/api/account/picture`) accepts changes from, comma-separated. Only for a dev proxy that changes the host the server sees; `astro dev`'s keeps it (`changeOrigin: false`), so it needs none. |
+| `WEB_DIST` | `web/dist` | Where the Astro build is. Set to `/app/web` in the Dockerfile. The server refuses to start unless it has exactly the pages in `PAGES` (`crates/api-types`) and the status pages. |
 
 ### Astro dev server (`services/frontend/web`, `npm run dev`)
 
