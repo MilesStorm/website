@@ -39,6 +39,7 @@ export function ArcaneCamera() {
   const [debugText, setDebugText] = useState('');
   const [lastRoll, setLastRoll] = useState<string | null>(null);
   const [timings, setTimings] = useState('');
+  const [sized, setSized] = useState(false);
   // Bumped by Reconnect: a new session, camera and connection.
   const [round, setRound] = useState(0);
 
@@ -189,7 +190,16 @@ export function ArcaneCamera() {
   return (
     <div className="flex flex-col gap-6">
       <div className="relative overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10">
-        <video ref={video} className="block w-full" autoPlay playsInline muted aria-label="Camera" />
+        {/* 16:9, as the placeholder, until the camera says its own shape. */}
+        <video
+          ref={video}
+          className={sized ? 'block w-full' : 'block aspect-video w-full'}
+          autoPlay
+          playsInline
+          muted
+          aria-label="Camera"
+          onLoadedMetadata={() => setSized(true)}
+        />
         <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true" />
         <div className="absolute top-3 left-3">{status}</div>
         <Button

@@ -51,17 +51,19 @@ export async function expectAccessible(page: Page): Promise<void> {
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 }
 
-/** The height of `measure` on `path`, as `who`: with scripts off, holding the placeholder; with
- * them on, once `ready` (a locator in `main`) shows. Equal: nothing moves when the page arrives. */
+/** The height of `measure` on `path`, as `who` (`fresh` as in logIn): with scripts off, holding
+ * the placeholder; with them on, once `ready` (a locator in `main`) shows. Equal: nothing moves
+ * when the page arrives. */
 export async function shownHeight(
   browser: Browser,
   path: string,
   measure: string,
   ready: string | null,
   who: Who = 'anonymous',
+  fresh: boolean | string = false,
 ): Promise<number> {
   const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled: ready !== null });
-  await logIn(context, who);
+  await logIn(context, who, fresh);
   const page = await context.newPage();
   await page.goto(path);
   await page.locator(`main ${ready ?? '[role="status"]'}`).first().waitFor();

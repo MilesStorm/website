@@ -18,13 +18,22 @@ test('the panel shows the server, in light and dark', async ({ context, page }) 
 });
 
 if (!STAGING) {
-  // The stand-ins' usual answer: online, nobody waiting on a command.
-  test("the placeholder is the heading's, figures' and controls' size, so nothing moves when the status arrives", async ({
-    browser,
-  }) => {
-    const height = (ready: string | null) => shownHeight(browser, '/enshrouded', '[data-overview]', ready, 'all');
-    expect(await height(null)).toBeCloseTo(await height('[data-slot="badge"]'), 0);
-  });
+  // The stand-ins' usual answer (online, nobody waiting on a command), and with Steam's latest
+  // build unknown; on a wide window, on one where the figures' cards are at their narrowest side
+  // by side, and on one just narrower, where they stack.
+  for (const width of [1280, 768, 700]) {
+    test.describe(`at ${width}px`, () => {
+      test.use({ viewport: { width, height: 900 } });
+      for (const fresh of [false, 'nobuild']) {
+        test(`the placeholder is the heading's, figures' and controls' size${fresh ? ', with the latest build unknown' : ''}`, async ({
+          browser,
+        }) => {
+          const height = (ready: string | null) => shownHeight(browser, '/enshrouded', '[data-overview]', ready, 'all', fresh);
+          expect(await height(null)).toBeCloseTo(await height('[data-slot="badge"]'), 0);
+        });
+      }
+    });
+  }
 
   test('a restart asks first, then shows in the recent commands', async ({ context, page }) => {
     await logIn(context, 'all', true);

@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FormAlert } from '@/components/FormAlert';
-import { Meter, ServerControls, StatCard } from '@/components/ServerCards';
+import { Meter, ServerControls, StatCard, StatNote } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt } from '@/lib/errors';
 import { CONFIRM, SENT, STATES, actionText, ago, busy, duration, playersOnline, type Command } from '@/lib/enshrouded';
@@ -67,8 +67,13 @@ export function EnshroudedPanel() {
   };
 
   if (!status) {
-    if (failed) return <FormAlert message={failed} />;
-    return <EnshroudedSkeleton />;
+    if (!failed) return <EnshroudedSkeleton />;
+    return (
+      <div className="flex flex-col gap-6">
+        <EnshroudedHeader />
+        <FormAlert message={failed} />
+      </div>
+    );
   }
   const s = status;
   const state = STATES[s.state];
@@ -89,12 +94,12 @@ export function EnshroudedPanel() {
           <StatCard
             label="Uptime"
             value={s.uptime_secs !== null ? duration(s.uptime_secs) : <span aria-hidden="true">—</span>}
-            footer={<p className="text-muted-foreground">{s.uptime_secs !== null ? UPTIME_NOTE : 'Not running.'}</p>}
+            footer={<StatNote>{s.uptime_secs !== null ? UPTIME_NOTE : 'Not running.'}</StatNote>}
           />
           <StatCard
             label="Build"
             value={s.version ?? <span aria-hidden="true">—</span>}
-            footer={<p className="text-muted-foreground">{buildNote(s)}</p>}
+            footer={<StatNote>{buildNote(s)}</StatNote>}
           />
         </Figures>
         <Controls
@@ -136,9 +141,7 @@ function PlayersFigure({ status }: { status: Status }) {
       footer={
         <>
           <Meter value={p?.online ?? 0} max={p?.max ?? 1} />
-          <p className="text-muted-foreground">
-            {p === null ? "The server doesn't say." : `${p.max - p.online} of ${p.max} slots free`}
-          </p>
+          <StatNote>{p === null ? "The server doesn't say." : `${p.max - p.online} of ${p.max} slots free`}</StatNote>
         </>
       }
     />
@@ -148,8 +151,8 @@ function PlayersFigure({ status }: { status: Status }) {
 /** Whether the running build is Steam's latest. */
 function buildNote(status: Status): string {
   if (status.update_queued && status.state === 'Online') return 'Update queued';
-  if (status.latest_build_at === null) return "Steam's latest isn't known yet";
-  return status.update_pending ? 'A newer build is on Steam' : 'Up to date';
+  if (status.latest_build_at === null) return 'Latest build unknown';
+  return status.update_pending ? 'Newer build on Steam' : 'Up to date';
 }
 
 /** A newer build on Steam than the running server, or one queued for when it is empty. */
@@ -240,25 +243,25 @@ function Controls({
         <>
           <Button disabled={disabled} onClick={() => ask('restart')}>
             {sendingAny('restart') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-            {ENSHROUDED_BUTTONS[0]}
+            {ENSHROUDED_BUTTONS.restart}
           </Button>
           <Button variant="outline" disabled={disabled} onClick={() => ask('update')}>
             {sendingAny('update', 'update_now') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-            {ENSHROUDED_BUTTONS[1]}
+            {ENSHROUDED_BUTTONS.update}
           </Button>
         </>
       }
+      note={
+        !status.can_control ? (
+          <p className="text-sm text-muted-foreground">The website can't reach the server's controls right now.</p>
+        ) : wait !== null ? (
+          <p className="text-sm text-muted-foreground">Someone just sent a command: the buttons come back in {wait} s.</p>
+        ) : working ? (
+          <p className="text-sm text-muted-foreground">Wait for the current restart or update to finish.</p>
+        ) : null
+      }
     >
-      {!status.can_control ? (
-        <p className="text-sm text-muted-foreground">The website can't reach the server's controls right now.</p>
-      ) : wait !== null ? (
-        <p className="text-sm text-muted-foreground">Someone just sent a command: the buttons come back in {wait} s.</p>
-      ) : working ? (
-        <p className="text-sm text-muted-foreground">Wait for the current restart or update to finish.</p>
-      ) : null}
-      <div aria-live="polite">
-        <Answer command={command} online={online} confirm={confirm} cancel={cancel} />
-      </div>
+      <Answer command={command} online={online} confirm={confirm} cancel={cancel} />
     </ServerControls>
   );
 }

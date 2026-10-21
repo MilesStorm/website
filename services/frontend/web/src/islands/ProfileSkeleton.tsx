@@ -1,6 +1,7 @@
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ButtonPlace } from '@/components/Placeholders';
 import {
   ACCOUNT_INTRO,
   DELETE_INTRO,
@@ -13,27 +14,11 @@ import {
   SHARING_NOTE,
   SHARING_TITLE,
 } from '@/lib/copy';
-import { cn } from '@/lib/utils';
 
 // The profile's place while it loads: its cards with their own text, and a pulse where the
 // account's details and each button go, so nothing moves when the profile arrives
 // (e2e/profile.spec.ts measures it). It is the usual answer: a confirmed email (or none), and the
 // sharing card only for viewers with `arcane` (the CSS gate, from the page's own attributes).
-
-/** A button's place: a pulse as wide as its label (`sm`: h-8, `default`: h-9). */
-export function ButtonPlace({ label, size = 'sm' }: { label: string; size?: 'sm' | 'default' }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        'inline-flex shrink-0 animate-pulse items-center rounded-4xl border border-transparent bg-muted px-3 text-sm font-medium whitespace-nowrap text-transparent select-none',
-        size === 'sm' ? 'h-8' : 'h-9',
-      )}
-    >
-      {label}
-    </span>
-  );
-}
 
 /** The roll-sharing card's place (also while its own setting loads). */
 export function SharingSkeleton() {

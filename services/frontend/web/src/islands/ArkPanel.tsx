@@ -2,22 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FormAlert } from '@/components/FormAlert';
-import { ServerControls, StatCard } from '@/components/ServerCards';
+import { ServerControls, StatNote } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
-import { ARK_BUTTONS, PlayersPlace } from '@/islands/ArkSkeleton';
+import { ARK_BUTTONS, PlayersCard } from '@/islands/ArkSkeleton';
 
 type Command = Schemas['ArkCommand'];
 
 /** How often the player count is asked again while the page is shown. */
 export const POLL_MS = 30_000;
-
-/** The buttons, in Dioxus's order (ARK_BUTTONS, which the placeholder shows). */
-const COMMANDS: [Command, string][] = [
-  ['restart', ARK_BUTTONS[0]],
-  ['stop', ARK_BUTTONS[1]],
-  ['start', ARK_BUTTONS[2]],
-];
 
 /** What each outcome of a command says. Keyed by the Rust enum: an outcome added there fails
  * `astro check` until it is worded here. */
@@ -71,45 +64,33 @@ export function ArkPanel() {
     await refresh();
   };
 
-  const shown = count?.ok ? players(count.data.count ?? null) : null;
-  const online = count?.ok === true && count.data.count !== null;
+  // The count when it came (null: the server isn't running), and what it says.
+  const n = count?.ok ? (count.data.count ?? null) : undefined;
+  const shown = n === undefined ? null : players(n);
+  const online = n !== undefined && n !== null;
   return (
     <div className="flex flex-col gap-6">
-      {count === null ? (
-        <PlayersPlace />
-      ) : (
-        <StatCard
-          label="Players online"
-          heading
-          // Offline (the badge says so) or not known: a dash.
-          value={online ? shown!.value : <span aria-hidden="true">—</span>}
-          action={shown && <Badge variant={online ? 'default' : 'outline'}>{online ? 'Online' : shown.value}</Badge>}
-          footer={
-            shown ? (
-              <p className="text-muted-foreground" aria-live="polite">
-                {shown.note}
-              </p>
-            ) : (
-              <FormAlert message={count.ok ? null : count.message} />
-            )
-          }
-        />
-      )}
+      <PlayersCard
+        loading={count === null}
+        live
+        // Offline (the badge says so) or not known: a dash.
+        value={online ? shown!.value : <span aria-hidden="true">—</span>}
+        action={shown && <Badge variant={online ? 'default' : 'outline'}>{online ? 'Online' : shown.value}</Badge>}
+        note={shown ? <StatNote>{shown.note}</StatNote> : <FormAlert message={count?.ok ? null : count?.message} />}
+      />
       <ServerControls
-        buttons={COMMANDS.map(([cmd, label], i) => (
+        buttons={ARK_BUTTONS.map(([cmd, label], i) => (
           <Button key={cmd} variant={i === 0 ? 'default' : 'outline'} disabled={running !== null} onClick={() => void run(cmd)}>
             {running === cmd ? `${label}…` : label}
           </Button>
         ))}
       >
-        <div aria-live="polite">
-          {said &&
-            (said.outcome.ok ? (
-              <p className="text-sm">{OUTCOMES[said.outcome.data.outcome]}</p>
-            ) : (
-              <FormAlert message={said.outcome.message} />
-            ))}
-        </div>
+        {said &&
+          (said.outcome.ok ? (
+            <p className="text-sm">{OUTCOMES[said.outcome.data.outcome]}</p>
+          ) : (
+            <FormAlert message={said.outcome.message} />
+          ))}
       </ServerControls>
     </div>
   );

@@ -77,8 +77,9 @@ const routes = {
   },
   'POST /internal/ark/num_players': ({ token }) =>
     kind(token) === 'all' ? [200, { restart_result: '', command_result: { NumPlayers: 3 } }] : [403, {}],
-  // Enshrouded: online, one player, a newer build on Steam. Commands go into the recent list,
-  // newest first; an account whose suffix starts with `busy` is told one is already under way.
+  // Enshrouded: online, one player, a newer build on Steam (unknown for an account whose suffix
+  // starts with `nobuild`). Commands go into the recent list, newest first; an account whose
+  // suffix starts with `busy` is told one is already under way.
   'POST /internal/enshrouded/status': ({ token }) =>
     kind(token) === 'all'
       ? [
@@ -88,7 +89,7 @@ const routes = {
             players: { online: 1, max: 16, sessions: [600] },
             version: '1269579',
             uptime_secs: 90_000,
-            latest_build_at: Math.floor(Date.now() / 1000) - 9_000,
+            latest_build_at: String(token).startsWith('all-nobuild') ? null : Math.floor(Date.now() / 1000) - 9_000,
             update_pending: true,
             update_queued: false,
             can_control: true,
