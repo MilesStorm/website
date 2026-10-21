@@ -1,5 +1,6 @@
 import { Search } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Field, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -26,14 +27,17 @@ export const USERS_HEAD = ['Username', 'Email', 'Roles'];
 export const USER_CELLS = ['h-5 w-24', 'h-5 w-40', 'h-6 w-44 rounded-4xl'];
 export const ROLES_HEAD = ['Role', 'Permissions'];
 export const ROLE_CELLS = ['h-5 w-24', 'h-6 w-72 rounded-4xl'];
+/** The usual answer: a handful of roles, far fewer than a page. */
+export const ROLE_ROWS = 5;
 export const INVITES_HEAD = ['Note', 'Role', 'Used', 'Until (UTC)', 'Status'];
 export const INVITE_CELLS = ['h-5 w-28', 'h-5 w-20 rounded-4xl', 'h-5 w-10', 'h-5 w-20', 'h-5 w-16 rounded-4xl', ''];
 
 /** The tabs, with `children` as the open tab's contents. */
-export function AdminTabs({ children, ...props }: React.ComponentProps<typeof Tabs>) {
+export function AdminTabs({ children, inert, ...props }: React.ComponentProps<typeof Tabs> & { inert?: boolean }) {
   return (
     <Tabs className="gap-4" {...props}>
-      <TabsList>
+      {/* Inert in the placeholder: before the page's scripts run, a tab can't open. */}
+      <TabsList inert={inert}>
         {TABS.map(([value, label]) => (
           <TabsTrigger key={value} value={value}>
             {label}
@@ -109,14 +113,61 @@ export function ListingFooter({ children }: { children: React.ReactNode }) {
   return <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">{children}</div>;
 }
 
-/** A listing's place while the panel loads: a full page of rows, with a pulse where each row's
+/** The new-invite form's text, shared with its placeholder. */
+export const INVITE_FORM = {
+  title: 'New invite link',
+  intro: 'Whoever opens it gets the role: logged out, they log in or sign up first.',
+  role: 'Gives the role',
+  note: "Note (who it's for)",
+  days: 'Works for (days)',
+  uses: 'How many people can use it (empty = no limit)',
+  make: 'Make link',
+};
+
+/** The invites tab's place until the roles (its form's choices) are in: the form card with its
+ * own text and a pulse for each field and the button, then the list's. */
+export function InvitesSkeleton() {
+  return (
+    <div className="flex flex-col gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2>{INVITE_FORM.title}</h2>
+          </CardTitle>
+          <CardDescription>{INVITE_FORM.intro}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          {[INVITE_FORM.role, INVITE_FORM.note, INVITE_FORM.days, INVITE_FORM.uses].map((label) => (
+            <Field key={label}>
+              <FieldLabel>{label}</FieldLabel>
+              <Skeleton className="h-9 w-full rounded-4xl" />
+            </Field>
+          ))}
+        </CardContent>
+        <CardFooter>
+          <span
+            aria-hidden="true"
+            className="inline-flex h-9 animate-pulse items-center rounded-4xl bg-muted px-3 text-sm font-medium text-transparent select-none"
+          >
+            {INVITE_FORM.make}
+          </span>
+        </CardFooter>
+      </Card>
+      <TableCard head={INVITES_HEAD} actions>
+        <PlaceholderRows cells={INVITE_CELLS} rows={3} />
+      </TableCard>
+    </div>
+  );
+}
+
+/** A listing's place while the panel loads: `rows` rows (the usual answer), with a pulse where each row's
  * details go. */
-export function ListingSkeleton({ head, cells }: { head: string[]; cells: string[] }) {
+export function ListingSkeleton({ head, cells, rows }: { head: string[]; cells: string[]; rows: number }) {
   return (
     <div className="flex flex-col gap-4">
       <Skeleton className="h-9 w-full rounded-4xl sm:max-w-xs" />
       <TableCard head={head}>
-        <PlaceholderRows cells={cells} rows={PAGE_SIZE} fill />
+        <PlaceholderRows cells={cells} rows={rows} fill />
       </TableCard>
       <ListingFooter>
         <Skeleton className="h-5 w-16 rounded-md" />
@@ -129,9 +180,9 @@ export function ListingSkeleton({ head, cells }: { head: string[]; cells: string
 export function AdminSkeleton() {
   return (
     <div role="status" aria-label="Loading" aria-busy="true">
-      <AdminTabs defaultValue="users">
+      <AdminTabs defaultValue="users" inert>
         <TabsContent value="users">
-          <ListingSkeleton head={USERS_HEAD} cells={USER_CELLS} />
+          <ListingSkeleton head={USERS_HEAD} cells={USER_CELLS} rows={PAGE_SIZE} />
         </TabsContent>
       </AdminTabs>
     </div>

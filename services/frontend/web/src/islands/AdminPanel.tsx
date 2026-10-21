@@ -33,11 +33,14 @@ import {
   EmptyCard,
   INVITES_HEAD,
   INVITE_CELLS,
+  INVITE_FORM,
+  InvitesSkeleton,
   ListingFooter,
   ListingSkeleton,
   PlaceholderRows,
   ROLES_HEAD,
   ROLE_CELLS,
+  ROLE_ROWS,
   SearchField,
   TableCard,
   USERS_HEAD,
@@ -87,19 +90,22 @@ export function AdminPanel() {
       {permissions && !permissions.ok && <FormAlert message={`Permissions: ${permissions.message}`} />}
       <AdminTabs defaultValue="users">
         <TabsContent value="users">
-          {loading ? <ListingSkeleton head={USERS_HEAD} cells={USER_CELLS} /> : <UsersTab allRoles={allRoles} me={me} />}
+          {loading ? (
+            <ListingSkeleton head={USERS_HEAD} cells={USER_CELLS} rows={PAGE_SIZE} />
+          ) : (
+            <UsersTab allRoles={allRoles} me={me} />
+          )}
         </TabsContent>
         <TabsContent value="roles">
-          {loading ? <ListingSkeleton head={ROLES_HEAD} cells={ROLE_CELLS} /> : <RolesTab allPermissions={allPermissions} />}
+          {loading ? (
+            <ListingSkeleton head={ROLES_HEAD} cells={ROLE_CELLS} rows={ROLE_ROWS} />
+          ) : (
+            <RolesTab allPermissions={allPermissions} />
+          )}
         </TabsContent>
         <TabsContent value="invites">
-          {loading ? (
-            <TableCard head={INVITES_HEAD} actions>
-              <PlaceholderRows cells={INVITE_CELLS} rows={3} />
-            </TableCard>
-          ) : (
-            <InvitesTab allRoles={allRoles} />
-          )}
+          {/* Needs only the roles, for its form's choices. */}
+          {roles ? <InvitesTab allRoles={allRoles} /> : <InvitesSkeleton />}
         </TabsContent>
       </AdminTabs>
     </div>
@@ -162,6 +168,7 @@ function UsersTab({ allRoles, me }: { allRoles: RoleRef[]; me: string | null }) 
       error={error}
       head={USERS_HEAD}
       cells={USER_CELLS}
+      rows={PAGE_SIZE}
       row={(user) => (
         <TableRow key={user.id}>
           <TableCell className="font-medium">{user.username}</TableCell>
@@ -207,6 +214,7 @@ function RolesTab({ allPermissions }: { allPermissions: Permission[] }) {
       error={error}
       head={ROLES_HEAD}
       cells={ROLE_CELLS}
+      rows={ROLE_ROWS}
       row={(role) => (
         <TableRow key={role.id}>
           <TableCell className="font-medium">{role.name}</TableCell>
@@ -239,8 +247,8 @@ function RolesTab({ allPermissions }: { allPermissions: Permission[] }) {
   );
 }
 
-/** A search box, the table, the count and the pager of a listing. `cells`: the shape of a row's
- * cells while it loads (AdminSkeleton's PlaceholderRows). */
+/** A search box, the table, the count and the pager of a listing. `cells` and `rows`: the shape
+ * of a row's cells while it loads (AdminSkeleton's PlaceholderRows), and how many. */
 function Listing<T>({
   label,
   placeholder,
@@ -249,6 +257,7 @@ function Listing<T>({
   error,
   head,
   cells,
+  rows,
   row,
 }: {
   label: string;
@@ -258,6 +267,7 @@ function Listing<T>({
   error: string | null;
   head: string[];
   cells: string[];
+  rows: number;
   row: (item: T) => React.ReactNode;
 }) {
   const id = useId();
@@ -276,7 +286,7 @@ function Listing<T>({
         <EmptyCard>No {noun}s found.</EmptyCard>
       ) : (
         <TableCard head={head}>
-          {result === null ? <PlaceholderRows cells={cells} rows={PAGE_SIZE} fill /> : result.data.items.map(row)}
+          {result === null ? <PlaceholderRows cells={cells} rows={rows} fill /> : result.data.items.map(row)}
         </TableCard>
       )}
       <ListingFooter>
@@ -330,7 +340,7 @@ function Assigned({
           title={unknown(h.name) ? 'A permission this site doesn’t use yet' : undefined}
         >
           {h.name}
-          {unknown(h.name) && <span>(unused)</span>}
+          {unknown(h.name) && <span> (unused)</span>}
           <RemoveButton
             label={`Remove ${kind} ${h.name} from ${owner}`}
             title={`Remove ${h.name} from ${owner}?`}
@@ -352,7 +362,7 @@ function Assigned({
             {missing.map((m) => (
               <DropdownMenuItem key={m.id} onSelect={() => add(m.id)}>
                 {m.name}
-                {unknown(m.name) && <span className="text-muted-foreground">(unused)</span>}
+                {unknown(m.name) && <span className="text-muted-foreground"> (unused)</span>}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -428,10 +438,10 @@ function Pager({ page, total, onPage }: { page: number; total: number; onPage: (
   );
 }
 
-/** How each invite status shows: a live link stands out, a turned-off one is in the warning colour. */
+/** How each invite status shows: a live link stands out; the rest are quiet (none is an error). */
 const STATUS_BADGE = {
   Active: 'default',
-  'Turned off': 'destructive',
+  'Turned off': 'outline',
   'Used up': 'secondary',
   Expired: 'outline',
 } as const;
@@ -513,13 +523,13 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
       >
         <CardHeader>
           <CardTitle>
-            <h2>New invite link</h2>
+            <h2>{INVITE_FORM.title}</h2>
           </CardTitle>
-          <CardDescription>Whoever opens it gets the role: logged out, they log in or sign up first.</CardDescription>
+          <CardDescription>{INVITE_FORM.intro}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <Field>
-            <FieldLabel htmlFor={ids.role}>Gives the role</FieldLabel>
+            <FieldLabel htmlFor={ids.role}>{INVITE_FORM.role}</FieldLabel>
             <NativeSelect id={ids.role} className="w-full" value={roleId} onChange={(e) => setRoleId(Number(e.target.value))}>
               {roleId === 0 && (
                 <NativeSelectOption value={0} disabled>
@@ -534,7 +544,7 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
             </NativeSelect>
           </Field>
           <Field>
-            <FieldLabel htmlFor={ids.note}>Note (who it's for)</FieldLabel>
+            <FieldLabel htmlFor={ids.note}>{INVITE_FORM.note}</FieldLabel>
             <Input
               id={ids.note}
               maxLength={100}
@@ -544,17 +554,17 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor={ids.days}>Works for (days)</FieldLabel>
+            <FieldLabel htmlFor={ids.days}>{INVITE_FORM.days}</FieldLabel>
             <Input id={ids.days} type="number" min={1} max={365} required value={days} onChange={(e) => setDays(e.target.value)} />
           </Field>
           <Field>
-            <FieldLabel htmlFor={ids.uses}>How many people can use it (empty = no limit)</FieldLabel>
+            <FieldLabel htmlFor={ids.uses}>{INVITE_FORM.uses}</FieldLabel>
             <Input id={ids.uses} type="number" min={1} max={1000} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} />
           </Field>
         </CardContent>
         <CardFooter className="flex-col items-stretch gap-4">
           <Button type="submit" className="self-start" disabled={busy}>
-            Make link
+            {INVITE_FORM.make}
           </Button>
           <FormAlert message={error} />
           {link && (
