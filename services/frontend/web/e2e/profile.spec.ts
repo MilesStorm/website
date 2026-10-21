@@ -1,7 +1,7 @@
 // The profile and the Ark panel in a browser. Against staging only what changes nothing runs:
 // looking at them. Changing a name or picture, sharing, and Ark commands (which would start or
 // stop the real game server) run against the stand-ins only.
-import { expect, test } from '@playwright/test';
+import { expect, test, type Browser } from '@playwright/test';
 import { STAGING, expectAccessible, logIn } from './site';
 
 /** A 2×2 PNG: small, and a picture the server can read. */
@@ -30,7 +30,38 @@ test('the Ark panel shows who is online', async ({ context, page }) => {
   await expectAccessible(page);
 });
 
+/** The height of `measure` on `path`, logged in with every permission: with scripts off, holding the
+ * placeholder; with them on, once `ready` (a locator in `main`) shows. */
+async function loadedHeight(browser: Browser, path: string, measure: string, ready: string | null): Promise<number> {
+  const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled: ready !== null });
+  await logIn(context, 'all');
+  const page = await context.newPage();
+  await page.goto(path);
+  await page.locator(`main ${ready ?? '[role="status"]'}`).first().waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  const box = await page.locator(measure).first().boundingBox();
+  await context.close();
+  return box!.height;
+}
+
 if (!STAGING) {
+  // The stand-ins' `tester-all`: the usual answer (a confirmed email), with the sharing card.
+  test("the profile's placeholder is the profile's size, so nothing moves when it arrives", async ({ browser }) => {
+    const ready = '[role="switch"]';
+    expect(await loadedHeight(browser, '/profile', 'main', null)).toBeCloseTo(
+      await loadedHeight(browser, '/profile', 'main', ready),
+      0,
+    );
+  });
+
+  test("the start page's greeting is its placeholder's size", async ({ browser }) => {
+    const hero = 'main [data-gate="in"] section';
+    expect(await loadedHeight(browser, '/', hero, null)).toBeCloseTo(
+      await loadedHeight(browser, '/', hero, '[data-gate="in"] h1'),
+      0,
+    );
+  });
+
   test('a new display name shows on the page and in the user menu', async ({ context, page }) => {
     await logIn(context, 'plain', true);
     await page.goto('/profile');

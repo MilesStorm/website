@@ -108,12 +108,13 @@ if (!STAGING) {
 
 
 
-  test("an emailed link's and an invite's placeholders are the size of what most often comes back", async ({
+  test("the emailed links' and an invite's placeholders are the size of what most often comes back", async ({
     browser,
   }) => {
     const answers: [string, string][] = [
       ['/verify-email#good', 'a[href="/"]'],
       ['/invite#join', 'a[href="/login"]'],
+      ['/delete-account#good', 'button'],
     ];
     for (const [path, ready] of answers) {
       expect(await panelHeight(browser, path, null), path).toBeCloseTo(await panelHeight(browser, path, ready), 0);

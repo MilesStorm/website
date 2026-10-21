@@ -1,11 +1,12 @@
 ---
-// The storm behind a hero: a soft glow and a faint rain of dots fading towards the bottom.
+// The storm behind the start page's hero: a soft glow over the heading and a faint rain of dots,
+// fading out towards the edges and the cards below. Neutral: the theme's own foreground.
 ---
 
-<div aria-hidden="true" class="pointer-events-none absolute inset-0">
-  <div class="absolute -top-28 -right-20 size-80 rounded-full bg-foreground/10 blur-3xl"></div>
+<div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[36rem] overflow-hidden">
+  <div class="absolute top-24 left-1/2 h-64 w-[40rem] max-w-full -translate-x-1/2 rounded-full bg-foreground/[0.07] blur-3xl"></div>
   <div
-    class="absolute inset-0 opacity-60 [background-image:radial-gradient(color-mix(in_oklab,var(--foreground)_18%,transparent)_1px,transparent_1px)] [background-size:18px_18px] [mask-image:linear-gradient(to_bottom,black,transparent_85%)]"
+    class="absolute inset-0 opacity-70 [background-image:radial-gradient(color-mix(in_oklab,var(--foreground)_16%,transparent)_1px,transparent_1px)] [background-size:18px_18px] [mask-image:radial-gradient(ellipse_50%_55%_at_50%_35%,black,transparent_85%)]"
   >
   </div>
 </div>
