@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Runs the built image for the end-to-end tests: Redis, SurrealDB (in memory, with the
 # database-level `dice` login the website has in production), the stand-ins for auth and Ark
-# (fake-upstreams.mjs), the server, and Caddy in front of it with HTTPS, as in production (a release
-# build takes a browser's changes only from an https:// page of its own host), all on the host's
-# network. The tests use https://localhost:$TLS_PORT. `e2e/serve.sh stop` removes them.
+# (fake-upstreams.mjs), the server, and Caddy in front of it with HTTPS, as in production (a
+# release build takes a browser's changes only from an https:// page of its own host), all on the
+# host's network. The tests use https://localhost:$TLS_PORT. `e2e/serve.sh stop` removes them.
 # IMAGE (default frontend:e2e), E2E_PORT (8090), TLS_PORT (8443), FAKE_PORT (4010),
 # FAKE_AI_PORT (4011, the stand-in ai_pipeline), REDIS_PORT (6390), SURREAL_PORT (8091).
 set -euo pipefail
