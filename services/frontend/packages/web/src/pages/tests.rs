@@ -505,7 +505,7 @@ async fn only_page_loads_get_the_404_page() {
     let dist = Dist::new("notpages");
     let app = super::mount(axum::Router::new().merge(crate::json_api::router()), dist.built());
     let mut site = Site::serving(app).await.log_in("all").await;
-    for path in ["/api/nope", "/bff/nope", "/bff/get_account99"] {
+    for path in ["/api/nope", "/bff/nope", "/bff/get_account99", "/api/", "/bff/"] {
         let reply = site.get(path).await;
         assert_eq!((reply.status, reply.body["error"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")), "{path}");
     }

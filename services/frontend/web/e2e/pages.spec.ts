@@ -97,7 +97,7 @@ test('what isn’t a page load gets no page: the icon, unknown API paths, unknow
   const icon = await request.get('/favicon.ico');
   expect(icon.status()).toBe(200);
   expect(icon.headers()['content-type']).toBe('image/x-icon');
-  for (const path of ['/api/nope', '/bff/nope']) {
+  for (const path of ['/api/nope', '/bff/nope', '/api/', '/bff/']) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(404);
     expect((await res.json()).error, path).toBe('not_found');

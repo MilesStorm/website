@@ -140,8 +140,18 @@ reason = "an API path that doesn't exist: the 404 envelope, with nothing to ask"
 
 [[leaf]]
 service = "frontend"
+name = "* /api/"
+reason = "the API's prefix alone: the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
 name = "* /bff/{*rest}"
 reason = "an old Dioxus server-function path: the 404 envelope, with nothing to ask"
+
+[[leaf]]
+service = "frontend"
+name = "* /bff/"
+reason = "the old server functions' prefix alone: the 404 envelope, with nothing to ask"
 
 [[leaf]]
 service = "frontend"

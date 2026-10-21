@@ -753,6 +753,8 @@ pub(crate) fn router_with(arcane_origins: &str) -> axum::Router {
         .0
         .method_not_allowed_fallback(not_allowed)
         .route("/api/{*rest}", axum::routing::any(not_found))
+        // `{*rest}` matches one character or more.
+        .route("/api/", axum::routing::any(not_found))
 }
 
 /// An API path that doesn't exist: the error envelope, 404 (`/api/*`, and `/bff/*` under the

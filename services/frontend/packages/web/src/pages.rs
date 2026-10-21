@@ -206,6 +206,7 @@ fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Bu
         // The old Dioxus app's server functions, which a tab still open from before may call:
         // an API that doesn't exist, answered as `/api/*`'s are.
         .route("/bff/{*rest}", axum::routing::any(|| async { json_api::no_such_api() }))
+        .route("/bff/", axum::routing::any(|| async { json_api::no_such_api() }))
         .fallback(move |req: Request| not_found(built.clone(), req))
 }
 
