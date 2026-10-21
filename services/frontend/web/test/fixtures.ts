@@ -49,7 +49,7 @@ export function at(path: string) {
   const assign = (href: string) => assigned.push(href);
   const assigned: string[] = [];
   return {
-    location: { origin: url.origin, pathname: url.pathname, search: url.search, hash: url.hash, assign },
+    location: { href: url.href, origin: url.origin, host: url.host, pathname: url.pathname, search: url.search, hash: url.hash, assign },
     assigned,
   };
 }

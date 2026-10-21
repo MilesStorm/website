@@ -2479,7 +2479,7 @@
         "description": "What opening an invite link did.",
         "oneOf": [
           {
-            "description": "The logged-in user now has `role` (or already had it through this link).",
+            "description": "The logged-in user now has `role` (or already had it through this link); `next` is the\npage it opens (Arcane for the dice test group).",
             "type": "object",
             "properties": {
               "group_label": {
@@ -2489,6 +2489,9 @@
                 "type": "string",
                 "const": "joined"
               },
+              "next": {
+                "$ref": "#/components/schemas/PagePath"
+              },
               "role": {
                 "type": "string"
               }
@@ -2496,7 +2499,8 @@
             "required": [
               "kind",
               "role",
-              "group_label"
+              "group_label",
+              "next"
             ]
           },
           {
@@ -2539,7 +2543,8 @@
           "/profile",
           "/ark",
           "/enshrouded",
-          "/admin"
+          "/admin",
+          "/arcane"
         ]
       },
       "PasswordReset": {
@@ -2862,6 +2867,13 @@
       },
       "file": "admin.html",
       "path": "/admin"
+    },
+    {
+      "access": {
+        "perm": "arcane"
+      },
+      "file": "arcane.html",
+      "path": "/arcane"
     }
   ]
 }

@@ -5,7 +5,14 @@
 import { expect, test } from '@playwright/test';
 import { STAGING, logIn } from './site';
 
-test.use({ channel: 'chromium', launchOptions: { ignoreDefaultArgs: ['--disable-back-forward-cache'] } });
+test.use({
+  channel: 'chromium',
+  launchOptions: {
+    ignoreDefaultArgs: ['--disable-back-forward-cache'],
+    // The Arcane test's camera: Chromium's fake one.
+    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+  },
+});
 
 test('logging out, Back shows the page logged out', async ({ context, page }) => {
   // Chromium says why a page wasn't kept: the test fails with its reasons, not just "not restored".
@@ -48,3 +55,23 @@ test('logging out, Back shows the page logged out', async ({ context, page }) =>
   // Restored from the cache, then loaded again: the first load and the reload.
   expect(seen).toEqual({ restored: '/account-deleted', loads: '2' });
 });
+
+// The camera, not on staging (its frames would reach the real ai_pipeline).
+if (!STAGING) {
+  test('leaving the Arcane page stops the camera', async ({ context, page }) => {
+    await context.grantPermissions(['camera']);
+    await logIn(context, 'all');
+    await page.goto('/arcane');
+    await expect(page.getByRole('status', { name: 'Connection' })).toHaveText('Connected');
+    // Noted after the page's own `pagehide` handler (registered first), in this tab's storage.
+    await page.evaluate(() => {
+      const video = document.querySelector('video')!;
+      const tracks = (video.srcObject as MediaStream).getTracks();
+      addEventListener('pagehide', () => {
+        sessionStorage.setItem('camera', JSON.stringify(tracks.map((t) => t.readyState)));
+      });
+    });
+    await page.goto('/account-deleted');
+    expect(await page.evaluate(() => sessionStorage.getItem('camera'))).toBe('["ended"]');
+  });
+}

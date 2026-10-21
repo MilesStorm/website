@@ -365,7 +365,7 @@ async fn router(
         .serve_dioxus_application(ServeConfig::default(), App)
         .route("/oauth/start/{provider}", get(oauth_start))
         .route("/oauth/callback/{provider}", get(oauth_callback))
-        .route("/ws/arcane", get(arcane_ws_proxy))
+        .route("/ws/arcane", arcane_ws_route())
         .merge(json_api::router())
         .route(
             "/metrics",
@@ -501,32 +501,64 @@ fn page_name(path: &str) -> String {
 
 // ---- Arcane WebSocket proxy ----
 
+/// `/ws/arcane`: the origin is checked first, so a foreign page's handshake costs no call to auth.
+#[cfg(not(target_arch = "wasm32"))]
+fn arcane_ws_route() -> axum::routing::MethodRouter {
+    axum::routing::get(arcane_ws_proxy).route_layer(axum::middleware::from_fn(camera_origin))
+}
+
+/// Browsers send `Origin` on a WebSocket handshake: it must be this site's ([`rolls::origin_allowed`]).
+#[cfg(not(target_arch = "wasm32"))]
+async fn camera_origin(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if rolls::origin_allowed(req.headers()) {
+        return next.run(req).await;
+    }
+    tracing::warn!(origin = ?req.headers().get(axum::http::header::ORIGIN), "arcane WebSocket rejected: foreign origin");
+    axum::http::StatusCode::FORBIDDEN.into_response()
+}
+
 /// Upgrades to WebSocket and bidirectionally proxies to the ai_pipeline inference service.
-/// Requires a same-host Origin and a valid session with the `arcane` permission;
-/// returns 403/401 otherwise. Settled rolls are published for the user's other
-/// devices (see `rolls`).
+/// Requires the `arcane` permission (and a same-host Origin, [`arcane_ws_route`]): 401, 403 or
+/// 503 otherwise. Settled rolls are published for the user's other devices (see `rolls`).
 #[cfg(not(target_arch = "wasm32"))]
 async fn arcane_ws_proxy(
-    ws: axum::extract::ws::WebSocketUpgrade,
+    viewer: Result<json_api::Viewer, json_api::ApiError>,
+    ws: Result<axum::extract::ws::WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
     uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::Extension(hub): axum::Extension<rolls::RollHub>,
+    hub: Option<axum::Extension<rolls::RollHub>>,
     session: tower_sessions::Session,
 ) -> axum::response::Response {
     use axum::{http::StatusCode, response::IntoResponse};
 
-    if !rolls::origin_allowed(&headers) {
-        tracing::warn!(origin = ?headers.get(axum::http::header::ORIGIN), "arcane WebSocket rejected: foreign origin");
-        return StatusCode::FORBIDDEN.into_response();
-    }
-
-    let user = match rolls::arcane_user(&session).await {
-        Ok(u) => u,
-        Err(rolls::Denied::LoggedOut) => return StatusCode::UNAUTHORIZED.into_response(),
-        Err(rolls::Denied::NoPermission) => {
-            tracing::warn!("arcane WebSocket rejected: permission denied");
-            return StatusCode::FORBIDDEN.into_response();
+    // Who is asking: the one viewer of the request (one introspect), with the same rule as
+    // the `/api/arcane/*` routes. Logged out 401, without `arcane` 403, auth down 503: a
+    // handshake answer, without a body.
+    let allowed = viewer.and_then(|v| {
+        json_api::allowed(api_types::Access::Perm(api_types::KnownPermission::Arcane), &v)?;
+        Ok(v)
+    });
+    let viewer = match allowed {
+        Ok(v) => v,
+        Err(e) => {
+            if e.0.error == api_types::ErrorCode::Forbidden {
+                tracing::warn!("arcane WebSocket rejected: permission denied");
+            }
+            return StatusCode::from_u16(e.0.status()).unwrap_or(StatusCode::FORBIDDEN).into_response();
         }
+    };
+    // Who may connect is decided first, for any request to this path.
+    let ws = match ws {
+        Ok(ws) => ws,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let (Ok(user), Ok(token)) = (viewer.username(), viewer.token()) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let (user, token) = (user.to_string(), token.to_string());
+    let Some(axum::Extension(hub)) = hub else {
+        tracing::error!("no roll hub on a camera WebSocket request");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 
     let ai_url = std::env::var("AI_PIPELINE_SERVICE_URL")
@@ -534,7 +566,6 @@ async fn arcane_ws_proxy(
 
     tracing::info!(upstream = %ai_url, "upgrading arcane WebSocket");
     let session_id = session.id();
-    let token: String = session.get("opaque_token").await.ok().flatten().unwrap_or_default();
     // The camera session outlives this request (it ends at the 101). This span is its short
     // open span, in the request's trace: it ends once ai_pipeline is connected (whose
     // connection span joins it). What the session does after that is traced per roll.
@@ -1097,6 +1128,35 @@ mod tests {
         let tc = record.record.trace_context().expect("no trace context");
         assert_eq!(tc.trace_id, sc.trace_id());
         assert_eq!(tc.span_id, sc.span_id());
+    }
+
+    /// The camera WebSocket asks the request's one viewer, with the `/api/arcane/*` rule: logged
+    /// out 401, without `arcane` 403, auth down 503, all before anything else; a foreign origin
+    /// is refused before auth is asked at all.
+    #[tokio::test]
+    async fn the_camera_websocket_lets_in_only_arcane_users() {
+        use crate::json_api::tests::Site;
+        use axum::http::{Method, StatusCode};
+        let app = || axum::Router::new().route("/ws/arcane", super::arcane_ws_route());
+        for (token, status) in [(None, 401), (Some("none"), 403), (Some("down"), 503)] {
+            let site = Site::serving(app()).await;
+            let mut site = match token {
+                Some(token) => site.log_in(token).await,
+                None => site,
+            };
+            assert_eq!(site.get("/ws/arcane").await.status.as_u16(), status, "{token:?}");
+        }
+        // Allowed: then it is the handshake that is missing (a plain GET), after one introspect.
+        let mut site = Site::serving(app()).await.log_in("all").await;
+        let reply = site.get("/ws/arcane").await;
+        assert!(![401, 403, 503].contains(&reply.status.as_u16()) && reply.status.is_client_error(), "{}", reply.status);
+        assert_eq!(site.auth.introspected("all"), 1);
+        // A foreign page, and the browser extension too: its exception is the flag's only.
+        for origin in ["https://evil.example", "moz-extension://1b2c3d", "chrome-extension://abcdef"] {
+            let foreign = site.send(Method::GET, "/ws/arcane", Some(origin), None).await;
+            assert_eq!(foreign.status, StatusCode::FORBIDDEN, "{origin}");
+        }
+        assert_eq!(site.auth.introspected("all"), 1);
     }
 
     /// OAuth leaves the site, so `?next=` waits in the session: the callback lands on it, on the

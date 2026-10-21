@@ -20,6 +20,7 @@ export const PAGE_PATHS = [
   '/ark',
   '/enshrouded',
   '/admin',
+  '/arcane',
 ] as const satisfies readonly PagePath[];
 
 // Fails to compile when a page is missing from PAGE_PATHS.
@@ -27,11 +28,8 @@ type Missing = Exclude<PagePath, (typeof PAGE_PATHS)[number]>;
 const complete: [Missing] extends [never] ? true : Missing = true;
 void complete;
 
-/** Pages the Dioxus app still serves. Each moves into `PagePath` with the PR that rebuilds it. */
-export type DioxusPage = '/arcane';
-
-/** Where a link on the site may go. */
-export type Href = PagePath | DioxusPage;
+/** Where a link on the site may go: every page is in `PagePath` now. */
+export type Href = PagePath;
 
 export function isPagePath(path: string): path is PagePath {
   return (PAGE_PATHS as readonly string[]).includes(path);

@@ -5,13 +5,14 @@
 # build takes a browser's changes only from an https:// page of its own host), all on the host's
 # network. The tests use https://localhost:$TLS_PORT. `e2e/serve.sh stop` removes them.
 # IMAGE (default frontend:e2e), E2E_PORT (8090), TLS_PORT (8443), FAKE_PORT (4010),
-# REDIS_PORT (6390), SURREAL_PORT (8091).
+# FAKE_AI_PORT (4011, the stand-in ai_pipeline), REDIS_PORT (6390), SURREAL_PORT (8091).
 set -euo pipefail
 cd "$(dirname "$0")"
 IMAGE=${IMAGE:-frontend:e2e}
 E2E_PORT=${E2E_PORT:-8090}
 TLS_PORT=${TLS_PORT:-8443}
 FAKE_PORT=${FAKE_PORT:-4010}
+FAKE_AI_PORT=${FAKE_AI_PORT:-4011}
 REDIS_PORT=${REDIS_PORT:-6390}
 SURREAL_PORT=${SURREAL_PORT:-8091}
 
@@ -38,13 +39,13 @@ fi
 curl -fsS -u root:e2e-root -H 'Accept: application/json' "http://127.0.0.1:$SURREAL_PORT/sql" \
   -d "DEFINE NAMESPACE milesstorm; USE NS milesstorm; DEFINE DATABASE arcane; USE DB arcane;
       DEFINE USER dice ON DATABASE PASSWORD 'e2e-only' ROLES EDITOR;" >/dev/null
-FAKE_PORT=$FAKE_PORT SITE_URL="https://localhost:$TLS_PORT" node fake-upstreams.mjs > fake.log 2>&1 &
+FAKE_PORT=$FAKE_PORT FAKE_AI_PORT=$FAKE_AI_PORT SITE_URL="https://localhost:$TLS_PORT" node fake-upstreams.mjs > fake.log 2>&1 &
 echo $! > .fake.pid
 docker run -d --rm --name frontend-e2e --network host \
   -e IP=127.0.0.1 -e PORT="$E2E_PORT" -e FRONTEND_UI=astro -e GIT_SHA=e2e0000 \
   -e REDIS_HOST=127.0.0.1 -e REDIS_PORT="$REDIS_PORT" \
   -e AUTH_SERVICE_URL="http://127.0.0.1:$FAKE_PORT" -e PUBLIC_AUTH_URL="http://127.0.0.1:$FAKE_PORT" \
-  -e BFF_SERVICE_SECRET=e2e-only \
+  -e BFF_SERVICE_SECRET=e2e-only -e AI_PIPELINE_SERVICE_URL="ws://127.0.0.1:$FAKE_AI_PORT" \
   -e SURREAL_URL="http://127.0.0.1:$SURREAL_PORT" -e SURREAL_USER=dice -e SURREAL_PASS=e2e-only \
   "$IMAGE" >/dev/null
 # Caddy's own CA signs the certificate; the browser is told to accept it (playwright.config.ts).

@@ -15,6 +15,14 @@ export function bffUrl(path: string): string {
   return BASE + path;
 }
 
+/** A WebSocket address on the server: `path` from `bffUrl`, with `ws:`/`wss:` for the page's
+ * `http:`/`https:`. */
+export function wsUrl(path: string, page: Pick<Location, 'href'> = location): string {
+  const url = new URL(bffUrl(path), page.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.href;
+}
+
 /** A `logged_out` answer sends the user to log in, and back here afterwards when this is a page
  * the server knows. Any other error is the caller's to show. */
 const loggedOut: Middleware = {

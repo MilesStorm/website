@@ -233,6 +233,11 @@ service = "frontend"
 name = "GET /admin"
 reason = "childless only for a request without a session: no session load or introspect"
 
+[[leaf]]
+service = "frontend"
+name = "GET /arcane"
+reason = "childless only for a request without a session: no session load or introspect"
+
 # A page's path with a trailing slash: a redirect to the page, one entry per page as above.
 [[leaf]]
 service = "frontend"
@@ -297,4 +302,9 @@ reason = "a redirect to the page without the slash: nothing of ours inside"
 [[leaf]]
 service = "frontend"
 name = "GET /admin/"
+reason = "a redirect to the page without the slash: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /arcane/"
 reason = "a redirect to the page without the slash: nothing of ours inside"

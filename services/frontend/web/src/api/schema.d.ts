@@ -2344,6 +2344,7 @@ export interface components {
             group_label: string;
             /** @constant */
             kind: "joined";
+            next: components["schemas"]["PagePath"];
             role: string;
         } | {
             group_label: string;
@@ -2356,7 +2357,7 @@ export interface components {
          *     doesn't exist) fails.
          * @enum {string}
          */
-        PagePath: "/" | "/asshole" | "/account-deleted" | "/login" | "/register" | "/forgot-password" | "/reset-password" | "/verify-email" | "/delete-account" | "/invite" | "/profile" | "/ark" | "/enshrouded" | "/admin";
+        PagePath: "/" | "/asshole" | "/account-deleted" | "/login" | "/register" | "/forgot-password" | "/reset-password" | "/verify-email" | "/delete-account" | "/invite" | "/profile" | "/ark" | "/enshrouded" | "/admin" | "/arcane";
         /** @description `POST /api/password/reset`. */
         PasswordReset: {
             code: string;

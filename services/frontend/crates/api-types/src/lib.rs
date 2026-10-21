@@ -237,6 +237,7 @@ pages! {
     Ark => "/ark", "ark.html", Access::Perm(KnownPermission::Llama);
     Enshrouded => "/enshrouded", "enshrouded.html", Access::Perm(KnownPermission::Enshrouded);
     Admin => "/admin", "admin.html", Access::Perm(KnownPermission::ManagePermissions);
+    Arcane => "/arcane", "arcane.html", Access::Perm(KnownPermission::Arcane);
 }
 
 /// Pages without a path of their own, answered with a status: an unknown path (404), a page the
@@ -452,8 +453,9 @@ pub struct Done {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Opened {
-    /// The logged-in user now has `role` (or already had it through this link).
-    Joined { role: String, group_label: String },
+    /// The logged-in user now has `role` (or already had it through this link); `next` is the
+    /// page it opens (Arcane for the dice test group).
+    Joined { role: String, group_label: String, next: PagePath },
     /// Logged out: the invite is kept until they log in or sign up.
     NeedsAccount { role: String, group_label: String },
 }
@@ -883,10 +885,10 @@ mod tests {
 
     #[test]
     fn opened_invites_are_tagged_by_kind() {
-        let joined = Opened::Joined { role: "arcane_user".into(), group_label: "the group".into() };
+        let joined = Opened::Joined { role: "arcane_user".into(), group_label: "the group".into(), next: PagePath::Arcane };
         assert_eq!(
             serde_json::to_value(joined).unwrap(),
-            json!({"kind": "joined", "role": "arcane_user", "group_label": "the group"})
+            json!({"kind": "joined", "role": "arcane_user", "group_label": "the group", "next": "/arcane"})
         );
         let kept = Opened::NeedsAccount { role: "r".into(), group_label: "g".into() };
         assert_eq!(serde_json::to_value(kept).unwrap()["kind"], "needs_account");

@@ -391,7 +391,7 @@ impl Site {
         self
     }
 
-    async fn send(&mut self, method: Method, path: &str, origin: Option<&str>, body: Option<(&str, Vec<u8>)>) -> Reply {
+    pub(crate) async fn send(&mut self, method: Method, path: &str, origin: Option<&str>, body: Option<(&str, Vec<u8>)>) -> Reply {
         let mut req = Request::builder().method(method).uri(path).header(header::HOST, HOST);
         if let Some(origin) = origin {
             req = req.header(header::ORIGIN, origin);
@@ -1103,6 +1103,8 @@ async fn invites_join_or_wait_for_a_login() {
     let mut site = Site::logged_in("all").await;
     let reply = site.json(Method::POST, "/api/invites/open", json!({"code": "join"})).await;
     assert_eq!(reply.body["kind"], "joined");
+    // The dice test group's page.
+    assert_eq!(reply.body["next"], "/arcane");
     drop(site);
     // A session auth dropped joins after logging in, like a logged-out one.
     let mut site = Site::logged_in("dead").await;
