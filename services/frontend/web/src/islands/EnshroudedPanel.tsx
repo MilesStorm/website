@@ -3,12 +3,13 @@ import { CircleCheck, Info, LoaderCircle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FormAlert } from '@/components/FormAlert';
+import { Meter, ServerControls, StatCard } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt } from '@/lib/errors';
 import { CONFIRM, SENT, STATES, actionText, ago, busy, duration, playersOnline, type Command } from '@/lib/enshrouded';
+import { ENSHROUDED_BUTTONS, EnshroudedHeader, EnshroudedSkeleton, Figures, UPTIME_NOTE } from '@/islands/EnshroudedSkeleton';
 
 type Status = Schemas['EnshroudedStatus'];
 
@@ -67,55 +68,88 @@ export function EnshroudedPanel() {
 
   if (!status) {
     if (failed) return <FormAlert message={failed} />;
-    return <Skeleton className="h-96 w-full rounded-xl" role="status" aria-label="Loading the server's status" />;
+    return <EnshroudedSkeleton />;
   }
   const s = status;
+  const state = STATES[s.state];
   return (
     <div className="flex flex-col gap-6">
       <FormAlert message={failed} />
-      <Header status={s} />
+      <div data-overview className="flex flex-col gap-6">
+        <EnshroudedHeader
+          badge={
+            <Badge variant={state.badge}>
+              {state.moving && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
+              {state.label}
+            </Badge>
+          }
+        />
+        <Figures>
+          <PlayersFigure status={s} />
+          <StatCard
+            label="Uptime"
+            value={s.uptime_secs !== null ? duration(s.uptime_secs) : <span aria-hidden="true">—</span>}
+            footer={<p className="text-muted-foreground">{s.uptime_secs !== null ? UPTIME_NOTE : 'Not running.'}</p>}
+          />
+          <StatCard
+            label="Build"
+            value={s.version ?? <span aria-hidden="true">—</span>}
+            footer={<p className="text-muted-foreground">{buildNote(s)}</p>}
+          />
+        </Figures>
+        <Controls
+          status={s}
+          now={now}
+          command={command}
+          ask={(cmd) => setCommand({ kind: 'confirming', cmd })}
+          confirm={(cmd) => void send(cmd)}
+          cancel={() => setCommand({ kind: 'idle' })}
+        />
+      </div>
       <UpdateNotice status={s} now={now} />
-      <Players status={s} />
-      <Controls
-        status={s}
-        now={now}
-        command={command}
-        ask={(cmd) => setCommand({ kind: 'confirming', cmd })}
-        confirm={(cmd) => void send(cmd)}
-        cancel={() => setCommand({ kind: 'idle' })}
-      />
+      <Sessions status={s} />
       <Activity recent={s.recent} now={now} />
     </div>
   );
 }
 
-function Header({ status }: { status: Status }) {
-  const state = STATES[status.state];
+/** Players of the slots, with a bar of how full the server is. */
+function PlayersFigure({ status }: { status: Status }) {
+  const p = status.players;
   return (
-    <Card>
-      <CardHeader>
-        <CardDescription className="font-semibold tracking-widest uppercase">Enshrouded</CardDescription>
-        <CardTitle>
-          <h1 className="text-3xl font-extrabold">Chronicle</h1>
-        </CardTitle>
-        <CardAction>
-          <Badge variant={state.badge}>
-            {state.moving && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-            {state.label}
-          </Badge>
-        </CardAction>
-      </CardHeader>
-      {(state.hint || status.uptime_secs !== null || status.version !== null) && (
-        <CardContent className="flex flex-col gap-3 text-sm">
-          {state.hint && <p className="text-muted-foreground">{state.hint}</p>}
-          <p className="flex flex-wrap gap-x-6 gap-y-1 text-muted-foreground">
-            {status.uptime_secs !== null && <span>Up for {duration(status.uptime_secs)}</span>}
-            {status.version !== null && <span>Build {status.version}</span>}
+    <StatCard
+      label="Players online"
+      heading
+      value={
+        p === null ? (
+          <>
+            <span aria-hidden="true">—</span>
+            <span className="sr-only">Unknown</span>
+          </>
+        ) : (
+          <>
+            {p.online}
+            <span className="text-xl text-muted-foreground"> / {p.max}</span>
+          </>
+        )
+      }
+      footer={
+        <>
+          <Meter value={p?.online ?? 0} max={p?.max ?? 1} />
+          <p className="text-muted-foreground">
+            {p === null ? "The server doesn't say." : `${p.max - p.online} of ${p.max} slots free`}
           </p>
-        </CardContent>
-      )}
-    </Card>
+        </>
+      }
+    />
   );
+}
+
+/** Whether the running build is Steam's latest. */
+function buildNote(status: Status): string {
+  if (status.update_queued && status.state === 'Online') return 'Update queued';
+  if (status.latest_build_at === null) return "Steam's latest isn't known yet";
+  return status.update_pending ? 'A newer build is on Steam' : 'Up to date';
 }
 
 /** A newer build on Steam than the running server, or one queued for when it is empty. */
@@ -151,42 +185,27 @@ function UpdateNotice({ status, now }: { status: Status; now: number }) {
   );
 }
 
-function Players({ status }: { status: Status }) {
-  const p = status.players;
+/** Who is on, and for how long (Enshrouded shares no names). */
+function Sessions({ status }: { status: Status }) {
+  const sessions = status.players?.sessions ?? [];
+  if (sessions.length === 0) return null;
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Players online</h2>
+          <h2>Who's on</h2>
         </CardTitle>
+        <CardDescription>Enshrouded doesn't share player names.</CardDescription>
       </CardHeader>
       <CardContent>
-        {p === null ? (
-          <p className="text-2xl font-bold text-muted-foreground">
-            <span aria-hidden="true">—</span>
-            <span className="sr-only">Unknown</span>
-          </p>
-        ) : (
-          <>
-            <p className="text-4xl font-extrabold tabular-nums">
-              {p.online}
-              <span className="text-xl text-muted-foreground"> / {p.max}</span>
-            </p>
-            {p.sessions.length > 0 && (
-              <>
-                <ul className="mt-3 flex flex-col gap-1 text-sm">
-                  {p.sessions.map((secs, i) => (
-                    <li key={i} className="flex justify-between gap-4">
-                      <span>Player {i + 1}</span>
-                      <span className="tabular-nums">on for {duration(secs)}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-xs text-muted-foreground">Enshrouded doesn't share player names.</p>
-              </>
-            )}
-          </>
-        )}
+        <ul className="flex flex-col divide-y text-sm">
+          {sessions.map((secs, i) => (
+            <li key={i} className="flex justify-between gap-4 py-2 first:pt-0 last:pb-0">
+              <span className="font-medium">Player {i + 1}</span>
+              <span className="text-muted-foreground tabular-nums">on for {duration(secs)}</span>
+            </li>
+          ))}
+        </ul>
       </CardContent>
     </Card>
   );
@@ -215,35 +234,32 @@ function Controls({
   const sendingAny = (...cmds: Command[]) => command.kind === 'sending' && cmds.includes(command.cmd);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Server controls</h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-wrap gap-3">
+    <ServerControls
+      description={STATES[status.state].hint || undefined}
+      buttons={
+        <>
           <Button disabled={disabled} onClick={() => ask('restart')}>
             {sendingAny('restart') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-            Restart
+            {ENSHROUDED_BUTTONS[0]}
           </Button>
           <Button variant="outline" disabled={disabled} onClick={() => ask('update')}>
             {sendingAny('update', 'update_now') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-            Force update
+            {ENSHROUDED_BUTTONS[1]}
           </Button>
-        </div>
-        {!status.can_control ? (
-          <p className="text-sm text-muted-foreground">The website can't reach the server's controls right now.</p>
-        ) : wait !== null ? (
-          <p className="text-sm text-muted-foreground">Someone just sent a command: the buttons come back in {wait} s.</p>
-        ) : working ? (
-          <p className="text-sm text-muted-foreground">Wait for the current restart or update to finish.</p>
-        ) : null}
-        <div aria-live="polite">
-          <Answer command={command} online={online} confirm={confirm} cancel={cancel} />
-        </div>
-      </CardContent>
-    </Card>
+        </>
+      }
+    >
+      {!status.can_control ? (
+        <p className="text-sm text-muted-foreground">The website can't reach the server's controls right now.</p>
+      ) : wait !== null ? (
+        <p className="text-sm text-muted-foreground">Someone just sent a command: the buttons come back in {wait} s.</p>
+      ) : working ? (
+        <p className="text-sm text-muted-foreground">Wait for the current restart or update to finish.</p>
+      ) : null}
+      <div aria-live="polite">
+        <Answer command={command} online={online} confirm={confirm} cancel={cancel} />
+      </div>
+    </ServerControls>
   );
 }
 
@@ -328,11 +344,11 @@ function Activity({ recent, now }: { recent: Schemas['EnshroudedAction'][]; now:
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <ul className="flex flex-col gap-1 text-sm">
+        <ul className="flex flex-col divide-y text-sm">
           {recent.map((a, i) => (
-            <li key={i} className="flex justify-between gap-4">
+            <li key={i} className="flex justify-between gap-4 py-2 first:pt-0 last:pb-0">
               <span>
-                <span className="font-semibold">{a.name ?? 'A deleted account'}</span>
+                <span className="font-medium">{a.name ?? 'A deleted account'}</span>
                 {actionText(a.action)}
               </span>
               <span className="whitespace-nowrap text-muted-foreground">{ago(now, a.at)}</span>

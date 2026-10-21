@@ -1,0 +1,33 @@
+---
+// A status page (403, 404, 503) in the start page's language: the code in its bolt pill, the
+// heading, a muted line or two (the default slot) and the way on (`actions`), placed like the
+// start page's hero, over its storm.
+import Storm from '@/components/Storm.astro';
+import { badgeVariants } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+
+interface Props {
+  code: number;
+  title: string;
+}
+const { code, title } = Astro.props;
+---
+
+<main class="relative isolate">
+  <Storm />
+  <section class="mx-auto flex max-w-xl flex-col items-center gap-2 px-4 pt-12 pb-16 text-center md:pt-20 lg:pt-24">
+    <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5 tabular-nums')}>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>
+      </svg>
+      {code}
+    </p>
+    <h1 class="text-3xl font-semibold tracking-tight text-balance md:text-4xl">{title}</h1>
+    <div class="flex flex-col gap-1 text-balance text-muted-foreground">
+      <slot />
+    </div>
+    <div class="flex flex-wrap items-center justify-center gap-2 pt-4">
+      <slot name="actions" />
+    </div>
+  </section>
+</main>

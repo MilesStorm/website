@@ -1,7 +1,7 @@
 // The Enshrouded panel in a browser. Against staging it is only looked at, never a Restart or
 // Force update: those act on the real game server.
 import { expect, test } from '@playwright/test';
-import { STAGING, expectAccessible, logIn } from './site';
+import { STAGING, expectAccessible, logIn, shownHeight } from './site';
 
 test('the panel shows the server, in light and dark', async ({ context, page }) => {
   await logIn(context, 'all');
@@ -18,6 +18,14 @@ test('the panel shows the server, in light and dark', async ({ context, page }) 
 });
 
 if (!STAGING) {
+  // The stand-ins' usual answer: online, nobody waiting on a command.
+  test("the placeholder is the heading's, figures' and controls' size, so nothing moves when the status arrives", async ({
+    browser,
+  }) => {
+    const height = (ready: string | null) => shownHeight(browser, '/enshrouded', '[data-overview]', ready, 'all');
+    expect(await height(null)).toBeCloseTo(await height('[data-slot="badge"]'), 0);
+  });
+
   test('a restart asks first, then shows in the recent commands', async ({ context, page }) => {
     await logIn(context, 'all', true);
     await page.goto('/enshrouded');

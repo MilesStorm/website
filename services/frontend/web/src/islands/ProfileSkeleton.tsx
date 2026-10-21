@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils';
 // sharing card only for viewers with `arcane` (the CSS gate, from the page's own attributes).
 
 /** A button's place: a pulse as wide as its label (`sm`: h-8, `default`: h-9). */
-function ButtonPlace({ label, size = 'sm' }: { label: string; size?: 'sm' | 'default' }) {
+export function ButtonPlace({ label, size = 'sm' }: { label: string; size?: 'sm' | 'default' }) {
   return (
     <span
       aria-hidden="true"

@@ -1,13 +1,13 @@
 ---
 import Layout from '@/layouts/Layout.astro';
-import Panel from '@/components/Panel.astro';
+import StatusPage from '@/components/StatusPage.astro';
 import { buttonVariants } from '@/components/ui/button';
 ---
 
 <Layout title="No access">
-  <Panel title="You don't have access to this page">
+  <StatusPage code={403} title="You don't have access to this page">
     <p>Your account doesn't have the permission this page needs.</p>
-    <p class="text-sm text-muted-foreground">Got an invite link? Open it to join.</p>
-    <a href="/" class={buttonVariants()}>Go home</a>
-  </Panel>
+    <p class="text-sm">Got an invite link? Open it to join.</p>
+    <a slot="actions" href="/" class={buttonVariants()}>Go home</a>
+  </StatusPage>
 </Layout>
