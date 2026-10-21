@@ -30,6 +30,10 @@ test.describe('without JavaScript the navbar is still right', () => {
     for (const tool of ['Ark', 'Enshrouded', 'Arcane', 'Admin']) {
       await expect(nav.getByRole('link', { name: tool, exact: true })).toBeVisible();
     }
+    await expect(nav.getByRole('link', { name: 'Home', exact: true })).toHaveAttribute('aria-current', 'page');
+    await page.goto('/admin');
+    await expect(nav.getByRole('link', { name: 'Admin', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(nav.getByRole('link', { name: 'Home', exact: true })).not.toHaveAttribute('aria-current');
   });
 });
 

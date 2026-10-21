@@ -3,12 +3,13 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Button } from '@/components/ui/button';
-import { FieldGroup, FieldSeparator } from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldSeparator } from '@/components/ui/field';
 import { FormAlert } from '@/components/FormAlert';
 import { OAuthButtons } from '@/components/OAuthButtons';
 import { TextField } from '@/components/TextField';
 import { client } from '@/api/client';
 import { attempt, oauthError } from '@/lib/errors';
+import { FORGOT_LINK, NO_ACCOUNT } from '@/lib/copy';
 import { landAfterLogin, nextFrom } from '@/lib/login';
 
 const schema = z.object({
@@ -33,30 +34,35 @@ export function LoginForm() {
 
   const withNext = (path: string) => (next ? `${path}?next=${encodeURIComponent(next)}` : path);
   return (
-    <div className="flex flex-col gap-6">
-      <OAuthButtons next={next} verb="Log in" />
-      <FieldSeparator>or</FieldSeparator>
-      <form onSubmit={submit} noValidate className="flex flex-col gap-6">
+    <div className="grid gap-6">
+      <form onSubmit={submit} noValidate>
         <FieldGroup>
           <TextField form={form} name="username" label="Username" autoComplete="username" />
-          <TextField form={form} name="password" label="Password" type="password" autoComplete="current-password" />
+          <TextField
+            form={form}
+            name="password"
+            label="Password"
+            type="password"
+            autoComplete="current-password"
+            action={
+              <a href="/forgot-password" className="ml-auto text-sm underline-offset-4 hover:underline">
+                {FORGOT_LINK}
+              </a>
+            }
+          />
+          <FormAlert message={error} />
+          <Field>
+            <Button type="submit" disabled={form.formState.isSubmitting}>
+              Log in
+            </Button>
+          </Field>
         </FieldGroup>
-        <FormAlert message={error} />
-        <Button type="submit" disabled={form.formState.isSubmitting}>
-          Log in
-        </Button>
       </form>
-      <div className="flex flex-col items-center gap-2 text-sm">
-        <a href="/forgot-password" className="underline underline-offset-4">
-          Forgot your password?
-        </a>
-        <p className="text-muted-foreground">
-          No account?{' '}
-          <a href={withNext('/register')} className="text-foreground underline underline-offset-4">
-            Sign up
-          </a>
-        </p>
-      </div>
+      <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
+      <OAuthButtons next={next} verb="Log in" />
+      <FieldDescription className="px-6 text-center">
+        {NO_ACCOUNT.text} <a href={withNext('/register')}>{NO_ACCOUNT.link}</a>
+      </FieldDescription>
     </div>
   );
 }

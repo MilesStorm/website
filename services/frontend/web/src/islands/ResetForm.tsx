@@ -5,14 +5,14 @@ import { z } from 'zod';
 import { CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { FieldGroup } from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup } from '@/components/ui/field';
 import { FormAlert } from '@/components/FormAlert';
 import { TextField } from '@/components/TextField';
 import { client } from '@/api/client';
 import { applySession } from '@/api/session';
 import { attempt } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
-import { MIN_PASSWORD } from './RegisterForm';
+import { MIN_PASSWORD, NEW_PASSWORD_HINT } from '@/lib/copy';
 
 const schema = z
   .object({
@@ -57,7 +57,7 @@ export function ResetForm() {
     );
   }
   return (
-    <form onSubmit={submit} noValidate className="flex flex-col gap-6">
+    <form onSubmit={submit} noValidate>
       <FieldGroup>
         <TextField
           form={form}
@@ -65,19 +65,21 @@ export function ResetForm() {
           label="New password"
           type="password"
           autoComplete="new-password"
-          description={`At least ${MIN_PASSWORD} characters.`}
+          description={NEW_PASSWORD_HINT}
         />
         <TextField form={form} name="again" label="Type it again" type="password" autoComplete="new-password" />
+        <FormAlert message={error?.message} />
+        <Field>
+          <Button type="submit" disabled={form.formState.isSubmitting}>
+            Change password
+          </Button>
+          {error?.expired && (
+            <FieldDescription className="text-center">
+              <a href="/forgot-password">Get a new link</a>
+            </FieldDescription>
+          )}
+        </Field>
       </FieldGroup>
-      <FormAlert message={error?.message} />
-      {error?.expired && (
-        <a href="/forgot-password" className="text-center text-sm underline underline-offset-4">
-          Get a new link
-        </a>
-      )}
-      <Button type="submit" disabled={form.formState.isSubmitting}>
-        Change password
-      </Button>
     </form>
   );
 }

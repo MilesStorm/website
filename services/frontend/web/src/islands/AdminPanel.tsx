@@ -316,7 +316,7 @@ function Assigned({
           title={unknown(h.name) ? 'A permission this site doesn’t use yet' : undefined}
         >
           {h.name}
-          {unknown(h.name) && <span className="text-muted-foreground">(unused)</span>}
+          {unknown(h.name) && <span>(unused)</span>}
           <RemoveButton
             label={`Remove ${kind} ${h.name} from ${owner}`}
             title={`Remove ${h.name} from ${owner}?`}
@@ -546,7 +546,8 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
               Copy it now: it won't be shown again. Send it to the people you're inviting. Don't open it yourself while
               logged in: that would use it.
             </p>
-            <div className="flex gap-2">
+            {/* In the text colour: maia's input and outline button take the muted one around them. */}
+            <div className="flex gap-2 text-foreground">
               <Input readOnly aria-label="New invite link" className="font-mono" value={link} />
               <Button type="button" variant="outline" onClick={() => void copy()}>
                 {copied ? 'Copied' : 'Copy'}

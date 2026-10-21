@@ -5,6 +5,8 @@ import { Menu } from 'lucide-react';
 import Gate from './Gate.astro';
 import Logo from './Logo.astro';
 import { buttonVariants } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
 import { ModeToggle } from '@/islands/ModeToggle';
 import { UserMenu } from '@/islands/UserMenu';
 import type { KnownPermission } from '@/api/session';
@@ -16,29 +18,38 @@ const LINKS: { href: Href; label: string; requires: KnownPermission }[] = [
   { href: '/arcane', label: 'Arcane', requires: 'arcane' },
   { href: '/admin', label: 'Admin', requires: 'manage_permissions' },
 ];
+// shadcn's site header (ui.shadcn.com): plain background, no rule under it, ghost links. Like
+// the site's, the current page's link looks the same as the rest: `aria-current` marks it for
+// assistive technology only.
 const link = buttonVariants({ variant: 'ghost', size: 'sm' });
+// Built as files (`build.format: 'file'`): /login.html is /login, /index.html is /.
+const here = Astro.url.pathname.replace(/(\/index)?\.html$/, '') || '/';
+const current = (href: Href) => (href === here ? 'page' : undefined);
 ---
 
-<header class="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-  <nav aria-label="Main" class="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4">
-    <a href="/" class="mr-2 flex items-center gap-2 font-semibold">
-      <Logo class="size-8" />
+<header class="sticky top-0 z-40 w-full bg-background">
+  <nav aria-label="Main" class="flex h-16 w-full items-center gap-2 px-4 md:px-6">
+    <a href="/" class="mr-4 flex items-center gap-2 font-semibold">
+      <Logo class="size-6" />
       <span>MilesStorm</span>
     </a>
-    <ul class="hidden items-center gap-1 md:flex">
-      <li><a href="/" class={link}>Home</a></li>
+    <ul class="hidden items-center md:flex">
+      <li><a href="/" class={link} aria-current={current('/')}>Home</a></li>
       {
         LINKS.map((l) => (
           <Gate as="li" requires={l.requires}>
-            <a href={l.href} class={link}>{l.label}</a>
+            <a href={l.href} class={link} aria-current={current(l.href)}>
+              {l.label}
+            </a>
           </Gate>
         ))
       }
     </ul>
     <div class="ml-auto flex items-center gap-2">
       <ModeToggle client:load />
+      <div class="flex h-4"><Separator orientation="vertical" /></div>
       <Gate session="out" class="flex items-center gap-2">
-        <a href="/login" class={link}>Log in</a>
+        <a href="/login" class={cn(link, 'hidden sm:inline-flex')}>Log in</a>
         <a href="/register" class={buttonVariants({ size: 'sm' })}>Register</a>
       </Gate>
       <Gate session="in">
@@ -51,15 +62,18 @@ const link = buttonVariants({ variant: 'ghost', size: 'sm' });
           <Menu aria-hidden="true" />
         </summary>
         <ul class="absolute right-0 mt-2 flex w-48 flex-col gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          <li><a href="/" class={link + ' w-full justify-start'}>Home</a></li>
+          <li><a href="/" class={link + ' w-full justify-start'} aria-current={current('/')}>Home</a></li>
           {
             LINKS.map((l) => (
               <Gate as="li" requires={l.requires}>
-                <a href={l.href} class={link + ' w-full justify-start'}>{l.label}</a>
+                <a href={l.href} class={link + ' w-full justify-start'} aria-current={current(l.href)}>
+                  {l.label}
+                </a>
               </Gate>
             ))
           }
-          <Gate as="li" session="in"><a href="/profile" class={link + ' w-full justify-start'}>Profile</a></Gate>
+          <Gate as="li" session="in"><a href="/profile" class={link + ' w-full justify-start'} aria-current={current('/profile')}>Profile</a></Gate>
+          <Gate as="li" session="out" class="sm:hidden"><a href="/login" class={link + ' w-full justify-start'}>Log in</a></Gate>
         </ul>
       </details>
     </div>

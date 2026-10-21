@@ -1,14 +1,14 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 import Panel from '@/components/Panel.astro';
-import { FormSkeleton } from '@/islands/FormSkeleton';
+import { InviteSkeleton } from '@/islands/FormSkeleton';
 import { InviteOpen } from '@/islands/InviteOpen';
 ---
 
 <Layout title="You're invited" noReferrer>
   <Panel title="You're invited">
     <InviteOpen client:only="react">
-      <FormSkeleton slot="fallback" />
+      <InviteSkeleton slot="fallback" />
     </InviteOpen>
   </Panel>
 </Layout>

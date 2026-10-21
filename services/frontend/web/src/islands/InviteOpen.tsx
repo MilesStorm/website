@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
 import { FormAlert } from '@/components/FormAlert';
+import { InviteSkeleton } from './FormSkeleton';
 import { client, type Schemas } from '@/api/client';
 import { applySession, fetchBootstrap } from '@/api/session';
 import { attempt, type Outcome } from '@/lib/errors';
@@ -29,7 +29,7 @@ export function InviteOpen() {
     });
   }, []);
 
-  if (!opened) return <Skeleton className="h-24 w-full" role="status" aria-label="Opening the invite" />;
+  if (!opened) return <InviteSkeleton />;
   if (!opened.ok) {
     return (
       <div className="flex flex-col gap-4">

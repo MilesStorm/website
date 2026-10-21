@@ -5,9 +5,11 @@ import { z } from 'zod';
 import { CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Field, FieldDescription, FieldGroup } from '@/components/ui/field';
 import { FormAlert } from '@/components/FormAlert';
 import { TextField } from '@/components/TextField';
 import { client } from '@/api/client';
+import { FORGOT_INTRO, NO_PASSWORD } from '@/lib/copy';
 import { attempt } from '@/lib/errors';
 
 const schema = z.object({ login: z.string().trim().min(1, 'Enter your username or email.') });
@@ -37,18 +39,21 @@ export function ForgotForm() {
     );
   }
   return (
-    <form onSubmit={submit} noValidate className="flex flex-col gap-6">
-      <p className="text-sm text-muted-foreground">
-        Enter your username or email, and we'll email you a link to choose a new password.
-      </p>
-      <TextField form={form} name="login" label="Username or email" autoComplete="username" />
-      <FormAlert message={error} />
-      <Button type="submit" disabled={form.formState.isSubmitting}>
-        Email me a link
-      </Button>
-      <p className="text-xs text-muted-foreground">
-        Log in with GitHub or Google? Then you have no password here: use that button on the log in page.
-      </p>
+    <form onSubmit={submit} noValidate>
+      <FieldGroup>
+        <FieldDescription className="text-center">{FORGOT_INTRO}</FieldDescription>
+        <TextField form={form} name="login" label="Username or email" autoComplete="username" />
+        <FormAlert message={error} />
+        <Field>
+          <Button type="submit" disabled={form.formState.isSubmitting}>
+            Email me a link
+          </Button>
+          <FieldDescription className="text-center">
+            {NO_PASSWORD.text} <a href="/login">{NO_PASSWORD.link}</a>
+            {NO_PASSWORD.end}
+          </FieldDescription>
+        </Field>
+      </FieldGroup>
     </form>
   );
 }

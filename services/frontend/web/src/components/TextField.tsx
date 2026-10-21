@@ -1,6 +1,7 @@
 // One labelled input of a react-hook-form form: its error is tied to it (`aria-describedby`)
-// and announced (FieldError is an alert).
-import { useId } from 'react';
+// and announced (FieldError is an alert). `action` sits on the label's line (a link, with
+// `ml-auto` to end it: "Forgot your password?").
+import { useId, type ReactNode } from 'react';
 import type { FieldValues, Path, UseFormReturn } from 'react-hook-form';
 import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -12,15 +13,23 @@ interface Props<T extends FieldValues> {
   type?: 'text' | 'email' | 'password';
   autoComplete: string;
   description?: string;
+  action?: ReactNode;
 }
 
-export function TextField<T extends FieldValues>({ form, name, label, type = 'text', autoComplete, description }: Props<T>) {
+export function TextField<T extends FieldValues>({ form, name, label, type = 'text', autoComplete, description, action }: Props<T>) {
   const id = useId();
   const { error } = form.getFieldState(name, form.formState);
   const described = [description && `${id}-description`, error && `${id}-error`].filter(Boolean).join(' ');
   return (
     <Field data-invalid={!!error || undefined}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      {action ? (
+        <div className="flex items-center">
+          <FieldLabel htmlFor={id}>{label}</FieldLabel>
+          {action}
+        </div>
+      ) : (
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      )}
       <Input
         id={id}
         type={type}
