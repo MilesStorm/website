@@ -9,8 +9,7 @@
 //     <meta name="traceparent">, current until the page has loaded and gone quiet;
 //   - wraps window.fetch so each request runs inside the current span's context, which is what
 //     Faro's fetch instrumentation reads as the parent;
-//   - starts a `navigate <route>` root on client-side route changes, and a `camera session` span
-//     for the arcane WebSocket, whose context it passes in the URL;
+//   - starts a `camera session` span for the arcane WebSocket, whose context it passes in the URL;
 //   - sits between Faro's tracer and exporter (a SpanProcessor), so a click or page load ends
 //     after its last child span, and a trace is held back until its clock offset is known.
 // Labels come from data-trace-name, aria-label or button text (buttons whose text is dynamic need
@@ -344,7 +343,6 @@
     var current = null;
     var pending = null;
     var loadedAt = doc.readyState === 'complete' ? now() : 0;
-    var lastRoute = null;
 
     function pathOf(href) {
       try { return templatePath(new URL(href, win.location.href).pathname); } catch (e) { return '/'; }
@@ -465,19 +463,6 @@
     function onSubmit(e) {
       try {
         if (e.target && e.target.tagName) interaction('submit', labelFor(e.target, e.submitter));
-      } catch (err) { /* never break the page */ }
-    }
-
-    // A client-side route change, named by templated path only (no query string: reset and invite
-    // codes). The click or submit that caused it already names the trace, and calls made while
-    // the page load is current belong to the page load.
-    function onRoute() {
-      try {
-        var route = templatePath(win.location.pathname);
-        if (route === lastRoute) return;
-        lastRoute = route;
-        if ((pending && pending.type !== 'navigate') || (current && current.waitLoad)) return;
-        interaction('navigate', route);
       } catch (err) { /* never break the page */ }
     }
 
@@ -602,17 +587,6 @@
       });
       win.fetch = wrapFetch(win.fetch);
       if (typeof win.WebSocket === 'function') win.WebSocket = wrapWebSocket(win.WebSocket);
-      var history = win.history;
-      if (history && typeof history.pushState === 'function') {
-        var push = history.pushState;
-        history.pushState = function () {
-          var result = push.apply(this, arguments);
-          onRoute();
-          return result;
-        };
-        win.addEventListener('popstate', onRoute);
-      }
-      lastRoute = templatePath(win.location.pathname);
       if (deps.spans) deps.spans.watch(watcher);
       if (deps.PerformanceObserver) {
         try { new deps.PerformanceObserver(onLongTasks).observe({ type: 'longtask', buffered: true }); } catch (err) { /* unsupported */ }

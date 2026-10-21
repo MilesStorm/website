@@ -71,10 +71,6 @@ which the layout loads synchronously in `<head>`, before every module script, so
   ends 300 ms after its last fetch span ended (at most 10 s), and never before a child: OTel's
   fetch span ends when the response body is read and reaches the span processor 300 ms later, so
   trace.js counts child spans in an OTel `SpanProcessor` rather than trusting the fetch promise.
-- starts a `navigate <route>` span the same way on a client-side route change
-  (`history.pushState`, `popstate`), named by the templated path only, never the query string.
-  A route change caused by a click keeps the click as the root, and one during the page load
-  stays in the page load. Faro's navigation instrumentation is off: it records query strings.
 - gives the arcane camera WebSocket a `camera session` span (above), by wrapping `window.WebSocket`.
 - names the span from `data-trace-name`, then `aria-label`, then the button's text (links: their
   path). Give a button `data-trace-name="…"` when its text isn't a good name or holds user data.
@@ -84,7 +80,7 @@ which the layout loads synchronously in `<head>`, before every module script, so
   someone else's trace.
 - ends the page-load span once the page has loaded and no server call has run for 1.5 s (at most
   15 s), so the islands' first calls land under it. A click that calls the server ends it.
-- records long tasks (Chromium) as `longtask` events on the open click, navigate or page-load span.
+- records long tasks (Chromium) as `longtask` events on the open click or page-load span.
 - only starts Faro on milesstorm.com (`deployment.environment.name=production`) and
   staging.milesstorm.com (`staging`), so `astro dev` and a local server send nothing.
 

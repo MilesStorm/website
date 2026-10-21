@@ -114,7 +114,6 @@ function setup({ meta = null, readyState = 'loading', fetchSpans = false, path =
   const win = {
     location: { href: 'https://milesstorm.com' + path, pathname: path, origin: 'https://milesstorm.com' },
     addEventListener: (type, fn) => { listeners['win:' + type] = fn; },
-    history: { pushState(state, title, url) { win.location.pathname = new URL(url, win.location.href).pathname; } },
     WebSocket: FakeSocket,
     fetch(input, init) {
       const parent = otel.context.active().span;
@@ -143,7 +142,6 @@ function setup({ meta = null, readyState = 'loading', fetchSpans = false, path =
     click: (target) => listeners.click({ target }),
     submit: (target, submitter) => listeners.submit({ target, submitter }),
     load: () => listeners['win:load'](),
-    popstate: () => listeners['win:popstate'](),
     respondWith: (fn) => { respond = fn; },
   };
 }
@@ -791,40 +789,6 @@ test('forceFlush sends held traces uncorrected', () => {
   assert.equal(h.exported.length, 0);
   h.processor.forceFlush();
   assert.deepEqual(ids(h.exported), ['POST']);
-});
-
-test('client-side route changes start a lazy navigate root named by templated path', async () => {
-  const h = setup({ path: '/' });
-  h.win.history.pushState(null, '', '/blog/42?code=secret#x');
-  assert.equal(h.spans.length, 0, 'no span before a server call');
-  await h.win.fetch('/api/get_post');
-  assert.equal(h.spans[0].name, 'navigate /blog/{id}');
-  assert.equal(h.spans[0].opts.root, true);
-  assert.equal(h.spans[0].opts.attributes['ui.event'], 'navigate');
-  assert.equal(h.calls[0].parent, h.spans[0]);
-  // Back button.
-  h.win.location.pathname = '/';
-  h.popstate();
-  await h.win.fetch('/api/list');
-  assert.equal(h.spans[1].name, 'navigate /');
-  assert.equal(h.spans[0].endTime !== undefined, true, 'the new root ended the old one');
-});
-
-test('a route change caused by a click keeps the click as the root; same-route pushes are ignored', async () => {
-  const h = setup({ path: '/' });
-  h.win.history.pushState(null, '', '/?tab=2');
-  h.click(el('a', { href: '/login' }, 'Log in'));
-  h.win.history.pushState(null, '', '/login');
-  await h.win.fetch('/api/a');
-  assert.deepEqual(ids(h.spans), ['click /login']);
-});
-
-test('route changes while the page load is current stay in the page load', async () => {
-  const h = setup({ meta: REMOTE, path: '/' });
-  h.win.history.pushState(null, '', '/login');
-  await h.win.fetch('/api/check_login_status');
-  assert.deepEqual(ids(h.spans), ['page load /']);
-  assert.equal(h.calls[0].parent, h.spans[0]);
 });
 
 test('the arcane WebSocket gets a camera session span whose context rides in the URL', () => {
