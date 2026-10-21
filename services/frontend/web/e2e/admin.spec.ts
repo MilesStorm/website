@@ -1,10 +1,16 @@
 // The admin panel in a browser. Against staging it is only looked at: no role, permission or
 // invite link is changed there.
 import { expect, test, type Page } from '@playwright/test';
-import { STAGING, expectAccessible, logIn } from './site';
+import { STAGING, expectAccessible, logIn, shownHeight } from './site';
 
 async function tab(page: Page, name: 'Users' | 'Roles' | 'Invites') {
   await page.getByRole('tab', { name }).click();
+}
+
+/** Gives `owner` one more role or permission, from its add menu. */
+async function add(page: Page, kind: 'role' | 'permission', owner: string, name: string) {
+  await page.getByRole('button', { name: `Add ${kind} to ${owner}` }).click();
+  await page.getByRole('menuitem', { name, exact: true }).click();
 }
 
 test('the panel lists users, roles and invite links, in light and dark', async ({ context, page }) => {
@@ -44,8 +50,7 @@ if (!STAGING) {
     await page.goto('/admin');
     await page.getByLabel('Search users').fill(them);
     await expect(page.getByRole('cell', { name: them, exact: true })).toBeVisible();
-    await page.getByLabel(`Role to add to ${them}`).selectOption('arcane_user');
-    await page.getByRole('button', { name: `Add role to ${them}` }).click();
+    await add(page, 'role', them, 'arcane_user');
     const remove = page.getByRole('button', { name: `Remove role arcane_user from ${them}` });
     await expect(remove).toBeVisible();
     await expectAccessible(page);
@@ -60,8 +65,7 @@ if (!STAGING) {
     await tab(page, 'Roles');
     await expect(page.getByRole('row', { name: /^admin / }).getByText('(unused)')).toBeVisible();
     await page.getByLabel('Search roles').fill(role);
-    await page.getByLabel(`Permission to add to ${role}`).selectOption('llama');
-    await page.getByRole('button', { name: `Add permission to ${role}` }).click();
+    await add(page, 'permission', role, 'llama');
     const revoke = page.getByRole('button', { name: `Remove permission llama from ${role}` });
     await expect(revoke).toBeVisible();
     await revoke.click();
@@ -83,8 +87,7 @@ if (!STAGING) {
     // manage_permissions, on the test's own role: asks, then goes.
     await page.getByRole('tab', { name: 'Roles' }).click();
     await page.getByLabel('Search roles').fill(role);
-    await page.getByLabel(`Permission to add to ${role}`).selectOption('manage_permissions');
-    await page.getByRole('button', { name: `Add permission to ${role}` }).click();
+    await add(page, 'permission', role, 'manage_permissions');
     await page.getByRole('button', { name: `Remove permission manage_permissions from ${role}` }).click();
     const grant = page.getByRole('alertdialog', { name: `Remove manage_permissions from ${role}?` });
     await expect(grant.getByText(/manage_permissions is what lets anyone use this page/)).toBeVisible();
@@ -117,6 +120,32 @@ if (!STAGING) {
     await page.getByRole('button', { name: 'Make link' }).click();
     await expect(page.getByText(/Links can't give a role with admin rights/)).toBeVisible();
     await expectAccessible(page);
+  });
+
+  // The stand-ins' users fill more than a page: the placeholder's usual answer.
+  test("the panel's placeholder is the panel's size, so nothing moves when it arrives", async ({ browser }) => {
+    const height = (ready: string | null) => shownHeight(browser, '/admin', 'main', ready, 'all');
+    expect(await height(null)).toBeCloseTo(await height('nav[aria-label="Pages"]'), 0);
+  });
+
+  test("the invite form's placeholder, until the roles are in, is the form's size", async ({ context, page }) => {
+    await logIn(context, 'all');
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    await page.route('**/api/admin/roles/all', async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.goto('/admin');
+    // The panel itself (its tabs work), not the page's placeholder.
+    await expect(page.locator('main [role="status"]')).toHaveCount(0);
+    await tab(page, 'Invites');
+    await page.evaluate(() => document.fonts.ready);
+    const form = page.getByRole('tabpanel').locator('[data-slot="card"]').first();
+    const placeholder = (await form.boundingBox())!.height;
+    release();
+    await expect(page.getByRole('button', { name: 'Make link' })).toBeVisible();
+    expect((await form.boundingBox())!.height).toBeCloseTo(placeholder, 0);
   });
 
   test('the user list has pages', async ({ context, page }) => {

@@ -72,8 +72,8 @@ describe('the users tab', () => {
     // Typing waited: no request per letter.
     expect(calls.some((c) => c.call.endsWith('search=a'))).toBe(false);
 
-    await userEvent.selectOptions(screen.getByLabelText('Role to add to ann'), 'llama_crew');
     await userEvent.click(screen.getByRole('button', { name: 'Add role to ann' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'llama_crew' }));
     await waitFor(() => expect(calls.some((c) => c.call === 'PUT /api/admin/users/5/roles/3')).toBe(true));
     await userEvent.click(screen.getByRole('button', { name: 'Remove role arcane_user from ann' }));
     await waitFor(() => expect(calls.some((c) => c.call === 'DELETE /api/admin/users/5/roles/2')).toBe(true));
@@ -158,6 +158,7 @@ describe('the roles tab', () => {
     await userEvent.click(await screen.findByRole('tab', { name: 'Roles' }));
     expect(await screen.findByText('(unused)')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Add permission to arcane_user' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'arcane' }));
     await waitFor(() => expect(calls.some((c) => c.call === 'PUT /api/admin/roles/2/permissions/3')).toBe(true));
   });
 });
