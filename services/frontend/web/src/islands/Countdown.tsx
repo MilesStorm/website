@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Card, CardContent } from '@/components/ui/card';
 
 const DAY = 86_400;
 
@@ -22,11 +23,35 @@ export function Countdown({ random = Math.random }: { random?: () => number }) {
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, [random]);
-  if (left === null) return <p className="text-sm text-muted-foreground">calculating...</p>;
-  const [d, h, m, s] = split(left);
+  if (left === null) return <CountdownSkeleton />;
+  return <Tiles values={split(left)} />;
+}
+
+const UNITS = ['Days', 'Hours', 'Minutes', 'Seconds'];
+
+/** The four figures in cards, or a pulse in each while there are none. */
+function Tiles({ values }: { values: number[] | null }) {
   return (
-    <p className="font-mono text-4xl tabular-nums" role="timer">
-      {d}d {h}h {m}m {s}s
-    </p>
+    <div role={values ? 'timer' : undefined} className="grid w-full max-w-xl grid-cols-4 gap-2 sm:gap-4">
+      {UNITS.map((unit, i) => (
+        <Card key={unit} size="sm">
+          <CardContent className="flex flex-col items-center gap-1">
+            <span className="block h-10 text-3xl leading-10 font-semibold tracking-tight tabular-nums sm:h-12 sm:text-5xl sm:leading-12">
+              {values ? values[i] : <span className="inline-block h-full w-10 animate-pulse rounded-xl bg-muted align-top sm:w-14" />}
+            </span>
+            <span className="text-xs text-muted-foreground">{unit}</span>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/** The countdown's place until it has drawn its moment: the same cards, pulsing. */
+export function CountdownSkeleton() {
+  return (
+    <div role="status" aria-label="Loading" aria-busy="true" className="flex w-full justify-center">
+      <Tiles values={null} />
+    </div>
   );
 }

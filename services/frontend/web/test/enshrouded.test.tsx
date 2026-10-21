@@ -48,8 +48,9 @@ describe('the Enshrouded panel', () => {
     render(<EnshroudedPanel />);
     expect(await screen.findByText('Online', { exact: true })).toBeTruthy();
     for (const text of [
-      'Up for 1 d 1 h',
-      'Build 1269579',
+      '1 d 1 h',
+      '1269579',
+      '14 of 16 slots free',
       'A new build came out 2 h 30 min ago.',
       'on for 5 min',
       'on for 2 h 5 min',

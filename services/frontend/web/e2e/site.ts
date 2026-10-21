@@ -51,18 +51,25 @@ export async function expectAccessible(page: Page): Promise<void> {
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 }
 
-/** The height of `measure` on `path`, as `who`: with scripts off, holding the placeholder; with
- * them on, once `ready` (a locator in `main`) shows. Equal: nothing moves when the page arrives. */
+/** The height of `measure` on `path`, as `who` (`fresh` as in logIn), in `viewport` (a test's own
+ * fixture; the project's when not given): with scripts off, holding
+ * the placeholder; with them on, once `ready` (a locator in `main`) shows. Equal: nothing moves
+ * when the page arrives. */
 export async function shownHeight(
   browser: Browser,
   path: string,
   measure: string,
   ready: string | null,
   who: Who = 'anonymous',
+  fresh: boolean | string = false,
+  viewport?: { width: number; height: number } | null,
 ): Promise<number> {
-  const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled: ready !== null });
-  await logIn(context, who);
+  const { use } = test.info().project;
+  const size = viewport ?? use.viewport;
+  const context = await browser.newContext({ ...use, viewport: size, javaScriptEnabled: ready !== null });
+  await logIn(context, who, fresh);
   const page = await context.newPage();
+  expect(page.viewportSize()).toEqual(size);
   await page.goto(path);
   await page.locator(`main ${ready ?? '[role="status"]'}`).first().waitFor();
   await page.evaluate(() => document.fonts.ready);

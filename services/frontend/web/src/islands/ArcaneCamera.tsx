@@ -3,9 +3,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { wsUrl } from '@/api/client';
+import { ExtensionCard, RollCard, UNDER_CAMERA } from '@/islands/ArcaneSkeleton';
 import {
   CAMERA_FRAME_MS,
-  EXTENSION_XPI,
   PageTimings,
   REPLY_WAIT_MS,
   detectionLines,
@@ -39,6 +39,7 @@ export function ArcaneCamera() {
   const [debugText, setDebugText] = useState('');
   const [lastRoll, setLastRoll] = useState<string | null>(null);
   const [timings, setTimings] = useState('');
+  const [sized, setSized] = useState(false);
   // Bumped by Reconnect: a new session, camera and connection.
   const [round, setRound] = useState(0);
 
@@ -187,15 +188,24 @@ export function ArcaneCamera() {
     );
 
   return (
-    <div className="flex flex-col items-center gap-4">
-      <div className="relative w-full max-w-2xl">
-        <video ref={video} className="w-full rounded-xl bg-muted" autoPlay playsInline muted aria-label="Camera" />
-        <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full rounded-xl" aria-hidden="true" />
-        <div className="absolute top-2 left-2">{status}</div>
+    <div className="flex flex-col gap-6">
+      <div className="relative overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10">
+        {/* 16:9, as the placeholder, until the camera says its own shape. */}
+        <video
+          ref={video}
+          className={sized ? 'block w-full' : 'block aspect-video w-full'}
+          autoPlay
+          playsInline
+          muted
+          aria-label="Camera"
+          onLoadedMetadata={() => setSized(true)}
+        />
+        <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true" />
+        <div className="absolute top-3 left-3">{status}</div>
         <Button
           size="sm"
           variant="secondary"
-          className="absolute top-2 right-2"
+          className="absolute top-3 right-3"
           aria-pressed={debug}
           onClick={() => setDebug((d) => !d)}
         >
@@ -213,58 +223,37 @@ export function ArcaneCamera() {
               : connection.message}
       </p>
       {connection.kind === 'disconnected' && (
-        <Button onClick={() => setRound((n) => n + 1)}>Reconnect</Button>
+        <Button className="self-center" onClick={() => setRound((n) => n + 1)}>
+          Reconnect
+        </Button>
       )}
-      <p className="w-full max-w-2xl text-center text-xs text-muted-foreground">
-        Your latest roll's picture is kept for 10 minutes so you can flag it as wrong from the browser extension. It's
-        only saved for training if you flag it or turn on sharing in your profile.
-      </p>
-      <p className="w-full max-w-2xl text-center text-2xl font-bold tabular-nums" aria-live="polite">
-        {lastRoll === null ? (
-          <span className="text-base font-normal text-muted-foreground italic">Roll some dice</span>
-        ) : (
-          <>
-            <span className="font-normal text-muted-foreground">Last roll: </span>
-            {lastRoll}
-          </>
-        )}
-      </p>
-      <Card className="w-full max-w-2xl">
-        <CardContent className="flex flex-col gap-1 text-sm">
-          <p>
-            <span className="font-semibold">Playing on Roll20? </span>
-            The Firefox extension types each roll into your game's chat, where Roll20 shows the total.{' '}
-            <a className="font-medium text-primary underline underline-offset-4" href={EXTENSION_XPI}>
-              Install the extension
-            </a>
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Firefox asks you to confirm. If it only downloads the file, open it from the downloads list. It updates itself
-            after that.
-          </p>
-        </CardContent>
-      </Card>
       {debug && (
-        <div className="flex w-full max-w-2xl flex-col gap-2 rounded-xl border bg-card p-3 font-mono text-xs">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-muted-foreground">frame_ms</span>
-            <span className="font-bold tabular-nums">{frameMs}ms</span>
-            <span className="text-muted-foreground">detections</span>
-            <span className="font-bold tabular-nums">{detections}</span>
-            <span className="font-bold tabular-nums">{timings}</span>
-            <span className="text-muted-foreground">ws</span>
-            <span className="font-bold">
-              {{ connecting: 'connecting', connected: 'open', disconnected: 'closed', error: 'error' }[connection.kind]}
-            </span>
-          </div>
-          {serverError && <div className="break-all text-destructive">server: {serverError}</div>}
-          {debugText ? (
-            <pre className="overflow-x-auto leading-5 whitespace-pre-wrap">{debugText}</pre>
-          ) : connection.kind === 'connected' ? (
-            <div className="text-muted-foreground italic">no detections yet</div>
-          ) : null}
-        </div>
+        <Card size="sm">
+          <CardContent className="flex flex-col gap-2 font-mono text-xs">
+            <div className="flex flex-wrap items-center gap-4">
+              <span className="text-muted-foreground">frame_ms</span>
+              <span className="font-bold tabular-nums">{frameMs}ms</span>
+              <span className="text-muted-foreground">detections</span>
+              <span className="font-bold tabular-nums">{detections}</span>
+              <span className="font-bold tabular-nums">{timings}</span>
+              <span className="text-muted-foreground">ws</span>
+              <span className="font-bold">
+                {{ connecting: 'connecting', connected: 'open', disconnected: 'closed', error: 'error' }[connection.kind]}
+              </span>
+            </div>
+            {serverError && <div className="break-all text-destructive">server: {serverError}</div>}
+            {debugText ? (
+              <pre className="overflow-x-auto leading-5 whitespace-pre-wrap">{debugText}</pre>
+            ) : connection.kind === 'connected' ? (
+              <div className="text-muted-foreground italic">no detections yet</div>
+            ) : null}
+          </CardContent>
+        </Card>
       )}
+      <div className={UNDER_CAMERA}>
+        <RollCard roll={lastRoll} />
+        <ExtensionCard />
+      </div>
       {/* Off-screen: the frame is drawn here to be encoded, never shown. */}
       <canvas ref={capture} hidden />
     </div>

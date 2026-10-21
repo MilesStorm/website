@@ -133,6 +133,11 @@ if (!STAGING) {
     await expectAccessible(page);
   });
 
+  test("the Ark panel's placeholder is the panel's size, so nothing moves when the count arrives", async ({ browser }) => {
+    const ready = '[data-slot="badge"]';
+    expect(await loadedHeight(browser, '/ark', 'main', null)).toBeCloseTo(await loadedHeight(browser, '/ark', 'main', ready), 0);
+  });
+
   test('an Ark command says what it did', async ({ context, page }) => {
     await logIn(context, 'all');
     await page.goto('/ark');
