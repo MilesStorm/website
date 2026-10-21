@@ -1,14 +1,14 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 import Panel from '@/components/Panel.astro';
-import { FormSkeleton } from '@/islands/FormSkeleton';
+import { VerifySkeleton } from '@/islands/FormSkeleton';
 import { VerifyEmail } from '@/islands/VerifyEmail';
 ---
 
 <Layout title="Confirm your email" noReferrer>
   <Panel title="Confirm your email">
     <VerifyEmail client:only="react">
-      <FormSkeleton slot="fallback" />
+      <VerifySkeleton slot="fallback" />
     </VerifyEmail>
   </Panel>
 </Layout>

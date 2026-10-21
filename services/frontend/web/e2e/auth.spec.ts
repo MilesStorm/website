@@ -48,6 +48,24 @@ test("an emailed link's code goes in a request body, never in a URL; an expired 
   expect(await page.locator('meta[name="referrer"]').getAttribute('content')).toBe('no-referrer');
 });
 
+test("each form's placeholder is the form's size, so nothing moves when the form arrives", async ({ browser }) => {
+  const cardHeight = async (path: string, javaScriptEnabled: boolean) => {
+    const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled });
+    const page = await context.newPage();
+    await page.goto(path);
+    // Without scripts the placeholder stays; with them, the form replaces it.
+    if (javaScriptEnabled) await page.locator('main form').waitFor();
+    else await page.locator('main [aria-busy="true"]').waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    const box = await page.locator('main [data-slot="card"]').boundingBox();
+    await context.close();
+    return box!.height;
+  };
+  for (const path of ['/login', '/register', '/forgot-password', '/reset-password#code']) {
+    expect(await cardHeight(path, false), path).toBeCloseTo(await cardHeight(path, true), 0);
+  }
+});
+
 // The stand-ins only: these make accounts or need emailed codes.
 if (!STAGING) {
   test('an OAuth login carries next through the provider', async ({ page }) => {

@@ -5,6 +5,7 @@ import { Menu } from 'lucide-react';
 import Gate from './Gate.astro';
 import Logo from './Logo.astro';
 import { buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { ModeToggle } from '@/islands/ModeToggle';
 import { UserMenu } from '@/islands/UserMenu';
 import type { KnownPermission } from '@/api/session';
@@ -16,21 +17,30 @@ const LINKS: { href: Href; label: string; requires: KnownPermission }[] = [
   { href: '/arcane', label: 'Arcane', requires: 'arcane' },
   { href: '/admin', label: 'Admin', requires: 'manage_permissions' },
 ];
-const link = buttonVariants({ variant: 'ghost', size: 'sm' });
+// shadcn's site header: ghost links, the current page's in the text colour, the rest muted.
+const link = buttonVariants({
+  variant: 'ghost',
+  size: 'sm',
+  className: 'px-2.5 text-muted-foreground aria-[current=page]:text-foreground',
+});
+const here = Astro.url.pathname.replace(/\.html$/, '');
+const current = (href: Href) => (href === here ? 'page' : undefined);
 ---
 
-<header class="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-  <nav aria-label="Main" class="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4">
-    <a href="/" class="mr-2 flex items-center gap-2 font-semibold">
-      <Logo class="size-8" />
+<header class="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+  <nav aria-label="Main" class="mx-auto flex h-14 w-full max-w-5xl items-center gap-2 px-4 md:px-6">
+    <a href="/" class="mr-4 flex items-center gap-2 font-semibold">
+      <Logo class="size-6" />
       <span>MilesStorm</span>
     </a>
-    <ul class="hidden items-center gap-1 md:flex">
-      <li><a href="/" class={link}>Home</a></li>
+    <ul class="hidden items-center md:flex">
+      <li><a href="/" class={link} aria-current={current('/')}>Home</a></li>
       {
         LINKS.map((l) => (
           <Gate as="li" requires={l.requires}>
-            <a href={l.href} class={link}>{l.label}</a>
+            <a href={l.href} class={link} aria-current={current(l.href)}>
+              {l.label}
+            </a>
           </Gate>
         ))
       }
@@ -38,7 +48,7 @@ const link = buttonVariants({ variant: 'ghost', size: 'sm' });
     <div class="ml-auto flex items-center gap-2">
       <ModeToggle client:load />
       <Gate session="out" class="flex items-center gap-2">
-        <a href="/login" class={link}>Log in</a>
+        <a href="/login" class={cn(link, 'hidden sm:inline-flex')}>Log in</a>
         <a href="/register" class={buttonVariants({ size: 'sm' })}>Register</a>
       </Gate>
       <Gate session="in">
@@ -60,6 +70,7 @@ const link = buttonVariants({ variant: 'ghost', size: 'sm' });
             ))
           }
           <Gate as="li" session="in"><a href="/profile" class={link + ' w-full justify-start'}>Profile</a></Gate>
+          <Gate as="li" session="out" class="sm:hidden"><a href="/login" class={link + ' w-full justify-start'}>Log in</a></Gate>
         </ul>
       </details>
     </div>

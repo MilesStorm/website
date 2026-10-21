@@ -1,0 +1,19 @@
+---
+// A page's frame: the content's width, lined up with the navbar's at `wide`, and the page's
+// heading in shadcn's typography with a muted line under it.
+interface Props {
+  title: string;
+  description?: string;
+  width?: 'narrow' | 'default' | 'wide';
+}
+const { title, description, width = 'default' } = Astro.props;
+const WIDTHS = { narrow: 'max-w-xl', default: 'max-w-3xl', wide: 'max-w-5xl' };
+---
+
+<main class:list={['mx-auto flex w-full flex-col gap-6 px-4 py-8 md:px-6 md:py-10', WIDTHS[width]]}>
+  <div class="flex flex-col gap-1">
+    <h1 class="scroll-m-20 text-2xl font-semibold tracking-tight">{title}</h1>
+    {description && <p class="text-muted-foreground">{description}</p>}
+  </div>
+  <slot />
+</main>

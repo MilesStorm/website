@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
 import { FormAlert } from '@/components/FormAlert';
+import { VerifySkeleton } from './FormSkeleton';
 import { client } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
@@ -18,7 +18,7 @@ export function VerifyEmail() {
     void attempt(client.POST('/api/email/confirm', { body: { code } })).then(setResult);
   }, []);
 
-  if (!result) return <Skeleton className="h-16 w-full" role="status" aria-label="Confirming" />;
+  if (!result) return <VerifySkeleton />;
   if (!result.ok) {
     return (
       <div className="flex flex-col gap-4">

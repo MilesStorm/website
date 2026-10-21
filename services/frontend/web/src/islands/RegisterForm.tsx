@@ -3,16 +3,14 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Button } from '@/components/ui/button';
-import { FieldGroup, FieldSeparator } from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldSeparator } from '@/components/ui/field';
 import { FormAlert } from '@/components/FormAlert';
 import { OAuthButtons } from '@/components/OAuthButtons';
 import { TextField } from '@/components/TextField';
 import { client } from '@/api/client';
 import { attempt } from '@/lib/errors';
 import { landAfterLogin, nextFrom } from '@/lib/login';
-
-/** Auth's own minimum (services/auth); the server checks it too. */
-export const MIN_PASSWORD = 8;
+import { MIN_PASSWORD } from '@/lib/password';
 
 const schema = z.object({
   email: z.email('Enter an email address.'),
@@ -43,33 +41,30 @@ export function RegisterForm() {
 
   const login = next ? `/login?next=${encodeURIComponent(next)}` : '/login';
   return (
-    <div className="flex flex-col gap-6">
-      <OAuthButtons next={next} verb="Sign up" />
-      <FieldSeparator>or</FieldSeparator>
-      <form onSubmit={submit} noValidate className="flex flex-col gap-6">
-        <FieldGroup>
-          <TextField form={form} name="email" label="Email" type="email" autoComplete="email" />
-          <TextField form={form} name="username" label="Username" autoComplete="username" />
-          <TextField
-            form={form}
-            name="password"
-            label="Password"
-            type="password"
-            autoComplete="new-password"
-            description={`At least ${MIN_PASSWORD} characters. We'll email you a link to confirm your address.`}
-          />
-        </FieldGroup>
+    <form onSubmit={submit} noValidate>
+      <FieldGroup>
+        <OAuthButtons next={next} verb="Sign up" />
+        <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
+        <TextField form={form} name="email" label="Email" type="email" autoComplete="email" />
+        <TextField form={form} name="username" label="Username" autoComplete="username" />
+        <TextField
+          form={form}
+          name="password"
+          label="Password"
+          type="password"
+          autoComplete="new-password"
+          description={`At least ${MIN_PASSWORD} characters. We'll email you a link to confirm your address.`}
+        />
         <FormAlert message={error} />
-        <Button type="submit" disabled={form.formState.isSubmitting}>
-          Sign up with email
-        </Button>
-      </form>
-      <p className="text-center text-sm text-muted-foreground">
-        Have an account?{' '}
-        <a href={login} className="text-foreground underline underline-offset-4">
-          Log in
-        </a>
-      </p>
-    </div>
+        <Field>
+          <Button type="submit" disabled={form.formState.isSubmitting}>
+            Sign up with email
+          </Button>
+          <FieldDescription className="text-center">
+            Already have an account? <a href={login}>Log in</a>
+          </FieldDescription>
+        </Field>
+      </FieldGroup>
+    </form>
   );
 }

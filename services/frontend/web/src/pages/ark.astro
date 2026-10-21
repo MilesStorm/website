@@ -1,14 +1,14 @@
 ---
 import Layout from '@/layouts/Layout.astro';
+import Page from '@/components/Page.astro';
 import { ArkPanel } from '@/islands/ArkPanel';
 import { Skeleton } from '@/components/ui/skeleton';
 ---
 
 <Layout title="Ark">
-  <main class="mx-auto flex max-w-xl flex-col gap-6 px-4 pt-10 pb-16">
-    <h1 class="text-2xl font-bold">Ark server</h1>
+  <Page title="Ark server" width="narrow">
     <ArkPanel client:only="react">
       <Skeleton slot="fallback" className="h-48 w-full rounded-xl" />
     </ArkPanel>
-  </main>
+  </Page>
 </Layout>

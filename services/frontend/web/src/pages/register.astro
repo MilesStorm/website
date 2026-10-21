@@ -1,14 +1,14 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 import Panel from '@/components/Panel.astro';
-import { FormSkeleton } from '@/islands/FormSkeleton';
+import { RegisterSkeleton } from '@/islands/FormSkeleton';
 import { RegisterForm } from '@/islands/RegisterForm';
 ---
 
 <Layout title="Sign up">
-  <Panel title="Sign up">
+  <Panel title="Create your account" description="Sign up with GitHub, Google or your email.">
     <RegisterForm client:only="react">
-      <FormSkeleton slot="fallback" />
+      <RegisterSkeleton slot="fallback" />
     </RegisterForm>
   </Panel>
 </Layout>
