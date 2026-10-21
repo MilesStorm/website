@@ -41,30 +41,32 @@ export function RegisterForm() {
 
   const login = next ? `/login?next=${encodeURIComponent(next)}` : '/login';
   return (
-    <form onSubmit={submit} noValidate>
-      <FieldGroup>
-        <OAuthButtons next={next} verb="Sign up" />
-        <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
-        <TextField form={form} name="email" label="Email" type="email" autoComplete="email" />
-        <TextField form={form} name="username" label="Username" autoComplete="username" />
-        <TextField
-          form={form}
-          name="password"
-          label="Password"
-          type="password"
-          autoComplete="new-password"
-          description={REGISTER_PASSWORD_HINT}
-        />
-        <FormAlert message={error} />
-        <Field>
-          <Button type="submit" disabled={form.formState.isSubmitting}>
-            Sign up with email
-          </Button>
-          <FieldDescription className="text-center">
-            {HAVE_ACCOUNT.text} <a href={login}>{HAVE_ACCOUNT.link}</a>
-          </FieldDescription>
-        </Field>
-      </FieldGroup>
-    </form>
+    <div className="grid gap-6">
+      <form onSubmit={submit} noValidate>
+        <FieldGroup>
+          <TextField form={form} name="email" label="Email" type="email" autoComplete="email" />
+          <TextField form={form} name="username" label="Username" autoComplete="username" />
+          <TextField
+            form={form}
+            name="password"
+            label="Password"
+            type="password"
+            autoComplete="new-password"
+            description={REGISTER_PASSWORD_HINT}
+          />
+          <FormAlert message={error} />
+          <Field>
+            <Button type="submit" disabled={form.formState.isSubmitting}>
+              Sign up with email
+            </Button>
+          </Field>
+        </FieldGroup>
+      </form>
+      <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
+      <OAuthButtons next={next} verb="Sign up" />
+      <FieldDescription className="px-6 text-center">
+        {HAVE_ACCOUNT.text} <a href={login}>{HAVE_ACCOUNT.link}</a>
+      </FieldDescription>
+    </div>
   );
 }

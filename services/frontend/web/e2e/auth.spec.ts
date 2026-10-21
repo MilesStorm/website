@@ -48,22 +48,22 @@ test("an emailed link's code goes in a request body, never in a URL; an expired 
   expect(await page.locator('meta[name="referrer"]').getAttribute('content')).toBe('no-referrer');
 });
 
-/** The height of the page's card: with scripts off, holding the placeholder; with them on, once
- * `ready` (a locator in `main`) shows. */
-async function cardHeight(browser: Browser, path: string, ready: string | null): Promise<number> {
+/** The height of the page's column (Panel): with scripts off, holding the placeholder; with them
+ * on, once `ready` (a locator in `main`) shows. */
+async function panelHeight(browser: Browser, path: string, ready: string | null): Promise<number> {
   const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled: ready !== null });
   const page = await context.newPage();
   await page.goto(path);
   await page.locator(`main ${ready ?? '[role="status"]'}`).first().waitFor();
   await page.evaluate(() => document.fonts.ready);
-  const box = await page.locator('main [data-slot="card"]').boundingBox();
+  const box = await page.locator('main [data-panel]').boundingBox();
   await context.close();
   return box!.height;
 }
 
 test("each form's placeholder is the form's size, so nothing moves when the form arrives", async ({ browser }) => {
   for (const path of ['/login', '/register', '/forgot-password', '/reset-password#code']) {
-    expect(await cardHeight(browser, path, null), path).toBeCloseTo(await cardHeight(browser, path, 'form'), 0);
+    expect(await panelHeight(browser, path, null), path).toBeCloseTo(await panelHeight(browser, path, 'form'), 0);
   }
 });
 
@@ -116,7 +116,7 @@ if (!STAGING) {
       ['/invite#join', 'a[href="/login"]'],
     ];
     for (const [path, ready] of answers) {
-      expect(await cardHeight(browser, path, null), path).toBeCloseTo(await cardHeight(browser, path, ready), 0);
+      expect(await panelHeight(browser, path, null), path).toBeCloseTo(await panelHeight(browser, path, ready), 0);
     }
   });
 

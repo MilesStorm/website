@@ -34,33 +34,35 @@ export function LoginForm() {
 
   const withNext = (path: string) => (next ? `${path}?next=${encodeURIComponent(next)}` : path);
   return (
-    <form onSubmit={submit} noValidate>
-      <FieldGroup>
-        <OAuthButtons next={next} verb="Log in" />
-        <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
-        <TextField form={form} name="username" label="Username" autoComplete="username" />
-        <TextField
-          form={form}
-          name="password"
-          label="Password"
-          type="password"
-          autoComplete="current-password"
-          action={
-            <a href="/forgot-password" className="text-sm underline-offset-4 hover:underline">
-              {FORGOT_LINK}
-            </a>
-          }
-        />
-        <FormAlert message={error} />
-        <Field>
-          <Button type="submit" disabled={form.formState.isSubmitting}>
-            Log in
-          </Button>
-          <FieldDescription className="text-center">
-            {NO_ACCOUNT.text} <a href={withNext('/register')}>{NO_ACCOUNT.link}</a>
-          </FieldDescription>
-        </Field>
-      </FieldGroup>
-    </form>
+    <div className="grid gap-6">
+      <form onSubmit={submit} noValidate>
+        <FieldGroup>
+          <TextField form={form} name="username" label="Username" autoComplete="username" />
+          <TextField
+            form={form}
+            name="password"
+            label="Password"
+            type="password"
+            autoComplete="current-password"
+            action={
+              <a href="/forgot-password" className="ml-auto text-sm underline-offset-4 hover:underline">
+                {FORGOT_LINK}
+              </a>
+            }
+          />
+          <FormAlert message={error} />
+          <Field>
+            <Button type="submit" disabled={form.formState.isSubmitting}>
+              Log in
+            </Button>
+          </Field>
+        </FieldGroup>
+      </form>
+      <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
+      <OAuthButtons next={next} verb="Log in" />
+      <FieldDescription className="px-6 text-center">
+        {NO_ACCOUNT.text} <a href={withNext('/register')}>{NO_ACCOUNT.link}</a>
+      </FieldDescription>
+    </div>
   );
 }

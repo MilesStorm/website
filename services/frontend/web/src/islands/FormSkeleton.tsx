@@ -28,7 +28,7 @@ export function FormSkeleton() {
 
 /** An input's or a button's place (both are h-9). */
 function Control() {
-  return <Skeleton className="h-9 w-full" />;
+  return <Skeleton className="h-9 w-full rounded-4xl" />;
 }
 
 function Labelled({ label, action, description }: { label: string; action?: string; description?: string }) {
@@ -56,15 +56,27 @@ function Frame({ children }: { children: ReactNode }) {
   );
 }
 
-function OAuth() {
+/** The password form, then the providers' buttons and a line under them (LoginForm, RegisterForm). */
+function WithProviders({ children, note }: { children: ReactNode; note: Note }) {
   return (
-    <>
+    <div role="status" aria-label="Loading" aria-busy="true" className="grid gap-6">
+      <div>
+        <FieldGroup>
+          {children}
+          <Field>
+            <Control />
+          </Field>
+        </FieldGroup>
+      </div>
+      <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
       <Field>
         <Control />
         <Control />
       </Field>
-      <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">Or continue with</FieldSeparator>
-    </>
+      <FieldDescription className="px-6 text-center">
+        {note.text} {note.link}
+      </FieldDescription>
+    </div>
   );
 }
 
@@ -84,24 +96,20 @@ function Submit({ note }: { note?: Note }) {
 
 export function LoginSkeleton() {
   return (
-    <Frame>
-      <OAuth />
+    <WithProviders note={NO_ACCOUNT}>
       <Labelled label="Username" />
       <Labelled label="Password" action={FORGOT_LINK} />
-      <Submit note={NO_ACCOUNT} />
-    </Frame>
+    </WithProviders>
   );
 }
 
 export function RegisterSkeleton() {
   return (
-    <Frame>
-      <OAuth />
+    <WithProviders note={HAVE_ACCOUNT}>
       <Labelled label="Email" />
       <Labelled label="Username" />
       <Labelled label="Password" description={REGISTER_PASSWORD_HINT} />
-      <Submit note={HAVE_ACCOUNT} />
-    </Frame>
+    </WithProviders>
   );
 }
 

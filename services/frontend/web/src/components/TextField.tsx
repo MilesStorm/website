@@ -1,6 +1,6 @@
 // One labelled input of a react-hook-form form: its error is tied to it (`aria-describedby`)
-// and announced (FieldError is an alert). `action` sits at the end of the label's line (a link,
-// as login-03's "Forgot your password?").
+// and announced (FieldError is an alert). `action` sits on the label's line (a link, with
+// `ml-auto` to end it: "Forgot your password?").
 import { useId, type ReactNode } from 'react';
 import type { FieldValues, Path, UseFormReturn } from 'react-hook-form';
 import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
@@ -25,7 +25,7 @@ export function TextField<T extends FieldValues>({ form, name, label, type = 'te
       {action ? (
         <div className="flex items-center">
           <FieldLabel htmlFor={id}>{label}</FieldLabel>
-          <span className="ml-auto">{action}</span>
+          {action}
         </div>
       ) : (
         <FieldLabel htmlFor={id}>{label}</FieldLabel>

@@ -1,7 +1,7 @@
 ---
-// A short page in one centred card: the logging-in pages and the short messages. shadcn's
-// login-03 block: the card on a muted page (the plain one in dark), its header centred, the
-// content the card's width.
+// A short page in one card: the logging-in pages and the short messages. Like the form cards on
+// ui.shadcn.com's front page ("Set a new milestone"): a stock card, its title and a muted line,
+// centred on the page's plain background.
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface Props {
@@ -11,14 +11,14 @@ interface Props {
 const { title, description } = Astro.props;
 ---
 
-<main class="flex min-h-[calc(100svh-3.5rem-1px)] flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10 dark:bg-background">
-  <div class="flex w-full max-w-sm flex-col gap-6">
+<main class="flex min-h-[calc(100svh-4rem)] items-center justify-center px-4 py-10 md:p-10">
+  <div data-panel class="w-full max-w-sm">
     <Card>
-      <CardHeader className="text-center">
+      <CardHeader>
         <CardTitle className="text-xl"><h1>{title}</h1></CardTitle>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
-      <CardContent className="gap-4">
+      <CardContent className="flex flex-col gap-4">
         <slot />
       </CardContent>
     </Card>
