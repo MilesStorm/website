@@ -1,16 +1,16 @@
 ---
 import Layout from '@/layouts/Layout.astro';
+import Page from '@/components/Page.astro';
 import { Card, CardAction, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
 import { ModeToggle } from '@/islands/ModeToggle';
 import { Profile } from '@/islands/Profile';
+import { ProfileSkeleton } from '@/islands/ProfileSkeleton';
 ---
 
 <Layout title="Profile">
-  <main class="mx-auto flex max-w-4xl flex-col gap-6 px-4 pt-10 pb-16">
-    <h1 class="text-2xl font-bold">Profile</h1>
+  <Page title="Profile" description="Your account, and how this site looks for you.">
     <Profile client:only="react">
-      <Skeleton slot="fallback" className="h-64 w-full rounded-xl" />
+      <ProfileSkeleton slot="fallback" />
     </Profile>
     <Card>
       <CardHeader>
@@ -19,5 +19,5 @@ import { Profile } from '@/islands/Profile';
         <CardAction><ModeToggle client:load /></CardAction>
       </CardHeader>
     </Card>
-  </main>
+  </Page>
 </Layout>

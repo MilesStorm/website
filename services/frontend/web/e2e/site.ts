@@ -1,6 +1,6 @@
 // What the tests know about the site: its pages (from the server's PAGES table, through the
 // OpenAPI document) and who logs in.
-import { expect, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import spec from '../src/api/openapi.json' with { type: 'json' };
 import type { components } from '../src/api/schema';
@@ -49,4 +49,24 @@ export async function expectAccessible(page: Page): Promise<void> {
   const { violations } = await new AxeBuilder({ page }).analyze();
   const bad = violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+}
+
+/** The height of `measure` on `path`, as `who`: with scripts off, holding the placeholder; with
+ * them on, once `ready` (a locator in `main`) shows. Equal: nothing moves when the page arrives. */
+export async function shownHeight(
+  browser: Browser,
+  path: string,
+  measure: string,
+  ready: string | null,
+  who: Who = 'anonymous',
+): Promise<number> {
+  const context = await browser.newContext({ ...test.info().project.use, javaScriptEnabled: ready !== null });
+  await logIn(context, who);
+  const page = await context.newPage();
+  await page.goto(path);
+  await page.locator(`main ${ready ?? '[role="status"]'}`).first().waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  const box = await page.locator(measure).first().boundingBox();
+  await context.close();
+  return box!.height;
 }

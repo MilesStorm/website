@@ -3,40 +3,44 @@ import Layout from '@/layouts/Layout.astro';
 import Gate from '@/components/Gate.astro';
 import Storm from '@/components/Storm.astro';
 import { FeatureCard } from '@/components/FeatureCard';
+import { badgeVariants } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { HomeCards } from '@/islands/HomeCards';
 import { HomeSkeleton } from '@/islands/HomeSkeleton';
 import { previewCards } from '@/lib/features';
+import { cn } from '@/lib/utils';
 ---
 
 <Layout title="MilesStorm">
-  <main class="mx-auto max-w-5xl px-4 pt-8 pb-16">
-    <Gate session="out" class="flex flex-col gap-10">
-      <section class="relative overflow-hidden rounded-xl border bg-card px-6 py-16 shadow-xs sm:px-12 sm:py-20">
-        <Storm />
-        <div class="relative max-w-2xl">
-          <p class="flex items-center gap-1.5 text-sm font-semibold tracking-widest text-muted-foreground uppercase">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="size-4" aria-hidden="true">
-              <path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>
-            </svg>
-            MilesStorm
-          </p>
-          <h1 class="mt-3 text-4xl leading-tight font-extrabold sm:text-5xl">Tools for game nights with friends.</h1>
-          <p class="mt-4 text-lg text-muted-foreground">
-            A dice reader that follows your real rolls, and more for invited accounts.
-          </p>
-          <div class="mt-8 flex flex-wrap gap-3">
-            <a href="/login" class={buttonVariants({ size: 'lg' })}>Log in</a>
-            <a href="/register" class={buttonVariants({ variant: 'outline', size: 'lg' })}>Create an account</a>
-          </div>
-          <p class="mt-6 text-sm text-muted-foreground">Early access: features are unlocked for invited accounts.</p>
+  <main class="relative isolate">
+    <Storm />
+    <Gate session="out" class="mx-auto flex max-w-5xl flex-col gap-4 px-4 pb-16 md:px-6">
+      <section class="flex flex-col items-center gap-2 pt-12 pb-12 text-center md:pt-20 lg:pt-24">
+        <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>
+          </svg>
+          MilesStorm
+        </p>
+        <h1
+          class="max-w-4xl text-4xl leading-tight font-semibold tracking-tight text-balance text-primary md:text-5xl lg:leading-[1.1] xl:tracking-tighter"
+        >
+          Tools for game nights with friends.
+        </h1>
+        <p class="max-w-2xl text-base text-balance text-foreground sm:text-lg">
+          A dice reader that follows your real rolls, and more for invited accounts.
+        </p>
+        <div class="flex flex-wrap items-center justify-center gap-2 pt-4">
+          <a href="/login" class={buttonVariants()}>Log in</a>
+          <a href="/register" class={buttonVariants({ variant: 'outline' })}>Create an account</a>
         </div>
+        <p class="pt-2 text-sm text-muted-foreground">Early access: features are unlocked for invited accounts.</p>
       </section>
       <section class="grid gap-4 sm:grid-cols-2">
         {previewCards().map((feature) => <FeatureCard feature={feature} state="preview" />)}
       </section>
     </Gate>
-    <Gate session="in">
+    <Gate session="in" class="mx-auto max-w-5xl px-4 pb-16 md:px-6">
       <HomeCards client:only="react">
         <HomeSkeleton slot="fallback" />
       </HomeCards>

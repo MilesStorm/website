@@ -1,14 +1,14 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 import Panel from '@/components/Panel.astro';
-import { FormSkeleton } from '@/islands/FormSkeleton';
+import { DeleteLinkSkeleton } from '@/islands/FormSkeleton';
 import { DeleteAccount } from '@/islands/DeleteAccount';
 ---
 
 <Layout title="Delete your account" noReferrer>
   <Panel title="Delete your account">
     <DeleteAccount client:only="react">
-      <FormSkeleton slot="fallback" />
+      <DeleteLinkSkeleton slot="fallback" />
     </DeleteAccount>
   </Panel>
 </Layout>

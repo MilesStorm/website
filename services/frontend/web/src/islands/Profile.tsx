@@ -6,12 +6,23 @@ import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { FormAlert } from '@/components/FormAlert';
 import { bffUrl, client, type Schemas } from '@/api/client';
 import { readBootstrap, viewerChanged, type Viewer } from '@/api/session';
 import { attempt, type Outcome } from '@/lib/errors';
+import {
+  ACCOUNT_INTRO,
+  DELETE_INTRO,
+  DELETE_OPEN,
+  NAME_HINT,
+  PICTURE_HINT,
+  SHARING_DELETE,
+  SHARING_INTRO,
+  SHARING_NOTE,
+  SHARING_TITLE,
+} from '@/lib/copy';
+import { ProfileSkeleton, SharingFacts, SharingSkeleton } from './ProfileSkeleton';
 import defaultPicture from '@/assets/default-profile.png';
 
 type Account = Schemas['AccountInfo'];
@@ -54,7 +65,7 @@ export function Profile() {
     viewerChanged(changed);
   };
 
-  if (!account) return <Skeleton className="h-64 w-full rounded-xl" role="status" aria-label="Loading your account" />;
+  if (!account) return <ProfileSkeleton />;
   if (!account.ok) return <FormAlert message={account.message} />;
   const canShare = viewer?.permissions.includes('arcane') ?? false;
   return (
@@ -121,7 +132,7 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
         <CardTitle>
           <h2>Account</h2>
         </CardTitle>
-        <CardDescription>How you appear on this site.</CardDescription>
+        <CardDescription>{ACCOUNT_INTRO}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-8 sm:grid-cols-[auto_1fr]">
         <div className="flex flex-col items-center gap-3 sm:items-start">
@@ -158,7 +169,7 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
                   if (picture) void upload(picture);
                 }}
               />
-              <p className="text-xs text-muted-foreground">JPEG, PNG, WebP or GIF, up to 5 MB.</p>
+              <p className="text-xs text-muted-foreground">{PICTURE_HINT}</p>
             </>
           ) : (
             <p className="max-w-40 text-center text-xs text-muted-foreground sm:text-left">
@@ -195,9 +206,8 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
               </Button>
             </div>
             <FieldDescription id={`${nameId}-description`}>
-              Shown on the site instead of your username. Leave it empty to use your username,{' '}
-              <span className="font-semibold">{account.username}</span>, which you log in with and which can't be
-              changed.
+              {NAME_HINT.before} <span className="font-semibold">{account.username}</span>
+              {NAME_HINT.after}
             </FieldDescription>
           </Field>
           <NoteLine note={nameNote} />
@@ -266,7 +276,14 @@ function SharingCard() {
     void attempt(client.GET('/api/account/sharing')).then(setState);
   }, []);
 
-  if (!state) return <Skeleton className="h-40 w-full rounded-xl" role="status" aria-label="Loading your sharing setting" />;
+  // Shaped for the usual answer (the store is set up): the rarer ones below are shorter.
+  if (!state) {
+    return (
+      <div role="status" aria-label="Loading your sharing setting" aria-busy="true">
+        <SharingSkeleton />
+      </div>
+    );
+  }
   if (!state.ok) return <FormAlert message="Couldn't load your sharing setting." />;
   // The store isn't set up on this server: nothing to choose.
   if (!state.data.available) return null;
@@ -296,9 +313,9 @@ function SharingCard() {
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>Help improve dice recognition</h2>
+          <h2>{SHARING_TITLE}</h2>
         </CardTitle>
-        <CardDescription>Share pictures of your rolls so the dice reader gets better at reading them.</CardDescription>
+        <CardDescription>{SHARING_INTRO}</CardDescription>
         <CardAction>
           <Switch
             checked={state.data.share}
@@ -309,20 +326,7 @@ function SharingCard() {
         </CardAction>
       </CardHeader>
       <CardContent>
-        <dl className="grid gap-5 sm:grid-cols-3">
-          <div>
-            <dt className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">What's saved</dt>
-            <dd className="mt-1 text-sm">The camera picture and what the model read.</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Which rolls</dt>
-            <dd className="mt-1 text-sm">Rolls the model was unsure about, and about 1 in 20 others.</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Who sees them</dt>
-            <dd className="mt-1 text-sm">Only the site owner, to check the numbers. Used only to train the dice reader.</dd>
-          </div>
-        </dl>
+        <SharingFacts />
       </CardContent>
       <CardFooter className="flex flex-col items-stretch gap-3">
         {confirming ? (
@@ -339,12 +343,9 @@ function SharingCard() {
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="max-w-lg text-xs text-muted-foreground">
-              Turning this off stops new saves. Rolls you flag as wrong in the browser extension are saved either way;
-              your latest roll's picture is kept for 10 minutes so it can be flagged.
-            </p>
+            <p className="max-w-lg text-xs text-muted-foreground">{SHARING_NOTE}</p>
             <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>
-              Delete my shared pictures
+              {SHARING_DELETE}
             </Button>
           </div>
         )}
@@ -389,14 +390,11 @@ function DeleteCard({ account }: { account: Account }) {
         <CardTitle>
           <h2>Delete account</h2>
         </CardTitle>
-        <CardDescription>
-          Removes your account and profile picture. Any data you chose to share will also be removed. This can't be
-          undone.
-        </CardDescription>
+        <CardDescription>{DELETE_INTRO}</CardDescription>
         {!open && (
           <CardAction>
             <Button size="sm" variant="destructive" onClick={() => setOpen(true)}>
-              Delete my account…
+              {DELETE_OPEN}
             </Button>
           </CardAction>
         )}

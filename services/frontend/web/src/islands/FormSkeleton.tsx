@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSeparator } from '@/components/ui/field';
 import {
+  DELETE_LINK,
   FORGOT_INTRO,
   FORGOT_LINK,
   HAVE_ACCOUNT,
@@ -12,19 +13,9 @@ import {
   type Note,
 } from '@/lib/copy';
 
-/** A form's place while its island loads. */
-export function FormSkeleton() {
-  return (
-    <div className="flex flex-col gap-4" aria-busy="true">
-      <Skeleton className="h-9 w-full" />
-      <Skeleton className="h-9 w-full" />
-      <Skeleton className="h-9 w-full" />
-    </div>
-  );
-}
-
-// The logging-in forms' places: the form's own layout, text and labels, with a pulse where each
-// input and button goes, so nothing moves when the form arrives (e2e/auth.spec.ts measures it).
+// The logging-in forms' places, and the emailed links' and the invite's: the form's (or the usual
+// answer's) own layout, text and labels, with a pulse where each input, button and username goes,
+// so nothing moves when it arrives (e2e/auth.spec.ts measures it).
 
 /** An input's or a button's place (both are h-9). */
 function Control() {
@@ -150,6 +141,23 @@ export function InviteSkeleton() {
       <Skeleton className="h-24 w-full" />
       <Control />
       <Control />
+    </div>
+  );
+}
+
+/** Opening a deletion link: the place of the usual answer (whose account, and two buttons). */
+export function DeleteLinkSkeleton() {
+  return (
+    <div className="flex flex-col gap-4" role="status" aria-label="Checking the link">
+      <p>
+        {DELETE_LINK.before}{' '}
+        <span className="animate-pulse rounded-md bg-muted font-semibold text-transparent">username</span>
+        {DELETE_LINK.after}
+      </p>
+      <div className="flex flex-col gap-2 sm:flex-row-reverse">
+        <Skeleton className="h-9 w-full rounded-4xl sm:flex-1" />
+        <Skeleton className="h-9 w-full rounded-4xl sm:flex-1" />
+      </div>
     </div>
   );
 }

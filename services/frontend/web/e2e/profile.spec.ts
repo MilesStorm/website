@@ -1,8 +1,8 @@
 // The profile and the Ark panel in a browser. Against staging only what changes nothing runs:
 // looking at them. Changing a name or picture, sharing, and Ark commands (which would start or
 // stop the real game server) run against the stand-ins only.
-import { expect, test } from '@playwright/test';
-import { STAGING, expectAccessible, logIn } from './site';
+import { expect, test, type Browser } from '@playwright/test';
+import { STAGING, expectAccessible, logIn, shownHeight } from './site';
 
 /** A 2×2 PNG: small, and a picture the server can read. */
 const PNG = Buffer.from(
@@ -30,7 +30,28 @@ test('the Ark panel shows who is online', async ({ context, page }) => {
   await expectAccessible(page);
 });
 
+/** `shownHeight`, logged in with every permission. */
+const loadedHeight = (browser: Browser, path: string, measure: string, ready: string | null) =>
+  shownHeight(browser, path, measure, ready, 'all');
+
 if (!STAGING) {
+  // The stand-ins' `tester-all`: the usual answer (a confirmed email), with the sharing card.
+  test("the profile's placeholder is the profile's size, so nothing moves when it arrives", async ({ browser }) => {
+    const ready = '[role="switch"]';
+    expect(await loadedHeight(browser, '/profile', 'main', null)).toBeCloseTo(
+      await loadedHeight(browser, '/profile', 'main', ready),
+      0,
+    );
+  });
+
+  test("the start page's greeting is its placeholder's size", async ({ browser }) => {
+    const hero = 'main [data-gate="in"] section';
+    expect(await loadedHeight(browser, '/', hero, null)).toBeCloseTo(
+      await loadedHeight(browser, '/', hero, '[data-gate="in"] h1'),
+      0,
+    );
+  });
+
   test('a new display name shows on the page and in the user menu', async ({ context, page }) => {
     await logIn(context, 'plain', true);
     await page.goto('/profile');

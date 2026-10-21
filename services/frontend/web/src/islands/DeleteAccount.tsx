@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
 import { FormAlert } from '@/components/FormAlert';
 import { bffUrl, client } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
+import { DELETE_LINK } from '@/lib/copy';
 import { MISSING_CODE, linkCode } from '@/lib/login';
+import { DeleteLinkSkeleton } from './FormSkeleton';
 
 /** Deleting an account from its emailed link (`/delete-account#<code>`): says whose account the
  * link is for, and deletes it only when the button is pressed. */
@@ -27,7 +28,7 @@ export function DeleteAccount() {
     setBusy(false);
   };
 
-  if (!account) return <Skeleton className="h-24 w-full" role="status" aria-label="Checking the link" />;
+  if (!account) return <DeleteLinkSkeleton />;
   if (!account.ok) {
     return (
       <div className="flex flex-col gap-4">
@@ -42,8 +43,8 @@ export function DeleteAccount() {
   return (
     <div className="flex flex-col gap-4">
       <p>
-        This permanently deletes the account <span className="font-semibold">{account.data.username}</span>: your
-        profile and profile picture. Any data you chose to share will also be removed. It can't be undone.
+        {DELETE_LINK.before} <span className="font-semibold">{account.data.username}</span>
+        {DELETE_LINK.after}
       </p>
       <FormAlert message={error} />
       <div className="flex flex-col gap-2 sm:flex-row-reverse">
