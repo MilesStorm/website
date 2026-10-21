@@ -1,0 +1,13 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EnshroudedPanel } from '@/islands/EnshroudedPanel';
+---
+
+<Layout title="Enshrouded">
+  <main class="mx-auto flex max-w-3xl flex-col gap-6 px-4 pt-8 pb-16">
+    <EnshroudedPanel client:only="react">
+      <Skeleton slot="fallback" className="h-96 w-full rounded-xl" />
+    </EnshroudedPanel>
+  </main>
+</Layout>

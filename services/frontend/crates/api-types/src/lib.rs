@@ -235,6 +235,7 @@ pages! {
     Invite => "/invite", "invite.html", Access::Public;
     Profile => "/profile", "profile.html", Access::LoggedIn;
     Ark => "/ark", "ark.html", Access::Perm(KnownPermission::Llama);
+    Enshrouded => "/enshrouded", "enshrouded.html", Access::Perm(KnownPermission::Enshrouded);
 }
 
 /// Pages without a path of their own, answered with a status: an unknown path (404), a page the

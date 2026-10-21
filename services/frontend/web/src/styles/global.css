@@ -129,8 +129,11 @@
     }
   body {
     @apply bg-background text-foreground;
+    /* The cookie notice's room while it is open (islands/CookieConsent.tsx). */
+    padding-bottom: var(--consent-h, 0);
     }
   html {
     @apply font-sans;
+    scroll-padding-bottom: var(--consent-h, 0);
     }
 }

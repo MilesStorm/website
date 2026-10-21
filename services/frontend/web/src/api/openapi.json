@@ -2537,7 +2537,8 @@
           "/delete-account",
           "/invite",
           "/profile",
-          "/ark"
+          "/ark",
+          "/enshrouded"
         ]
       },
       "PasswordReset": {
@@ -2846,6 +2847,13 @@
       },
       "file": "ark.html",
       "path": "/ark"
+    },
+    {
+      "access": {
+        "perm": "enshrouded"
+      },
+      "file": "enshrouded.html",
+      "path": "/enshrouded"
     }
   ]
 }
