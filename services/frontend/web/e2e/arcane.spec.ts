@@ -1,8 +1,8 @@
 // The Arcane dice reader with Chromium's fake camera, against the stand-in ai_pipeline
 // (fake-upstreams.mjs, answering with the contracts/arcane messages). Not against staging: a
 // camera there sends frames to the real ai_pipeline, and each roll's picture is kept.
-import { expect, test, type Page } from '@playwright/test';
-import { STAGING, expectAccessible, logIn } from './site';
+import { expect, type Page } from '@playwright/test';
+import { STAGING, expectAccessible, logIn, test } from './site';
 
 test.use({
   launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] },

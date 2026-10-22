@@ -2,8 +2,8 @@
 // headless shell has none: here it is Chromium's full headless mode with the cache on (launch
 // options, so a file of its own), so Back really restores the page as it was, logged in, and the
 // layout's `pageshow` handler must load it again.
-import { expect, test } from '@playwright/test';
-import { STAGING, logIn } from './site';
+import { expect } from '@playwright/test';
+import { STAGING, logIn, test } from './site';
 
 test.use({
   channel: 'chromium',

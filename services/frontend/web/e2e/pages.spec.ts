@@ -1,8 +1,8 @@
 // Every page for every kind of viewer, as its access in PAGES says: served by the server from
 // Astro's build with the viewer on <html> before any script runs, and accessible; or a redirect
 // (to log in, or home from a guest-only page), the 403 page or the 503 page.
-import { expect, test } from '@playwright/test';
-import { PAGES, STAGING, expectAccessible, logIn, type Access, type Who } from './site';
+import { expect } from '@playwright/test';
+import { PAGES, STAGING, expectAccessible, logIn, test, type Access, type Who } from './site';
 
 // No page gets a camera: on /arcane the browser refuses it, so no frame goes anywhere (staging's
 // ai_pipeline included).

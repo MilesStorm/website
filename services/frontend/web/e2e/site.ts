@@ -1,6 +1,6 @@
 // What the tests know about the site: its pages (from the server's PAGES table, through the
 // OpenAPI document) and who logs in.
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test as base, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import spec from '../src/api/openapi.json' with { type: 'json' };
 import type { components } from '../src/api/schema';
@@ -16,6 +16,48 @@ export const STAGING = !!process.env.E2E_BASE_URL;
 /** Logged out, logged in without permissions, with every permission, and logged in while auth
  * can't be asked (only the stand-ins can arrange that). */
 export type Who = 'anonymous' | 'plain' | 'all' | 'down';
+
+/** Staging is behind Miles's GitHub login. The staging-journeys workflow gets past it with a
+ * GitHub Actions token for this audience, which the gateway checks is that workflow's
+ * (homelab: istio/manifests/login-admin-pages.yaml). A token lasts five minutes, so a fresh one
+ * is asked for shortly before the last one runs out. */
+let token: { value: string; exp: number } | undefined;
+async function stagingToken(): Promise<string> {
+  if (token && token.exp - 60 > Date.now() / 1000) return token.value;
+  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const bearer = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!url || !bearer) throw new Error('Against staging the tests need a GitHub Actions token: run the staging-journeys workflow');
+  const audience = new URL(process.env.E2E_BASE_URL!).host;
+  const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, { headers: { Authorization: `Bearer ${bearer}` } });
+  if (!res.ok) throw new Error(`GitHub gave no token: ${res.status} ${await res.text()}`);
+  const { value } = (await res.json()) as { value: string };
+  const { exp } = JSON.parse(Buffer.from(value.split('.')[1], 'base64url').toString()) as { exp: number };
+  token = { value, exp };
+  return value;
+}
+
+/** Against staging, gives `context` the token, and says which requests left staging (they would
+ * carry it too; the site loads nothing from elsewhere, so a test fails on any). */
+async function admit(context: BrowserContext): Promise<string[]> {
+  const away: string[] = [];
+  if (!STAGING) return away;
+  await context.setExtraHTTPHeaders({ 'x-staging-journeys-token': await stagingToken() });
+  const origin = new URL(process.env.E2E_BASE_URL!).origin;
+  context.on('request', (r) => {
+    const url = new URL(r.url());
+    if (url.protocol.startsWith('http') && url.origin !== origin) away.push(r.url());
+  });
+  return away;
+}
+
+/** Playwright's `test`, with every test's browser context admitted to staging. */
+export const test = base.extend({
+  context: async ({ context }, use) => {
+    const away = await admit(context);
+    await use(context);
+    expect(away, 'requests that left staging').toEqual([]);
+  },
+});
 
 /** Test accounts: the stand-ins' by default, staging's from the environment (secrets). */
 export const USERS = {
@@ -67,6 +109,7 @@ export async function shownHeight(
   const { use } = test.info().project;
   const size = viewport ?? use.viewport;
   const context = await browser.newContext({ ...use, viewport: size, javaScriptEnabled: ready !== null });
+  const away = await admit(context);
   await logIn(context, who, fresh);
   const page = await context.newPage();
   expect(page.viewportSize()).toEqual(size);
@@ -75,5 +118,6 @@ export async function shownHeight(
   await page.evaluate(() => document.fonts.ready);
   const box = await page.locator(measure).first().boundingBox();
   await context.close();
+  expect(away, 'requests that left staging').toEqual([]);
   return box!.height;
 }

@@ -1,8 +1,8 @@
 // The auth journeys in a browser: logging in (password and OAuth) lands on `next`, signing up,
 // the emailed links, an invite opened while logged out, and logging out. Against staging, the
 // journeys that would make accounts or need a real emailed code don't run.
-import { expect, test, type Browser, type Page } from '@playwright/test';
-import { STAGING, USERS, expectAccessible, logIn, shownHeight } from './site';
+import { expect, type Browser, type Page } from '@playwright/test';
+import { STAGING, USERS, expectAccessible, logIn, shownHeight, test } from './site';
 
 async function fillLogin(page: Page, who: 'plain' | 'all') {
   await page.getByLabel('Username').fill(USERS[who].username);

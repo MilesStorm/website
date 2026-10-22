@@ -1,7 +1,7 @@
 // The cookie notice sits over the bottom of the window until it is answered: on a phone the page
 // ends that much lower, so its last controls can still be scrolled to and used.
-import { expect, test } from '@playwright/test';
-import { logIn } from './site';
+import { expect } from '@playwright/test';
+import { logIn, test } from './site';
 
 test.use({ viewport: { width: 390, height: 844 } });
 

@@ -1,6 +1,6 @@
 // The navbar, theme and cookie notice: right on the first paint, without waiting for scripts.
-import { expect, test } from '@playwright/test';
-import { logIn } from './site';
+import { expect } from '@playwright/test';
+import { logIn, test } from './site';
 
 test.describe('without JavaScript the navbar is still right', () => {
   test.use({ javaScriptEnabled: false });
