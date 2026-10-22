@@ -149,6 +149,12 @@ pub async fn upload_picture(
         tracing::Span::current().set_attribute("bytes", body.len() as i64);
         to_profile_jpeg(&body)
     };
+    // A conversion holds the decoded image (up to `PICTURE_MAX_ALLOC`, and a rotated copy) in
+    // memory: at most `PICTURE_CONVERSIONS` at a time, the others wait their turn.
+    let Ok(Ok(_permit)) = tokio::time::timeout(PICTURE_WAIT, CONVERSIONS.acquire()).await else {
+        tracing::warn!("profile picture upload refused: conversions busy");
+        return Err(ApiError::new(ErrorCode::Unavailable, "Pictures are busy right now. Try again in a moment.").into());
+    };
     let jpeg = match crate::trace::spawn_blocking("profile_picture.convert", convert).await {
         Ok(Ok(jpeg)) => jpeg,
         Ok(Err(e)) => {
@@ -172,6 +178,16 @@ pub async fn upload_picture(
     }
 }
 
+/// Picture conversions running at once (per replica).
+const PICTURE_CONVERSIONS: usize = 2;
+static CONVERSIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(PICTURE_CONVERSIONS);
+/// How long an upload waits for a conversion slot before it is refused.
+const PICTURE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The largest width or height decoded, and the most memory one decode may claim (a 40
+/// megapixel photo; phones take 12 to 48).
+const PICTURE_MAX_SIDE: u32 = 8192;
+const PICTURE_MAX_ALLOC: u64 = 128 * 1024 * 1024;
+
 /// Decode any JPEG/PNG/WebP/GIF (upright, per its orientation tag), crop the
 /// centre square and re-encode it as a `PICTURE_SIDE`² JPEG. Transparent areas
 /// become white. Decoding is bounded so a small file can't claim huge memory.
@@ -180,11 +196,16 @@ pub(crate) fn to_profile_jpeg(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
 
     let mut reader = ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = Limits::default();
-    limits.max_image_width = Some(10_000);
-    limits.max_image_height = Some(10_000);
-    limits.max_alloc = Some(512 * 1024 * 1024);
+    limits.max_image_width = Some(PICTURE_MAX_SIDE);
+    limits.max_image_height = Some(PICTURE_MAX_SIDE);
+    limits.max_alloc = Some(PICTURE_MAX_ALLOC);
     reader.limits(limits);
     let mut decoder = reader.into_decoder()?;
+    // Not every decoder holds itself to `max_alloc`: the decoded size, from the header, before
+    // anything is decoded.
+    if decoder.total_bytes() > PICTURE_MAX_ALLOC {
+        anyhow::bail!("image too large: {} bytes decoded", decoder.total_bytes());
+    }
     let orientation = decoder.orientation()?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
@@ -237,6 +258,16 @@ mod tests {
         // A truncated PNG.
         let png = encode(&RgbaImage::new(50, 50), ImageFormat::Png);
         assert!(to_profile_jpeg(&png[..png.len() / 2]).is_err());
+    }
+
+    #[test]
+    fn images_past_the_caps_are_refused() {
+        // Wider than PICTURE_MAX_SIDE, though small in bytes.
+        let wide = encode(&RgbaImage::new(super::PICTURE_MAX_SIDE + 1, 1), ImageFormat::Png);
+        assert!(to_profile_jpeg(&wide).is_err());
+        // Within the sides, but its pixels need more than PICTURE_MAX_ALLOC.
+        let big = encode(&RgbaImage::new(super::PICTURE_MAX_SIDE, 4200), ImageFormat::Png);
+        assert!(to_profile_jpeg(&big).is_err());
     }
 
     #[test]
