@@ -3,7 +3,10 @@ name: trace-checker
 # Tests of the trace contract checker (tracing/checker).
 
 on:
+  # main only: a pull request's pushes are its pull_request run.
   push:
+    branches:
+      - main
     paths:
       - tracing/**
       - .github/workflows/trace-checker.yml
