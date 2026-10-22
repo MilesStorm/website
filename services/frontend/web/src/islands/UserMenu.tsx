@@ -29,7 +29,13 @@ export const UserMenu = island('UserMenu', function UserMenu() {
   return (
     <DropdownMenu {...menu.root}>
       <DropdownMenuTrigger asChild {...menu.trigger}>
-        <Button variant="ghost" size="icon" className="rounded-full" aria-label={`Account: ${viewer.shown_name}`}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="rounded-full"
+          aria-label={`Account: ${viewer.shown_name}`}
+          data-faro-user-action-name="account menu"
+        >
           <Avatar>
             <AvatarImage src={viewer.picture_url ? bffUrl(viewer.picture_url) : defaultPicture.src} alt="" />
             <AvatarFallback>{viewer.shown_name.slice(0, 1).toUpperCase()}</AvatarFallback>

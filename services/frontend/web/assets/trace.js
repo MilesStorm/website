@@ -18,9 +18,9 @@
 //   - ends every open span when the page is hidden for a navigation (pagehide), so the next page
 //     never leaves this one's spans without their parent;
 //   - reports rage, dead and error clicks, and long animation frames.
-// Labels come from data-faro-user-action-name, aria-label or button text (buttons whose text is
-// dynamic need data-faro-user-action-name), links use their templated path, and input values are
-// never read. Faro only starts on milesstorm.com and staging.milesstorm.com, so dev builds send
+// Labels come from data-faro-user-action-name, else the element's role or tag: never its text or
+// aria-label, which can name a person ("Account: <name>"). Links use their templated path; input
+// values are never read. Faro only starts on milesstorm.com and staging.milesstorm.com, so dev builds send
 // nothing.
 
 // Requests that never join an interaction: telemetry (ours, and Cloudflare's /cdn-cgi/rum beacon,
@@ -33,7 +33,7 @@ var PAGE_QUIET_MS = 1500;
 var MAX_MS = 10000;
 var FIRST_FETCH_MS = 1000;
 var PAGE_LOAD_MAX_MS = 15000;
-var CLICKABLE = 'button, a[href], [role=button], input[type=submit], summary, [data-faro-user-action-name]';
+export var CLICKABLE = 'button, a[href], [role=button], input[type=submit], summary, [data-faro-user-action-name]';
 var URL_ATTRS = ['http.url', 'url.full'];
 var NAME_ATTR = 'data-faro-user-action-name';
 
@@ -75,9 +75,12 @@ function stripIfUrl(value) {
   return typeof value === 'string' && /^(https?:\/\/|\/)/.test(value) ? stripUrl(value) : value;
 }
 
-// URLs quoted inside free text (error and console messages).
+// URLs and site paths quoted inside free text (error and console messages): `https://…?code=…`,
+// and a path such as `"/reset-password?code=…"` at the start, after a space, a quote or `(`.
 function stripQuotedUrls(text) {
-  return text.replace(/(https?:\/\/[^\s?#]*)[?#][^\s"')]*/g, '$1');
+  return text
+    .replace(/(https?:\/\/[^\s?#]*)[?#][^\s"')]*/g, '$1')
+    .replace(/(^|[\s"'(`])(\/[^\s?#"'`)]*)[?#][^\s"'`)]*/g, '$1$2');
 }
 
 // W3C traceparent `00-<32 hex>-<16 hex>-<2 hex>`; all-zero ids are invalid.
@@ -87,14 +90,12 @@ export function parseTraceparent(value) {
   return { traceId: m[1], spanId: m[2], traceFlags: parseInt(m[3], 16), isRemote: true };
 }
 
-function text(el) {
-  return (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-}
-
-// The name of what was clicked or submitted. A form with nothing naming it is labelled by the
-// button that submitted it. `href` is the page's address, for links' paths.
+// The name of what was clicked or submitted: its data-faro-user-action-name, else something the
+// code fixed (a link's templated path, a form's name or id, the element's role or tag), never
+// what the page shows. A form with nothing naming it is labelled by the button that submitted it.
+// `href` is the page's address, for links' paths.
 export function labelFor(el, submitter, href) {
-  var named = el.getAttribute(NAME_ATTR) || el.getAttribute('aria-label');
+  var named = el.getAttribute(NAME_ATTR);
   if (named) return named.slice(0, 40);
   var tag = el.tagName.toLowerCase();
   if (tag === 'a') return pathOf(el.getAttribute('href'), href);
@@ -102,8 +103,8 @@ export function labelFor(el, submitter, href) {
     var action = el.getAttribute('action');
     return el.getAttribute('name') || el.getAttribute('id') || (action ? pathOf(action, href) : submitter ? labelFor(submitter, null, href) : 'form');
   }
-  if (tag === 'input') return (el.getAttribute('value') || el.type || tag).slice(0, 40);
-  return text(el) || tag;
+  if (tag === 'input') return (el.type || tag).slice(0, 40);
+  return el.getAttribute('role') || tag;
 }
 
 function pathOf(target, href) {

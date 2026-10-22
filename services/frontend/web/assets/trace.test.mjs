@@ -70,7 +70,10 @@ function fakeOtel(clk, processor) {
   return { otel, spans, tracer };
 }
 
-function el(tagName, attrs = {}, textContent = '') {
+// An element; `name` is its data-faro-user-action-name (the only name a label takes from it).
+function el(tagName, attrs = {}, name = '') {
+  if (name.trim()) attrs = { 'data-faro-user-action-name': name.replace(/\s+/g, ' ').trim(), ...attrs };
+  const textContent = name;
   const node = {
     tagName: tagName.toUpperCase(), textContent, type: attrs.type,
     getAttribute: (k) => (k in attrs ? attrs[k] : null),
@@ -365,12 +368,16 @@ test('invalid traceparent metas produce no page load span', () => {
 
 test('anchors are named by templated path, never by their text', async () => {
   const h = setup();
-  h.click(el('a', { href: '/blog/42/comments/1234?x=secret' }, 'Private title'));
+  h.click({ ...el('a', { href: '/blog/42/comments/1234?x=secret' }), textContent: 'Private title' });
   await h.win.fetch('/api/post');
   assert.equal(h.spans[0].name, 'click /blog/{id}/comments/{id}');
-  assert.equal(h.tracer.labelFor(el('button', { 'aria-label': 'Close' }, 'x')), 'Close');
   assert.equal(h.tracer.labelFor(el('div', { 'data-faro-user-action-name': 'roll dice' }, 'ignored')), 'roll dice');
-  assert.equal(h.tracer.labelFor(el('button', {}, 'x'.repeat(60))), 'x'.repeat(40));
+  assert.equal(h.tracer.labelFor(el('div', { 'data-faro-user-action-name': 'x'.repeat(60) })), 'x'.repeat(40));
+  // Never what the page shows: text and aria-label can name a person.
+  const shown = (tag, attrs, text) => ({ ...el(tag, attrs), textContent: text });
+  assert.equal(h.tracer.labelFor(shown('button', { 'aria-label': 'Account: Ann Example' }, 'Ann')), 'button');
+  assert.equal(h.tracer.labelFor(shown('span', { role: 'button', 'aria-label': 'Remove admin from ann' }, 'ann')), 'button');
+  assert.equal(h.tracer.labelFor(el('input', { type: 'submit', value: 'Ann' })), 'submit');
 });
 
 test('wrapper returns the same response and rethrows the same rejection', async () => {
@@ -567,6 +574,10 @@ test('beforeSend strips query strings and fragments from page and span URLs', ()
   // console.warn and console.error messages.
   const log = h.api.scrubItem({ payload: { level: 'warn', message: 'GET https://milesstorm.com/verify-email#c0de failed' } });
   assert.equal(log.payload.message, 'GET https://milesstorm.com/verify-email failed');
+  const relative = h.api.scrubItem({ payload: { level: 'error', message: 'fetch "/reset-password?code=s3cret" failed (/invite#c0de) at /api/x?y=1' } });
+  assert.equal(relative.payload.message, 'fetch "/reset-password" failed (/invite) at /api/x');
+  const thrown = h.api.scrubItem({ payload: { type: 'Error', value: '/delete-account?code=abc is gone; a/b?c stays' } });
+  assert.equal(thrown.payload.value, '/delete-account is gone; a/b?c stays');
 });
 
 test('beacon traceparent is unsampled with random non-zero ids', () => {
