@@ -10,27 +10,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { bffUrl, client } from '@/api/client';
-import { onViewerChange, readBootstrap, type Viewer } from '@/api/session';
+import { bffUrl } from '@/api/client';
+import { logOut, onViewerChange, readBootstrap, type Viewer } from '@/api/session';
+import { useMenu } from '@/lib/menu';
 import defaultPicture from '@/assets/default-profile.png';
 
 /** The logged-in user's menu: their name and picture, the profile, logging out. */
 export function UserMenu() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
+  const menu = useMenu();
   useEffect(() => {
     void readBootstrap().then((b) => setViewer(b.viewer));
     return onViewerChange(setViewer);
   }, []);
   if (!viewer) return <span className="block size-9" aria-hidden="true" />;
 
-  const logOut = async () => {
-    await client.DELETE('/api/session');
-    // A new page, so everything on it is the logged-out one.
-    location.assign(bffUrl('/'));
-  };
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <DropdownMenu {...menu.root}>
+      <DropdownMenuTrigger asChild {...menu.trigger}>
         <Button variant="ghost" size="icon" className="rounded-full" aria-label={`Account: ${viewer.shown_name}`}>
           <Avatar>
             <AvatarImage src={viewer.picture_url ? bffUrl(viewer.picture_url) : defaultPicture.src} alt="" />

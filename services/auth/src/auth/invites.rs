@@ -14,10 +14,12 @@
 //!   `manage_permissions` can't be given by link), 404 `no_role`.
 //! - `GET /internal/admin/invites` → the latest invites, newest first.
 //! - `DELETE /internal/admin/invites/{id}`: revoke. 404 `no_invite`.
-//! - `POST /internal/invite/check` `{code}` → `{role}`. 404 `invalid_code`.
+//! - `POST /internal/invite/check` `{code}` → `{role}`. 404 `invalid_code`, 403
+//!   `admin_role` (the role has gained `manage_permissions` since the link was made).
 //! - `POST /internal/invite/redeem` `{code, token}` → `{role}`: gives the token's
 //!   user the role. 401 `logged_out`, 404 `invalid_code`, 403 `role_removed` (they
-//!   joined through it before and an admin has since taken the role away).
+//!   joined through it before and an admin has since taken the role away), 403
+//!   `admin_role` (as for `check`: never given by link, even to someone who joined before).
 
 use axum::{
     Json, Router,
@@ -230,15 +232,18 @@ struct RoleResp {
 
 #[tracing::instrument(name = "invite.check", skip_all)]
 async fn check(State(state): State<InternalState>, Json(req): Json<CheckReq>) -> Response {
-    let role: Result<Option<(String,)>, _> = sqlx::query_as(&format!(
-        "SELECT r.name FROM invites i JOIN roles r ON r.id = i.role_id WHERE i.code_hash = $1 AND {LIVE}"
+    let role: Result<Option<(String, bool, bool)>, _> = sqlx::query_as(&format!(
+        "SELECT r.name, ({LIVE}) AS live, {} AS admin FROM invites i JOIN roles r ON r.id = i.role_id \
+         WHERE i.code_hash = $1",
+        is_admin_role("i.role_id")
     ))
     .bind(hash(&req.code))
     .fetch_optional(&state.db)
     .await;
     match role {
-        Ok(Some((role,))) => Json(RoleResp { role }).into_response(),
-        Ok(None) => error(StatusCode::NOT_FOUND, "invalid_code"),
+        Ok(Some((_, _, true))) => error(StatusCode::FORBIDDEN, "admin_role"),
+        Ok(Some((role, true, false))) => Json(RoleResp { role }).into_response(),
+        Ok(_) => error(StatusCode::NOT_FOUND, "invalid_code"),
         Err(e) => db_error("checking an invite", e),
     }
 }
@@ -255,6 +260,8 @@ struct InviteRow {
     role_id: i32,
     role: String,
     live: bool,
+    /// Whether the role gives admin rights (now).
+    admin: bool,
 }
 
 enum Redeemed {
@@ -264,6 +271,8 @@ enum Redeemed {
     Invalid,
     /// Joined through this link before; the role was removed since.
     Removed,
+    /// The role has gained admin rights since the link was made.
+    AdminRole,
 }
 
 #[tracing::instrument(name = "invite.redeem", skip_all)]
@@ -272,8 +281,9 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
         let mut tx = trace::begin(&state.db).await?;
         // Locked, so two people can't both take the last use.
         let invite: Option<InviteRow> = sqlx::query_as(&format!(
-            "SELECT i.id, i.role_id, r.name AS role, ({LIVE}) AS live \
-             FROM invites i JOIN roles r ON r.id = i.role_id WHERE i.code_hash = $1 FOR UPDATE OF i"
+            "SELECT i.id, i.role_id, r.name AS role, ({LIVE}) AS live, {} AS admin \
+             FROM invites i JOIN roles r ON r.id = i.role_id WHERE i.code_hash = $1 FOR UPDATE OF i",
+            is_admin_role("i.role_id")
         ))
         .bind(hash(&req.code))
         .fetch_optional(&mut tx.executor())
@@ -282,6 +292,11 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
             trace::rollback(tx).await;
             return Ok(Redeemed::Invalid);
         };
+        // The rule `create` applies, again: the role may have gained admin rights since.
+        if invite.admin {
+            trace::rollback(tx).await;
+            return Ok(Redeemed::AdminRole);
+        }
         let user: Option<(i64,)> =
             sqlx::query_as("SELECT user_id FROM bff_tokens WHERE token = $1 AND expires_at > NOW()")
                 .bind(&req.token)
@@ -348,6 +363,11 @@ async fn redeem(State(state): State<InternalState>, Json(req): Json<RedeemReq>) 
         }
         Ok(Redeemed::LoggedOut) => error(StatusCode::UNAUTHORIZED, "logged_out"),
         Ok(Redeemed::Removed) => error(StatusCode::FORBIDDEN, "role_removed"),
+        Ok(Redeemed::AdminRole) => {
+            tracing::warn!("refused an invite whose role has gained admin rights");
+            telemetry::token_operation("invite_redeem", "admin_role");
+            error(StatusCode::FORBIDDEN, "admin_role")
+        }
         Ok(Redeemed::Invalid) => {
             telemetry::token_operation("invite_redeem", "invalid");
             error(StatusCode::NOT_FOUND, "invalid_code")

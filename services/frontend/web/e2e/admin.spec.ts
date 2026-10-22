@@ -95,6 +95,19 @@ if (!STAGING) {
     await expect(page.getByRole('button', { name: `Remove permission manage_permissions from ${role}` })).toBeHidden();
   });
 
+  test('taking the last admin rights away is refused, with why', async ({ context, page }) => {
+    await logIn(context, 'all');
+    await page.goto('/admin');
+    await tab(page, 'Roles');
+    await page.getByLabel('Search roles').fill('admin');
+    const remove = page.getByRole('button', { name: 'Remove permission manage_permissions from admin' });
+    await remove.click();
+    await page.getByRole('alertdialog', { name: 'Remove manage_permissions from admin?' }).getByRole('button', { name: 'Remove' }).click();
+    await expect(page.getByText(/That would leave nobody with admin rights/)).toBeVisible();
+    await expect(remove).toBeVisible();
+    await expectAccessible(page);
+  });
+
   test('an invite link is made, shown once, listed and turned off', async ({ context, page }) => {
     await logIn(context, 'all');
     const note = `e2e ${Math.random().toString(36).slice(2, 10)}`;

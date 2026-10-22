@@ -12,7 +12,8 @@
 // account gets token `none`.
 //
 // Emailed codes: `good` works, anything else has expired. Invite code `join` is for
-// `arcane_user`. OAuth: the provider's page is skipped, auth sends the browser straight back to
+// `arcane_user`; `admin` is for a role that has gained admin rights since, which auth refuses.
+// Admin changes that would leave nobody with `manage_permissions` are refused (409 `last_admin`). OAuth: the provider's page is skipped, auth sends the browser straight back to
 // the site's callback (SITE_URL) with code `good`, which logs in as `tester-all`.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -120,9 +121,16 @@ const routes = {
   'POST /internal/account/delete/check': ({ code }) =>
     code === 'good' ? [200, { username: 'tester-none', user_id: 2 }] : [404, { error: 'invalid_code' }],
   'POST /internal/account/delete/confirm': () => [200, {}],
-  'POST /internal/invite/check': ({ code }) => (code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}]),
+  'POST /internal/invite/check': ({ code }) =>
+    code === 'join' ? [200, { role: 'arcane_user' }] : code === 'admin' ? [403, { error: 'admin_role' }] : [404, {}],
   'POST /internal/invite/redeem': ({ code, token }) =>
-    !known(token) ? [401, {}] : code === 'join' ? [200, { role: 'arcane_user' }] : [404, {}],
+    !known(token)
+      ? [401, {}]
+      : code === 'join'
+        ? [200, { role: 'arcane_user' }]
+        : code === 'admin'
+          ? [403, { error: 'admin_role' }]
+          : [404, {}],
 };
 
 // ---- Admin (auth trusts the website to have checked `manage_permissions`) ----
@@ -181,6 +189,12 @@ function paged(items, query, name) {
   return [200, { items: found.slice(page * limit, page * limit + limit), total: found.length }];
 }
 
+/** Whether anyone would still hold `manage_permissions` with `roles` (by user) and these roles. */
+const someAdmin = (roles, roleList) =>
+  Object.values(roles).some((ids) => ids.some((id) => roleList.find((r) => r.id === id)?.permissions.includes(4)));
+/** Auth's refusal of a change that leaves nobody with admin rights. */
+const LAST_ADMIN = [409, { error: 'last_admin' }];
+
 /** The admin routes with ids in their paths: `[method, pattern, handler(match, body)]`. */
 const dynamicRoutes = [
   ['POST', /^\/internal\/admin\/users\/(\d+)\/roles\/(\d+)$/, ([, user, role]) => {
@@ -190,7 +204,9 @@ const dynamicRoutes = [
     return [204, ''];
   }],
   ['DELETE', /^\/internal\/admin\/users\/(\d+)\/roles\/(\d+)$/, ([, user, role]) => {
-    userRoles[user] = (userRoles[user] ?? []).filter((r) => r !== Number(role));
+    const left = (userRoles[user] ?? []).filter((r) => r !== Number(role));
+    if (!someAdmin({ ...userRoles, [user]: left }, adminRoles)) return LAST_ADMIN;
+    userRoles[user] = left;
     return [204, ''];
   }],
   ['POST', /^\/internal\/admin\/roles\/(\d+)\/permissions\/(\d+)$/, ([, role, permission]) => {
@@ -201,7 +217,10 @@ const dynamicRoutes = [
   }],
   ['DELETE', /^\/internal\/admin\/roles\/(\d+)\/permissions\/(\d+)$/, ([, role, permission]) => {
     const found = adminRoles.find((r) => r.id === Number(role));
-    if (found) found.permissions = found.permissions.filter((p) => p !== Number(permission));
+    if (!found) return [204, ''];
+    const left = found.permissions.filter((p) => p !== Number(permission));
+    if (!someAdmin(userRoles, adminRoles.map((r) => (r === found ? { ...r, permissions: left } : r)))) return LAST_ADMIN;
+    found.permissions = left;
     return [204, ''];
   }],
   ['DELETE', /^\/internal\/admin\/invites\/(\d+)$/, ([, id]) => {

@@ -1111,22 +1111,80 @@ async fn admin_assign_user_role(
     }
 }
 
+// ---- The last admin ----
+
+/// Who holds `manage_permissions` (through any of their roles).
+const ADMIN_USERS: &str = "SELECT DISTINCT ur.user_id FROM user_roles ur \
+     JOIN role_permissions rp ON rp.role_id = ur.role_id JOIN permissions p ON p.id = rp.permission_id \
+     WHERE p.name = 'manage_permissions'";
+
+/// Key of the transaction lock that every change able to take `manage_permissions` away takes
+/// first ("admins" in ASCII), so two of them can't each count the other's admin as staying.
+const ADMINS_LOCK: i64 = 0x6164_6d69_6e73;
+
+/// Takes the admins lock (held until the transaction ends) and counts who holds
+/// `manage_permissions`. Called before and after such a change: one that takes the count from
+/// some to none is undone, with 409 `last_admin`, so the site can't be left without an admin.
+pub(super) async fn admins(tx: &mut trace::Tx<'_>) -> Result<i64, sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(ADMINS_LOCK).execute(&mut tx.executor()).await?;
+    let (n,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM ({ADMIN_USERS}) a"))
+        .fetch_one(&mut tx.executor())
+        .await?;
+    Ok(n)
+}
+
+/// Whether `user_id` is the only one who holds `manage_permissions`. Only to refuse early
+/// (before emailing a delete link, or before the website removes the account's other data):
+/// the deletion itself checks with [`admins`].
+pub(super) async fn only_admin(db: &Db, user_id: i64) -> Result<bool, sqlx::Error> {
+    let (only,): (bool,) =
+        sqlx::query_as(&format!("SELECT COALESCE(bool_and(a.user_id = $1), false) FROM ({ADMIN_USERS}) a"))
+            .bind(user_id)
+            .fetch_one(db)
+            .await
+            .inspect_err(trace::db_failed)?;
+    Ok(only)
+}
+
+/// Runs `change` (taking a role from a user, or a permission from a role) unless that leaves
+/// nobody with `manage_permissions`: `Ok(false)` then, with nothing changed.
+async fn unless_last_admin(
+    db: &Db,
+    change: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = trace::begin(db).await?;
+    let before = admins(&mut tx).await?;
+    change.execute(&mut tx.executor()).await?;
+    if before > 0 && admins(&mut tx).await? == 0 {
+        trace::rollback(tx).await;
+        return Ok(false);
+    }
+    trace::commit(tx).await?;
+    Ok(true)
+}
+
+/// 409 `last_admin`: the change would leave nobody able to use the admin panel.
+pub(super) fn last_admin() -> axum::response::Response {
+    account_email::error(StatusCode::CONFLICT, "last_admin")
+}
+
 #[tracing::instrument(name = "admin.revoke_user_role", skip_all, fields(user_id, role_id))]
 async fn admin_revoke_user_role(
     State(state): State<InternalState>,
     Path((user_id, role_id)): Path<(i64, i32)>,
 ) -> impl IntoResponse {
-    match sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2")
-        .bind(user_id)
-        .bind(role_id)
-        .execute(&state.db)
-        .await
-    {
-        Ok(_) => {
+    let change = sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2").bind(user_id).bind(role_id);
+    match unless_last_admin(&state.db, change).await {
+        Ok(true) => {
             tracing::info!(user_id, role_id, "revoked role from user");
             StatusCode::NO_CONTENT.into_response()
         }
+        Ok(false) => {
+            tracing::warn!(user_id, role_id, "refused to take the last admin's rights");
+            last_admin()
+        }
         Err(e) => {
+            trace::db_failed(&e);
             tracing::error!(error = %e, user_id, role_id, "admin_revoke_user_role: db error");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
@@ -1162,19 +1220,20 @@ async fn admin_revoke_role_permission(
     State(state): State<InternalState>,
     Path((role_id, permission_id)): Path<(i32, i32)>,
 ) -> impl IntoResponse {
-    match sqlx::query(
-        "DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2",
-    )
-    .bind(role_id)
-    .bind(permission_id)
-    .execute(&state.db)
-    .await
-    {
-        Ok(_) => {
+    let change = sqlx::query("DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2")
+        .bind(role_id)
+        .bind(permission_id);
+    match unless_last_admin(&state.db, change).await {
+        Ok(true) => {
             tracing::info!(role_id, permission_id, "revoked permission from role");
             StatusCode::NO_CONTENT.into_response()
         }
+        Ok(false) => {
+            tracing::warn!(role_id, permission_id, "refused to take the last admin's rights");
+            last_admin()
+        }
         Err(e) => {
+            trace::db_failed(&e);
             tracing::error!(error = %e, role_id, permission_id, "admin_revoke_role_permission: db error");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
@@ -1246,5 +1305,214 @@ mod tests {
         assert!(clean_display_name(Some("a\nb")).is_err());
         assert!(clean_display_name(Some("admin\u{202E}nimda")).is_err());
         assert!(clean_display_name(Some("zero\u{200B}width")).is_err());
+    }
+
+    /// `/internal` against a real Postgres (Docker), as the website calls it.
+    struct Internal {
+        url: String,
+        http: super::TracedClient,
+        db: super::Db,
+        _pg: super::super::trace::testing::TestDb,
+    }
+
+    impl Internal {
+        async fn start() -> Self {
+            use oauth2::{AuthUrl, ClientId, TokenUrl, basic::BasicClient};
+            use super::super::trace::{self, Peer, testing::{postgres, serve}};
+
+            let pg = postgres(super::super::pool_options()).await;
+            super::super::migrate(&pg.raw, &tower_sessions_sqlx_store::PostgresStore::new(pg.raw.clone())).await.unwrap();
+            let db = pg.db();
+            let oauth = || {
+                BasicClient::new(ClientId::new("test".into()))
+                    .set_auth_uri(AuthUrl::new("https://oauth.test/authorize".into()).unwrap())
+                    .set_token_uri(TokenUrl::new("https://oauth.test/token".into()).unwrap())
+            };
+            let http = trace::client(Peer { service: "test", expected: &[] }, std::time::Duration::from_secs(10), reqwest::redirect::Policy::none());
+            let state = super::InternalState {
+                db: db.clone(),
+                jwt_secret: "test".into(),
+                service_secret: "service".into(),
+                backend: super::Backend::new(db.clone(), oauth(), oauth(), http.clone()),
+                mailer: super::Mailer::Off,
+                ark_http: http.clone(),
+                enshrouded: super::super::enshrouded::Control::from_env(),
+            };
+            let url = serve(super::router(state)).await;
+            Internal { url, http, db, _pg: pg }
+        }
+
+        /// A user (with `email` confirmed when given) and their session token, named after them.
+        async fn user(&self, name: &str, email: Option<&str>) -> i64 {
+            let (id,): (i64,) = sqlx::query_as(
+                "INSERT INTO users (username, email, email_verified_at) \
+                 VALUES ($1, $2, CASE WHEN $2 IS NULL THEN NULL ELSE NOW() END) RETURNING id",
+            )
+            .bind(name)
+            .bind(email)
+            .fetch_one(&self.db)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO bff_tokens (token, user_id) VALUES ($1, $2)").bind(name).bind(id).execute(&self.db).await.unwrap();
+            id
+        }
+
+        async fn id(&self, table: &str, name: &str) -> i32 {
+            let (id,): (i32,) = sqlx::query_as(&format!("SELECT id FROM {table} WHERE name = $1 ORDER BY id LIMIT 1"))
+                .bind(name)
+                .fetch_one(&self.db)
+                .await
+                .unwrap();
+            id
+        }
+
+        /// The status and the `error` code of a call.
+        async fn call(&self, method: reqwest::Method, path: &str, body: Option<serde_json::Value>) -> (u16, String) {
+            let mut req = self.http.request(method, format!("{}{path}", self.url)).header("x-service-token", "service");
+            if let Some(body) = body {
+                req = req.json(&body);
+            }
+            let reply = req.send().await.unwrap();
+            let status = reply.status().as_u16();
+            let body: serde_json::Value = reply.json().await.unwrap_or_default();
+            (status, body["error"].as_str().unwrap_or_default().to_string())
+        }
+
+        async fn admins(&self) -> i64 {
+            let (n,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM ({}) a", super::ADMIN_USERS))
+                .fetch_one(&self.db)
+                .await
+                .unwrap();
+            n
+        }
+    }
+
+    /// Nothing leaves the site without someone holding `manage_permissions`: not taking a role
+    /// from a user, not taking the permission from a role, not deleting an account, and not two
+    /// such changes at once.
+    #[tokio::test]
+    async fn the_last_admin_keeps_their_rights() {
+        use reqwest::Method;
+        use serde_json::json;
+
+        let auth = Internal::start().await;
+        let admin = auth.id("roles", "admin").await;
+        let manage = auth.id("permissions", "manage_permissions").await;
+        let (ada, bob) = (auth.user("ada", None).await, auth.user("bob", Some("bob@example.test")).await);
+        for user in [ada, bob] {
+            assert_eq!(auth.call(Method::POST, &format!("/internal/admin/users/{user}/roles/{admin}"), None).await.0, 204);
+        }
+
+        // Two admins each lose the role at once: only one of them can.
+        let (ada_path, bob_path) =
+            (format!("/internal/admin/users/{ada}/roles/{admin}"), format!("/internal/admin/users/{bob}/roles/{admin}"));
+        let (a, b) = tokio::join!(
+            auth.call(Method::DELETE, &ada_path, None),
+            auth.call(Method::DELETE, &bob_path, None),
+        );
+        let mut answers = [a, b];
+        answers.sort();
+        assert_eq!(answers, [(204, String::new()), (409, "last_admin".into())]);
+        assert_eq!(auth.admins().await, 1);
+
+        // Whoever is left: their role, the role's permission and their account all stay.
+        let (left, gone) = {
+            let (left,): (i64,) = sqlx::query_as(&format!("SELECT user_id::BIGINT FROM ({}) a", super::ADMIN_USERS))
+                .fetch_one(&auth.db)
+                .await
+                .unwrap();
+            if left == ada { (ada, bob) } else { (bob, ada) }
+        };
+        let last_admin = (409, "last_admin".to_string());
+        assert_eq!(auth.call(Method::DELETE, &format!("/internal/admin/users/{left}/roles/{admin}"), None).await, last_admin);
+        assert_eq!(auth.call(Method::DELETE, &format!("/internal/admin/roles/{admin}/permissions/{manage}"), None).await, last_admin);
+        if left == ada {
+            // No confirmed email: deleted directly, asked first.
+            let body = || Some(json!({"token": "ada", "check": true}));
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/direct", body()).await, last_admin);
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/direct", Some(json!({"token": "ada"}))).await, last_admin);
+        } else {
+            // A confirmed email: no link is sent, and a link sent earlier doesn't delete it.
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/request", Some(json!({"token": "bob"}))).await, last_admin);
+            let code = "a-delete-code";
+            sqlx::query(
+                "INSERT INTO email_tokens (token_hash, user_id, purpose, email, expires_at) \
+                 VALUES ($1, $2, 'delete_account', 'bob@example.test', NOW() + INTERVAL '1 hour')",
+            )
+            .bind(super::super::account_email::hash(code))
+            .bind(bob)
+            .execute(&auth.db)
+            .await
+            .unwrap();
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/check", Some(json!({"code": code}))).await, last_admin);
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/confirm", Some(json!({"code": code}))).await, last_admin);
+        }
+        assert_eq!(auth.admins().await, 1);
+
+        // With another admin, each of those works.
+        assert_eq!(auth.call(Method::POST, &format!("/internal/admin/users/{gone}/roles/{admin}"), None).await.0, 204);
+        assert_eq!(auth.call(Method::DELETE, &format!("/internal/admin/users/{left}/roles/{admin}"), None).await.0, 204);
+        assert_eq!(auth.call(Method::POST, &format!("/internal/admin/users/{left}/roles/{admin}"), None).await.0, 204);
+        let token = if left == ada { "ada" } else { "bob" };
+        if left == ada {
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/direct", Some(json!({"token": token, "check": true}))).await.0, 200);
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/direct", Some(json!({"token": token}))).await.0, 200);
+        } else {
+            assert_eq!(auth.call(Method::POST, "/internal/account/delete/confirm", Some(json!({"code": "a-delete-code"}))).await.0, 200);
+        }
+        assert_eq!(auth.admins().await, 1);
+
+        // A site with no admin at all (a fresh one) still lets accounts go.
+        let user = auth.id("roles", "user").await;
+        let cy = auth.user("cy", None).await;
+        assert_eq!(auth.call(Method::POST, &format!("/internal/admin/users/{cy}/roles/{user}"), None).await.0, 204);
+        sqlx::query("DELETE FROM user_roles WHERE role_id = $1").bind(admin).execute(&auth.db).await.unwrap();
+        assert_eq!(auth.call(Method::DELETE, &format!("/internal/admin/users/{cy}/roles/{user}"), None).await.0, 204);
+        assert_eq!(auth.call(Method::POST, "/internal/account/delete/direct", Some(json!({"token": "cy"}))).await.0, 200);
+    }
+
+    /// An invite link never gives admin rights: not when made, and not when opened after its
+    /// role has gained them.
+    #[tokio::test]
+    async fn invites_for_a_role_that_became_admin_are_refused() {
+        use reqwest::Method;
+        use serde_json::json;
+
+        let auth = Internal::start().await;
+        let (admin, user) = (auth.id("roles", "admin").await, auth.id("roles", "user").await);
+        let manage = auth.id("permissions", "manage_permissions").await;
+        auth.user("ada", None).await;
+        let dee = auth.user("dee", None).await;
+        let made = |role| auth.call(Method::POST, "/internal/admin/invites", Some(json!({"token": "ada", "role_id": role, "days": 7})));
+        assert_eq!(made(admin).await, (400, "admin_role".into()));
+
+        // A link for `user`, made while that gives no admin rights; then it does.
+        let reply = auth
+            .http
+            .post(format!("{}/internal/admin/invites", auth.url))
+            .header("x-service-token", "service")
+            .json(&json!({"token": "ada", "role_id": user, "days": 7}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status().as_u16(), 200);
+        let link: serde_json::Value = reply.json().await.unwrap();
+        let code = link["link"].as_str().unwrap().rsplit_once('#').unwrap().1.to_string();
+        assert_eq!(auth.call(Method::POST, "/internal/invite/check", Some(json!({"code": code}))).await, (200, String::new()));
+        assert_eq!(auth.call(Method::POST, &format!("/internal/admin/roles/{user}/permissions/{manage}"), None).await.0, 204);
+
+        let admin_role = (403, "admin_role".to_string());
+        assert_eq!(auth.call(Method::POST, "/internal/invite/check", Some(json!({"code": code}))).await, admin_role);
+        assert_eq!(auth.call(Method::POST, "/internal/invite/redeem", Some(json!({"code": code, "token": "dee"}))).await, admin_role);
+        let (has,): (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = $1)")
+            .bind(dee)
+            .fetch_one(&auth.db)
+            .await
+            .unwrap();
+        assert!(!has, "the redeem gave no role");
+
+        // Without admin rights again, the link works.
+        assert_eq!(auth.call(Method::DELETE, &format!("/internal/admin/roles/{user}/permissions/{manage}"), None).await.0, 204);
+        assert_eq!(auth.call(Method::POST, "/internal/invite/redeem", Some(json!({"code": code, "token": "dee"}))).await, (200, String::new()));
     }
 }

@@ -1,12 +1,15 @@
 name: checks
 
-# Clippy and the tests of every service, on every push and pull request (TRACING.md, "Checks").
+# Clippy and the tests of every service, on every pull request and push to main (TRACING.md,
+# "Checks"). Pushes to other branches don't run it: a pull request's would run each job twice.
 # No path filters, so the jobs can be required checks. ai_pipeline builds without CUDA (burn
 # loads it at run time) and no test needs a GPU, so all three run on GitHub's runners. The
 # built image's browser tests are e2e.yml.
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 

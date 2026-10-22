@@ -50,6 +50,11 @@ async fn call(path: &str, body: Value) -> Result<String, Refused> {
         200..=299 => Ok(reply.get("role").and_then(Value::as_str).unwrap_or_default().to_string()),
         404 => Err(Refused::Invalid),
         401 => Err(Refused::LoggedOut),
+        // The link's role has gained admin rights since it was made: links never give those.
+        403 if reply.get("error").and_then(Value::as_str) == Some("admin_role") => Err(Refused::Other(ApiError::new(
+            ErrorCode::Forbidden,
+            "This invite link can't be used: its group now has admin rights, which links never give. Ask whoever sent it.",
+        ))),
         403 => Err(Refused::Removed),
         _ => {
             tracing::error!(path, status, error = ?reply.get("error"), "auth refused an invite request");

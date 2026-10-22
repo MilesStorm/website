@@ -8,11 +8,13 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useMenu } from '@/lib/menu';
 import { THEME_KEY, getTheme, setTheme, type Theme } from '@/lib/theme';
 
 /** Light, dark or the system's theme (shadcn's Astro mode toggle). */
 export function ModeToggle() {
   const [theme, set] = useState<Theme>('system');
+  const menu = useMenu();
   useEffect(() => {
     set(getTheme());
     // Chosen in another tab: the page follows (the layout's script), and so does the menu.
@@ -28,8 +30,8 @@ export function ModeToggle() {
     set(next);
   };
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <DropdownMenu {...menu.root}>
+      <DropdownMenuTrigger asChild {...menu.trigger}>
         <Button variant="ghost" size="icon" aria-label="Theme">
           <Sun className="scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" />
           <Moon className="absolute scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" />

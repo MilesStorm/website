@@ -41,7 +41,15 @@ group (`src/auth/invites.rs`). Make them in the website's admin panel, Invites t
 the role, how many days the link works and how many people can use it. The link is shown
 once, when made (only its SHA-256 is stored, in `invites`), and can be turned off there.
 Someone without an account is asked to sign up or log in first, and joins right after.
-Links use `SITE_URL`, like the emails.
+Links use `SITE_URL`, like the emails. A link never gives a role with `manage_permissions`:
+it can't be made for one, and one whose role has gained it since stops working.
+
+## Admins
+
+Someone always keeps `manage_permissions`: taking the last holder's role, taking the
+permission off the last role that gives it, or deleting the last holder's account is
+refused (409 `last_admin`). Each such change counts the holders in the same transaction,
+under one lock, so two at once can't both pass.
 
 ## Enshrouded server panel
 

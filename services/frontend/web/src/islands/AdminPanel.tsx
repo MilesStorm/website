@@ -59,6 +59,7 @@ import {
 } from '@/lib/admin';
 import { attempt, type Outcome } from '@/lib/errors';
 import { isKnownPermission } from '@/lib/gates';
+import { useMenu } from '@/lib/menu';
 
 type RoleRef = Schemas['AdminRoleRef'];
 type Permission = Schemas['AdminPermission'];
@@ -330,6 +331,7 @@ function Assigned({
   remove: (id: number) => void;
 }) {
   const missing = all.filter((a) => !have.some((h) => h.id === a.id));
+  const menu = useMenu();
   const unknown = (name: string) => kind === 'permission' && !isKnownPermission(name);
   return (
     <div className="flex min-h-6 flex-wrap items-center gap-1.5">
@@ -350,8 +352,8 @@ function Assigned({
         </Badge>
       ))}
       {missing.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+        <DropdownMenu {...menu.root}>
+          <DropdownMenuTrigger asChild {...menu.trigger}>
             <Button size="xs" variant="outline" className="border-dashed" aria-label={`Add ${kind} to ${owner}`}>
               <Plus data-icon="inline-start" aria-hidden="true" />
               Add
