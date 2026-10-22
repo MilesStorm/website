@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { readBootstrap, type Viewer } from '@/api/session';
+import { readBootstrap, readEmbeddedBootstrap, type Viewer } from '@/api/session';
 import { FeatureCard } from '@/components/FeatureCard';
 import { badgeVariants } from '@/components/ui/badge';
 import { homeCards } from '@/lib/features';
@@ -10,9 +10,9 @@ import { HERO_NAME, HERO_SECTION, HomeSkeleton } from './HomeSkeleton';
 
 /** The logged-in start page: a greeting and the parts of the site, open or locked. */
 export function HomeCards() {
-  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const [viewer, setViewer] = useState<Viewer | null>(() => readEmbeddedBootstrap()?.viewer ?? null);
   useEffect(() => {
-    void readBootstrap().then((b) => setViewer(b.viewer));
+    if (!readEmbeddedBootstrap()) void readBootstrap().then((b) => setViewer(b.viewer));
   }, []);
   if (!viewer) return <HomeSkeleton />;
   return (

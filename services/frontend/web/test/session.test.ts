@@ -13,18 +13,31 @@ describe('the viewer', () => {
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
     splice(ann);
-    const { readBootstrap } = await import('@/api/session');
-    expect(await readBootstrap()).toEqual(ann);
+    const { readBootstrap, readEmbeddedBootstrap } = await import('@/api/session');
+    expect(readEmbeddedBootstrap()).toEqual(ann);
+    expect(await readBootstrap()).toBe(readEmbeddedBootstrap());
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it('is asked for once when the page has no tag', async () => {
     const fetch = vi.fn(async () => json(ann));
     vi.stubGlobal('fetch', fetch);
-    const { readBootstrap } = await import('@/api/session');
+    const { readBootstrap, readEmbeddedBootstrap } = await import('@/api/session');
+    expect(readEmbeddedBootstrap()).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
     expect(await readBootstrap()).toEqual(ann);
     expect(await readBootstrap()).toEqual(ann);
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('distinguishes an embedded logged-out viewer from missing bootstrap', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    splice(loggedOut);
+    const { readBootstrap, readEmbeddedBootstrap } = await import('@/api/session');
+    expect(readEmbeddedBootstrap()).toEqual(loggedOut);
+    expect(await readBootstrap()).toEqual(loggedOut);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('is logged out when the server fails', async () => {

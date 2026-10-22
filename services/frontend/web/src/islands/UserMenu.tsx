@@ -11,16 +11,16 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { bffUrl } from '@/api/client';
-import { logOut, onViewerChange, readBootstrap, type Viewer } from '@/api/session';
+import { logOut, onViewerChange, readBootstrap, readEmbeddedBootstrap, type Viewer } from '@/api/session';
 import { useMenu } from '@/lib/menu';
 import defaultPicture from '@/assets/default-profile.png';
 
 /** The logged-in user's menu: their name and picture, the profile, logging out. */
 export function UserMenu() {
-  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const [viewer, setViewer] = useState<Viewer | null>(() => readEmbeddedBootstrap()?.viewer ?? null);
   const menu = useMenu();
   useEffect(() => {
-    void readBootstrap().then((b) => setViewer(b.viewer));
+    if (!readEmbeddedBootstrap()) void readBootstrap().then((b) => setViewer(b.viewer));
     return onViewerChange(setViewer);
   }, []);
   if (!viewer) return <span className="block size-9" aria-hidden="true" />;
