@@ -142,18 +142,31 @@ pub async fn upload_picture(
         return Err(ApiError::new(ErrorCode::Invalid, "That picture is too large (at most 5 MB).").with_status(413).into());
     }
     let not_image = || ApiError::new(ErrorCode::Invalid, "That file isn't a picture that can be read. Use JPEG, PNG, WebP or GIF.");
+    // A conversion holds the decoded image (up to `PICTURE_MAX_ALLOC`, and a rotated copy) in
+    // memory: at most `PICTURE_CONVERSIONS` at a time. A few more wait their turn; past that, or
+    // after `PICTURE_WAIT`, an upload is refused at once.
+    let busy = || ApiError::new(ErrorCode::Unavailable, "Pictures are busy right now. Try again in a moment.");
+    let permit = {
+        let _waiting = Waiting::enter(&WAITING).ok_or_else(|| {
+            tracing::warn!("profile picture upload refused: too many waiting");
+            busy()
+        })?;
+        match tokio::time::timeout(PICTURE_WAIT, CONVERSIONS.acquire()).await {
+            Ok(Ok(permit)) => permit,
+            _ => {
+                tracing::warn!("profile picture upload refused: conversions busy");
+                return Err(busy().into());
+            }
+        }
+    };
     // In a span of its own (made inside the closure), so the conversion's CPU time shows
-    // under its own name.
+    // under its own name. The permit goes with the work: a request dropped meanwhile doesn't
+    // free the slot while the conversion still runs.
     let convert = move || {
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        let _permit = permit;
         tracing::Span::current().set_attribute("bytes", body.len() as i64);
         to_profile_jpeg(&body)
-    };
-    // A conversion holds the decoded image (up to `PICTURE_MAX_ALLOC`, and a rotated copy) in
-    // memory: at most `PICTURE_CONVERSIONS` at a time, the others wait their turn.
-    let Ok(Ok(_permit)) = tokio::time::timeout(PICTURE_WAIT, CONVERSIONS.acquire()).await else {
-        tracing::warn!("profile picture upload refused: conversions busy");
-        return Err(ApiError::new(ErrorCode::Unavailable, "Pictures are busy right now. Try again in a moment.").into());
     };
     let jpeg = match crate::trace::spawn_blocking("profile_picture.convert", convert).await {
         Ok(Ok(jpeg)) => jpeg,
@@ -181,6 +194,30 @@ pub async fn upload_picture(
 /// Picture conversions running at once (per replica).
 const PICTURE_CONVERSIONS: usize = 2;
 static CONVERSIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(PICTURE_CONVERSIONS);
+/// Uploads waiting for a conversion slot at most; more are refused at once.
+const PICTURE_MAX_WAITING: usize = 4;
+static WAITING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// One upload counted in a waiting count (`WAITING`) while it lives.
+struct Waiting(&'static std::sync::atomic::AtomicUsize);
+
+impl Waiting {
+    fn enter(count: &'static std::sync::atomic::AtomicUsize) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        if count.fetch_add(1, Ordering::SeqCst) >= PICTURE_MAX_WAITING {
+            count.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Waiting(count))
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// How long an upload waits for a conversion slot before it is refused.
 const PICTURE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// The largest width or height decoded, and the most memory one decode may claim (a 40
@@ -258,6 +295,15 @@ mod tests {
         // A truncated PNG.
         let png = encode(&RgbaImage::new(50, 50), ImageFormat::Png);
         assert!(to_profile_jpeg(&png[..png.len() / 2]).is_err());
+    }
+
+    #[test]
+    fn only_a_few_uploads_wait_for_a_slot() {
+        static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let waiting: Vec<_> = (0..super::PICTURE_MAX_WAITING).map(|_| super::Waiting::enter(&COUNT).expect("room")).collect();
+        assert!(super::Waiting::enter(&COUNT).is_none());
+        drop(waiting);
+        assert!(super::Waiting::enter(&COUNT).is_some());
     }
 
     #[test]
