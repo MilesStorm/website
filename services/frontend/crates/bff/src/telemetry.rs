@@ -293,11 +293,13 @@ async fn forward(telemetry: &Telemetry, payload: &Payload) -> Response {
         }
         Ok(reply) => {
             tracing::warn!(status = reply.status().as_u16(), "the collector refused a telemetry upload");
+            trace::failed("collector_refused");
             metrics::counter!("bff_telemetry_uploads_total", "status" => "collector_refused").increment(1);
             StatusCode::BAD_GATEWAY.into_response()
         }
         Err(e) => {
             tracing::warn!(error = %e, "the collector can't be reached");
+            trace::failed("collector_down");
             metrics::counter!("bff_telemetry_uploads_total", "status" => "collector_down").increment(1);
             StatusCode::BAD_GATEWAY.into_response()
         }

@@ -820,6 +820,56 @@ async fn login_spans_fail_on_outages_not_on_wrong_passwords() {
 }
 
 #[tokio::test]
+async fn every_api_route_has_a_server_span_named_by_its_route() {
+    use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let doc: Value = serde_json::from_str(&super::openapi_json()).unwrap();
+    let mut site = Site::serving(super::router().layer(OtelAxumLayer::default())).await;
+    let mut routes = Vec::new();
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        for method in item.as_object().unwrap().keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            // Path parameters are ids: any number reaches the route.
+            let concrete = path.split('/').map(|seg| if seg.starts_with('{') { "1" } else { seg }).collect::<Vec<_>>().join("/");
+            // Logged out: every route answers without waiting on a stream.
+            site.send(method.clone(), &concrete, Some(SITE), Some(("application/json", b"{}".to_vec()))).await;
+            routes.push(format!("{method} {path}"));
+        }
+    }
+    let names: std::collections::HashSet<String> = exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.span_kind == opentelemetry::trace::SpanKind::Server)
+        .map(|s| s.name.to_string())
+        .collect();
+    let unnamed: Vec<_> = routes.iter().filter(|r| !names.contains(*r)).collect();
+    assert!(unnamed.is_empty(), "routes without a SERVER span of their name: {unnamed:?}\nspans: {names:?}");
+}
+
+#[tokio::test]
+async fn a_failed_login_or_registration_leaves_the_typed_username_out_of_spans_and_logs() {
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let mut site = Site::new().await;
+    let typed = "Hunter2-typed-in-the-username-box";
+    site.json(Method::POST, "/api/session/login", json!({"username": typed, "password": "wrong"})).await;
+    site.json(Method::POST, "/api/session/login", json!({"username": "outage", "password": typed})).await;
+    site.json(Method::POST, "/api/session/register", json!({"username": "taken", "email": "a@b.c", "password": typed})).await;
+    let spans = exporter.get_finished_spans().unwrap();
+    assert!(spans.iter().any(|s| s.name == "bff.login_password"));
+    // Log lines inside a span are its events, with their fields as attributes.
+    for span in &spans {
+        let attributes = span.attributes.iter().chain(span.events.iter().flat_map(|e| e.attributes.iter()));
+        for kv in attributes {
+            assert!(!kv.value.to_string().contains(typed), "{}: {} = {}", span.name, kv.key, kv.value);
+        }
+        for event in span.events.iter() {
+            assert!(!event.name.contains(typed), "{}: {}", span.name, event.name);
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_picture_is_uploaded_served_and_removed() {
     let mut site = Site::logged_in("all").await.with_pictures();
     let mut png = std::io::Cursor::new(Vec::new());
