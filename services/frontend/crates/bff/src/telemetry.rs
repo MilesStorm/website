@@ -2,19 +2,21 @@
 //! `faro.receiver` inside the cluster (TRACING.md, "Browser").
 //!
 //! The endpoint is public, so it checks what the Gateway's faro-guard checked for Alloy's own
-//! public `/faro/` route: a `Content-Length` (411 without one), at most [`MAX_BODY`] (413), no
-//! `Content-Encoding` (415), JSON, from this site, and at most [`PER_VISITOR`] uploads a minute per
-//! visitor (429). The body must parse as a Faro payload (400).
+//! public `/faro/` route: at most [`MAX_BODY`] (413 for a longer declared length, and the read
+//! stops there; Cloudflare may send HTTP/2 without a length), no `Content-Encoding` (415), JSON,
+//! from this site, and at most [`PER_VISITOR`] uploads a minute per visitor (429; requests without
+//! Cloudflare's address share one visitor). The body must parse as a Faro payload (400).
 //!
 //! Error stack frames in the site's own scripts are mapped back to the source here, with the
 //! build's source maps (`SOURCE_MAPS`, baked into the image and never served), so Alloy needs no
 //! access to them. Only a frame whose file is exactly one of the build's `/_astro/*.js` files,
-//! on this site's host, is mapped; every other frame is passed on as it came. The maps are
-//! parsed on first use and kept: there are only as many as the build has files.
+//! on this site's host, is mapped; every other frame is passed on as it came. Each map is parsed
+//! once, on first use, by one request (the others wait for it), and kept: there are only as many
+//! as the build has files.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
@@ -114,15 +116,15 @@ struct Frame {
 
 // ---- Source maps ----
 
-/// Most maps kept parsed at once. The build has fewer; this only bounds a build that grows.
-const MAX_PARSED: usize = 128;
+/// One file's map: parsed on first use (None when it can't be read), then kept.
+type Parsed = tokio::sync::OnceCell<Option<Arc<sourcemap::SourceMap>>>;
 
 /// The build's source maps: `<file>.js.map` in one directory, for the files under `/_astro/`.
 pub(crate) struct SourceMaps {
     dir: PathBuf,
-    /// The `.js` files that have a map, read once: no lookup reaches the disk for another name.
-    files: HashSet<String>,
-    parsed: Mutex<HashMap<String, Arc<sourcemap::SourceMap>>>,
+    /// The `.js` files that have a map, listed once: no lookup reaches the disk for another name,
+    /// and no upload can add an entry.
+    files: HashMap<String, Arc<Parsed>>,
 }
 
 impl SourceMaps {
@@ -132,14 +134,15 @@ impl SourceMaps {
                 .filter_map(|e| e.ok()?.file_name().into_string().ok())
                 .filter_map(|name| name.strip_suffix(".map").map(str::to_owned))
                 .filter(|name| name.ends_with(".js"))
+                .map(|name| (name, Arc::new(Parsed::new())))
                 .collect(),
             Err(e) => {
                 tracing::warn!(dir = %dir.display(), error = %e, "no source maps: browser errors stay unmapped");
-                HashSet::new()
+                HashMap::new()
             }
         };
         tracing::info!(dir = %dir.display(), maps = files.len(), "source maps for browser errors");
-        Self { dir, files, parsed: Mutex::new(HashMap::new()) }
+        Self { dir, files }
     }
 
     /// The build's file a frame is in: `https://<host>/_astro/<file>.js` (query and fragment
@@ -150,36 +153,34 @@ impl SourceMaps {
             return None;
         }
         let name = url.path().strip_prefix("/_astro/")?;
-        self.files.contains(name).then(|| name.to_owned())
+        self.files.contains_key(name).then(|| name.to_owned())
     }
 
-    /// The parsed map of `file`, read from disk the first time.
+    /// The parsed map of `file`, read from disk the first time; concurrent first uses wait for
+    /// the one parse.
     async fn map(&self, file: &str) -> Option<Arc<sourcemap::SourceMap>> {
-        if let Some(map) = self.parsed.lock().expect("maps lock").get(file) {
-            return Some(map.clone());
-        }
+        let cell = self.files.get(file)?.clone();
         let path = self.dir.join(format!("{file}.map"));
-        let parse = move || {
-            let bytes = std::fs::read(&path)?;
-            anyhow::Ok(sourcemap::SourceMap::from_slice(&bytes)?)
-        };
-        let map = match trace::spawn_blocking("sourcemap.parse", parse).await {
-            Ok(Ok(map)) => Arc::new(map),
-            Ok(Err(e)) => {
-                tracing::error!(file, error = %e, "a source map of the build can't be read");
-                return None;
-            }
-            Err(e) => {
-                tracing::error!(file, error = %e, "parsing a source map panicked");
-                return None;
-            }
-        };
-        let mut parsed = self.parsed.lock().expect("maps lock");
-        if parsed.len() >= MAX_PARSED {
-            parsed.clear();
-        }
-        parsed.insert(file.to_owned(), map.clone());
-        Some(map)
+        let parsed = cell
+            .get_or_init(|| async move {
+                let parse = move || {
+                    let bytes = std::fs::read(&path)?;
+                    anyhow::Ok(sourcemap::SourceMap::from_slice(&bytes)?)
+                };
+                match trace::spawn_blocking("sourcemap.parse", parse).await {
+                    Ok(Ok(map)) => Some(Arc::new(map)),
+                    Ok(Err(e)) => {
+                        tracing::error!(error = %e, "a source map of the build can't be read");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "parsing a source map panicked");
+                        None
+                    }
+                }
+            })
+            .await;
+        parsed.clone()
     }
 
     /// Maps every frame in the build's files to its source; returns how many were mapped.
@@ -230,13 +231,13 @@ fn refuse(status: StatusCode, reason: &'static str) -> Response {
 
 /// Checks the upload's headers before its body is read: the refusal's status and reason.
 fn check_headers(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
-    let Some(length) = headers.get(header::CONTENT_LENGTH) else {
-        return Err((StatusCode::LENGTH_REQUIRED, "length_required"));
-    };
-    match length.to_str().ok().and_then(|l| l.parse::<usize>().ok()) {
-        Some(n) if n <= MAX_BODY => {}
-        Some(_) => return Err((StatusCode::PAYLOAD_TOO_LARGE, "too_large")),
-        None => return Err((StatusCode::BAD_REQUEST, "bad_length")),
+    // Without a length (HTTP/2 from Cloudflare may have none) the read itself stops at MAX_BODY.
+    if let Some(length) = headers.get(header::CONTENT_LENGTH) {
+        match length.to_str().ok().and_then(|l| l.parse::<usize>().ok()) {
+            Some(n) if n <= MAX_BODY => {}
+            Some(_) => return Err((StatusCode::PAYLOAD_TOO_LARGE, "too_large")),
+            None => return Err((StatusCode::BAD_REQUEST, "bad_length")),
+        }
     }
     if headers.get(header::CONTENT_ENCODING).is_some_and(|e| e != "identity") {
         return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "encoded"));
@@ -257,12 +258,8 @@ async fn collect(Extension(telemetry): Extension<Arc<Telemetry>>, req: Request) 
     if let Err((status, reason)) = check_headers(&parts.headers) {
         return refuse(status, reason);
     }
-    if let Some(visitor) = limits::visitor(&parts.headers) {
-        let now = Instant::now();
-        if telemetry.visitors.exceeded(&visitor, now) {
-            return refuse(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
-        }
-        telemetry.visitors.hit(&visitor, now);
+    if !telemetry.visitors.try_take(&limits::visitor(&parts.headers), Instant::now()) {
+        return refuse(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
     }
     // The length was checked, but a body may not keep to its header.
     let bytes: Bytes = match axum::body::to_bytes(body, MAX_BODY).await {

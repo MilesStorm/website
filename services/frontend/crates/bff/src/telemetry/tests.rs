@@ -110,12 +110,12 @@ async fn uploads_the_gateway_would_refuse_are_refused() {
     let app = app(url);
     let body = serde_json::to_vec(&payload()).unwrap();
 
-    let mut no_length = upload(&body).body(Body::from(body.clone())).unwrap();
-    no_length.headers_mut().remove(header::CONTENT_LENGTH);
-    assert_eq!(send(&app, no_length).await, StatusCode::LENGTH_REQUIRED);
-
     let big = vec![b' '; MAX_BODY + 1];
     assert_eq!(send(&app, upload(&big).body(Body::from(big.clone())).unwrap()).await, StatusCode::PAYLOAD_TOO_LARGE);
+    // Without a length (HTTP/2), the read stops at the cap.
+    let mut unsized_big = upload(&big).body(Body::from(big.clone())).unwrap();
+    unsized_big.headers_mut().remove(header::CONTENT_LENGTH);
+    assert_eq!(send(&app, unsized_big).await, StatusCode::PAYLOAD_TOO_LARGE);
     // A body longer than its header says.
     let lying = with(&body, header::CONTENT_LENGTH, "10", big);
     assert_ne!(send(&app, lying).await, StatusCode::ACCEPTED);
@@ -133,6 +133,17 @@ async fn uploads_the_gateway_would_refuse_are_refused() {
 }
 
 #[tokio::test]
+async fn an_upload_without_a_length_is_taken() {
+    let (url, got) = alloy(StatusCode::ACCEPTED).await;
+    let app = app(url);
+    let body = br#"{"meta": {}}"#;
+    let mut req = upload(body).body(Body::from(&body[..])).unwrap();
+    req.headers_mut().remove(header::CONTENT_LENGTH);
+    assert_eq!(send(&app, req).await, StatusCode::ACCEPTED);
+    assert_eq!(got.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn one_visitor_is_limited_and_the_collectors_answer_is_passed_on() {
     let (url, got) = alloy(StatusCode::ACCEPTED).await;
     let app = app(url);
@@ -144,6 +155,12 @@ async fn one_visitor_is_limited_and_the_collectors_answer_is_passed_on() {
     assert_eq!(send(&app, from("203.0.113.7")).await, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(send(&app, from("198.51.100.1")).await, StatusCode::ACCEPTED);
     assert_eq!(got.lock().unwrap().len(), PER_VISITOR as usize + 1);
+    // Requests without Cloudflare's address are one visitor, limited like any other.
+    let unknown = || upload(body).body(Body::from(&body[..])).unwrap();
+    for _ in 0..PER_VISITOR {
+        assert_eq!(send(&app, unknown()).await, StatusCode::ACCEPTED);
+    }
+    assert_eq!(send(&app, unknown()).await, StatusCode::TOO_MANY_REQUESTS);
 
     let (busy, _) = alloy(StatusCode::TOO_MANY_REQUESTS).await;
     assert_eq!(send(&self::app(busy), upload(body).body(Body::from(&body[..])).unwrap()).await, StatusCode::TOO_MANY_REQUESTS);
