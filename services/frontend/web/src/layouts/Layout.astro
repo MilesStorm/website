@@ -2,7 +2,8 @@
 // Every page's frame. The <head> order is a contract with the server and the tracing
 // (TRACING.md, "Browser"): the charset first (within the first 1024 bytes however large the
 // spliced data is), then the `bff-inject` marker the server replaces with the trace context and
-// the viewer, then the theme (before anything paints) and the guard for islands whose script a
+// the viewer, then build-generated island modulepreloads (fetch/compile only), then the theme
+// (before anything paints) and the guard for islands whose script a
 // deploy removed (before any island loads), then the tracing script (classic and
 // synchronous, so fetch is wrapped before any module runs), then the CSS and the modules, which
 // Astro puts at the end of <head>.

@@ -8,17 +8,22 @@ export type Viewer = Schemas['Viewer'];
 export type KnownPermission = Schemas['KnownPermission'];
 
 let loaded: Promise<Bootstrap> | undefined;
+let embedded: Bootstrap | undefined;
+
+/** Already in the HTML, so an island can use it on its first render. `undefined` means
+ * dev/bundled mode needs an API request; `{ viewer: null }` is a known logged-out page. */
+export function readEmbeddedBootstrap(): Bootstrap | undefined {
+  if (embedded) return embedded;
+  if (typeof document === 'undefined') return undefined;
+  const tag = document.getElementById('bootstrap');
+  if (tag?.textContent) embedded = JSON.parse(tag.textContent) as Bootstrap;
+  return embedded;
+}
 
 /** This page's viewer, read once per page. */
 export function readBootstrap(): Promise<Bootstrap> {
-  loaded ??= read();
+  loaded ??= Promise.resolve(readEmbeddedBootstrap() ?? fetchBootstrap());
   return loaded;
-}
-
-async function read(): Promise<Bootstrap> {
-  const tag = document.getElementById('bootstrap');
-  if (tag?.textContent) return JSON.parse(tag.textContent) as Bootstrap;
-  return fetchBootstrap();
 }
 
 /** Asks the server, ignoring what the page says. A failure counts as logged out. */

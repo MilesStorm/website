@@ -4,6 +4,7 @@
 import { defineConfig } from 'astro/config';
 import react from '@astrojs/react';
 import tailwindcss from '@tailwindcss/vite';
+import islandPreloads from './scripts/island-preloads.mjs';
 
 // `astro dev` sends API calls, OAuth and the camera socket to the Rust server (ENV.md). The Host
 // header stays the page's (`changeOrigin: false`; Vite's shorthand would change it), so the
@@ -14,7 +15,7 @@ export default defineConfig({
   output: 'static',
   trailingSlash: 'never',
   build: { format: 'file' },
-  integrations: [react()],
+  integrations: [react(), islandPreloads()],
   vite: {
     plugins: [tailwindcss()],
     server: {

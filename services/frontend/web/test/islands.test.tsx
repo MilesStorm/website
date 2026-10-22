@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import userEvent from '@testing-library/user-event';
 import { ann, json, splice } from './fixtures';
 
@@ -12,6 +13,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('the user menu', () => {
+  it('renders the embedded viewer immediately and still receives profile changes', async () => {
+    splice(ann);
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const { UserMenu } = await import('@/islands/UserMenu');
+    // No effects run during this render: the HTML's viewer is available immediately.
+    expect(renderToStaticMarkup(<UserMenu />)).toContain('Account: Ann &lt;/script&gt; Example');
+    render(<UserMenu />);
+    const { viewerChanged } = await import('@/api/session');
+    act(() => viewerChanged({ ...ann.viewer!, shown_name: 'Updated name' }));
+    expect(screen.getByRole('button', { name: 'Account: Updated name' })).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('shows the spliced viewer and logs out with a new page', async () => {
     splice(ann);
     const assign = vi.fn();
@@ -78,6 +93,17 @@ describe("the cookie notice's room", () => {
 });
 
 describe('the logged-in start page', () => {
+  it('renders embedded content on its first render without an effect or API request', async () => {
+    splice(ann);
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const { HomeCards } = await import('@/islands/HomeCards');
+    const html = renderToStaticMarkup(<HomeCards />);
+    expect(html).toContain('Ann &lt;/script&gt; Example');
+    expect(html).not.toContain('aria-busy="true"');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('greets the viewer and lists their tools', async () => {
     vi.stubGlobal('fetch', async () => json(ann));
     const { HomeCards } = await import('@/islands/HomeCards');
