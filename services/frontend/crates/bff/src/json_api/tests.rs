@@ -34,6 +34,9 @@ pub(crate) struct Auth {
     calls: Mutex<Vec<String>>,
     /// The game hosts and auth's database are down: those endpoints fail.
     failing: std::sync::atomic::AtomicBool,
+    /// Password logins and registrations that reached auth.
+    logins: std::sync::atomic::AtomicUsize,
+    registrations: std::sync::atomic::AtomicUsize,
 }
 
 impl Auth {
@@ -52,6 +55,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     let auth_panels = auth.clone();
     let pictures = auth.clone();
     let confirmed = auth.clone();
+    let (logins, registrations) = (auth.clone(), auth.clone());
     let introspect = move |body: axum::Json<Value>| async move {
         let token = body["token"].as_str().unwrap_or_default().to_string();
         *auth.introspected.lock().unwrap().entry(token.clone()).or_default() += 1;
@@ -77,14 +81,19 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
         }
         axum::Json(profile(body["token"].as_str().unwrap_or_default(), Some(name))).into_response()
     };
-    let exchange = |body: axum::Json<Value>| async move {
+    // As slow as a password check (argon2), so concurrent logins overlap.
+    let exchange = move |body: axum::Json<Value>| async move {
+        logins.logins.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         match (body["username"].as_str(), body["password"].as_str()) {
             (Some("tester"), Some("right")) => axum::Json(json!({"token": "all", "user_id": 7, "username": "tester"})).into_response(),
             (Some("outage"), _) => (StatusCode::UNAUTHORIZED, "Invalid service token").into_response(),
             _ => (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response(),
         }
     };
-    let register = |body: axum::Json<Value>| async move {
+    let register = move |body: axum::Json<Value>| async move {
+        registrations.registrations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         match body["username"].as_str() {
             Some("taken") => (StatusCode::CONFLICT, "Username already taken").into_response(),
             Some(u) => axum::Json(json!({"token": "none", "user_id": 11, "username": u})).into_response(),
@@ -625,6 +634,52 @@ async fn one_visitor_gets_a_limited_number_of_failed_logins_and_registrations() 
     }
     let new = json!({"username": "new10", "email": "a@b.c", "password": "long enough"});
     envelope(&site.json(Method::POST, "/api/session/register", new).await, 429, "rate_limited");
+}
+
+/// `n` copies of a request sent at once, as separate browsers.
+async fn at_once(site: &Site, n: usize, path: &str, body: Value) -> Vec<StatusCode> {
+    let requests = (0..n).map(|_| {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::HOST, HOST)
+            .header(header::ORIGIN, SITE)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        site.app.clone().oneshot(req)
+    });
+    futures_util::future::join_all(requests).await.into_iter().map(|r| r.unwrap().status()).collect()
+}
+
+#[tokio::test]
+async fn concurrent_attempts_cant_pass_the_limits_together() {
+    use std::sync::atomic::Ordering;
+    let site = Site::new().await;
+    let statuses = at_once(&site, 20, "/api/session/login", json!({"username": "tester", "password": "wrong"})).await;
+    assert_eq!(site.auth.logins.load(Ordering::SeqCst), 10, "{statuses:?}");
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::TOO_MANY_REQUESTS).count(), 10);
+
+    let statuses = at_once(&site, 20, "/api/session/register", json!({"username": "taken", "email": "a@b.c", "password": "long enough"})).await;
+    assert_eq!(site.auth.registrations.load(Ordering::SeqCst), 5, "{statuses:?}");
+}
+
+#[tokio::test]
+async fn a_username_longer_than_any_accounts_is_refused_before_the_limits() {
+    use std::sync::atomic::Ordering;
+    let mut site = Site::new().await;
+    let long = "a".repeat(crate::limits::MAX_USERNAME + 1);
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": long, "password": "x"})).await, 400, "invalid");
+    envelope(&site.json(Method::POST, "/api/session/register", json!({"username": long, "email": "a@b.c", "password": "long enough"})).await, 400, "invalid");
+    assert_eq!(site.auth.logins.load(Ordering::SeqCst) + site.auth.registrations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_outage_gives_the_login_slots_back() {
+    let mut site = Site::new().await;
+    for _ in 0..15 {
+        envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "outage", "password": "x"})).await, 502, "upstream");
+    }
 }
 
 #[tokio::test]

@@ -81,10 +81,12 @@ wrapped before an island can call them. `trace.js`:
   it); it makes no span. The root span carries the action's `faro.action.user.name` and
   `faro.action.user.parentId`, as Faro's fetch spans do, and the action's event carries the
   span's `trace_id`.
-- names the span and the action from `data-faro-user-action-name`, then `aria-label`, then the
-  button's text (links: their path). Give a control `data-faro-user-action-name="…"` when its
-  text isn't a good name or holds user data; the forms and the buttons that change something
-  have one.
+- names the span and the action from `data-faro-user-action-name`, else from what the code
+  fixed: a link's templated path, a form's name or id, the element's role or tag (`button`).
+  Never its text or `aria-label`, which can name a person ("Account: Ann"). Give every control
+  worth telling apart a `data-faro-user-action-name="…"` (static text, never user data); the
+  forms, the buttons that change something and the account menu have one.
+  `test/labels.test.tsx` checks that no name holds a username.
 - ends every open span when the page is hidden for a navigation (`pagehide`), marked
   `browser.ended_by=pagehide`, ends the running user action, and flushes, all before Faro's own
   `pagehide` and `visibilitychange` handlers send what is queued. Every page change is a page
@@ -137,13 +139,14 @@ the Gateway traces everything else, and would start a trace per upload.
 `POST /telemetry/collect` (`crates/bff/src/telemetry.rs`) is public, so its input is untrusted.
 The frontend:
 
-- refuses an upload without `Content-Length` (411), over 64 KiB (413), with a
-  `Content-Encoding` or not JSON (415), from another site (403), or the visitor's 61st in a
-  minute (429, by `CF-Connecting-IP`), and one that doesn't parse as a Faro payload (400);
+- refuses an upload over 64 KiB (413: by its declared length, and the read stops at the cap
+  when it has none, as HTTP/2 from Cloudflare may), with a `Content-Encoding` or not JSON (415),
+  from another site (403), the visitor's 61st in a minute (429; see [Rate limits](#rate-limits)),
+  and one that doesn't parse as a Faro payload (400);
 - maps the stack frames of errors back to the source with the build's source maps, for a frame
   whose file is exactly one of the build's `/_astro/*.js` files on the page's own host (query
   ignored). Every other frame, and everything else in the upload, goes on as it came. A map is
-  parsed on first use (`sourcemap.parse`) and kept; there are only as many as the build has
+  parsed once, on first use (`sourcemap.parse`; concurrent first uses wait for it), and kept; there are only as many as the build has
   scripts, and no file name from an upload reaches the disk unless the build has a map for it;
 - sends the upload to Alloy (a CLIENT span to `alloy`) and answers 202, Alloy's 429, or 502.
   Uploads carry an unsampled `traceparent`, so these spans are only recorded when someone sends a
@@ -296,6 +299,21 @@ On SIGTERM each service stops accepting, waits for open requests and tracked tas
   so auth adds `sqlx_tracing=info`, and `sqlx::pool::acquire=info` for the event behind `db.pool.acquire` (a wait for a pool connection; the event itself is kept out of the logs and off spans unless the wait was 2 s or more). `opentelemetry=warn` keeps the OTel SDK's own logs to its
   warnings (spans dropped, an export failed); they go to stdout only, never through the OTLP log
   bridge, which would feed them back to itself.
+
+## Rate limits
+
+Password login and registration (`crates/bff/src/limits.rs`) answer 429 `rate_limited` before
+auth is asked: 30 failed logins per 10 minutes per visitor and 10 per 15 minutes per username;
+10 registrations per hour per visitor and 5 per username. A visitor is Cloudflare's
+`CF-Connecting-IP` (an IPv6 address by its /64); requests without it share one visitor. A slot is
+taken before auth is asked, so concurrent attempts can't pass together, and given back when the
+login worked or auth couldn't answer. `/telemetry/collect` takes 60 uploads a minute per visitor.
+The counts live in each replica's memory (at most 100 000 keys per limit; past that new keys get
+429 until expired ones are swept).
+
+The per-username limit lets anyone lock an account out of password login for up to 15 minutes by
+failing ten logins for it. That is accepted: the lock ends by itself, and GitHub and Google logins
+still work meanwhile. `bff_login_attempts_total{status="rate_limited"}` counts the refusals.
 
 ## Profiles
 

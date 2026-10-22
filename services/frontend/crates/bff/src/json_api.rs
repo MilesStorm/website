@@ -385,57 +385,60 @@ async fn after_login(NoApi(session): NoApi<Session>, Body(a): Body<AfterLogin>) 
 }
 
 /// `POST /api/session/login`. 429 `rate_limited` after too many failed logins from one visitor or
-/// for one username (`limits`). Logins that work don't count: the staging journeys log in dozens
-/// of times a run from one address.
+/// for one username (`limits`); 400 for a username longer than any account's. Logins that work
+/// don't count: the staging journeys log in dozens of times a run from one address.
 async fn login(
     NoApi(session): NoApi<Session>,
     NoApi(Extension(limits)): NoApi<Extension<Arc<Limits>>>,
     NoApi(headers): NoApi<HeaderMap>,
     Body(login): Body<Login>,
 ) -> Result<Json<LoggedIn>, ApiError> {
+    let Some(user) = limits::username_key(&login.username) else {
+        return Err(limits::username_too_long().into());
+    };
     let now = Instant::now();
     let visitor = limits::visitor(&headers);
-    let user = limits::username_key(&login.username);
-    if visitor.as_deref().is_some_and(|ip| limits.login_ip.exceeded(ip, now)) || limits.login_user.exceeded(&user, now) {
+    // The slots are taken before auth is asked (a password check takes ~100 ms, and concurrent
+    // attempts must not all pass first), and given back when the login didn't fail on the
+    // password: it worked, or auth couldn't answer.
+    let slots = [(&limits.login_ip, visitor.as_str()), (&limits.login_user, user.as_str())];
+    if !limits::take_all(&slots, now) {
         metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "rate_limited").increment(1);
         return Err(limits::rate_limited().into());
     }
-    match crate::auth::log_in(&session, login.username, login.password).await {
-        Ok(username) => {
+    let result = crate::auth::log_in(&session, login.username, login.password).await;
+    match &result {
+        Ok(_) => {
+            limits.login_ip.release(&visitor, now);
             limits.login_user.clear(&user);
-            Ok(Json(LoggedIn { username }))
         }
-        Err(e) => {
-            if e.error == ErrorCode::Invalid {
-                limits.login_user.hit(&user, now);
-                if let Some(ip) = &visitor {
-                    limits.login_ip.hit(ip, now);
-                }
-            }
-            Err(e.into())
+        Err(e) if e.error != ErrorCode::Invalid => {
+            limits.login_ip.release(&visitor, now);
+            limits.login_user.release(&user, now);
         }
+        Err(_) => {}
     }
+    let username = result?;
+    Ok(Json(LoggedIn { username }))
 }
 
 /// `POST /api/session/register`. 429 `rate_limited` after too many registrations from one visitor,
-/// or for one username (`limits`).
+/// or for one username (`limits`); 400 for a username longer than any account's.
 async fn register(
     NoApi(session): NoApi<Session>,
     NoApi(Extension(limits)): NoApi<Extension<Arc<Limits>>>,
     NoApi(headers): NoApi<HeaderMap>,
     Body(r): Body<Registration>,
 ) -> Result<Json<LoggedIn>, ApiError> {
+    let Some(user) = limits::username_key(&r.username) else {
+        return Err(limits::username_too_long().into());
+    };
     let now = Instant::now();
     let visitor = limits::visitor(&headers);
-    let user = limits::username_key(&r.username);
-    if visitor.as_deref().is_some_and(|ip| limits.register_ip.exceeded(ip, now)) || limits.register_user.exceeded(&user, now) {
+    if !limits::take_all(&[(&limits.register_ip, visitor.as_str()), (&limits.register_user, user.as_str())], now) {
         metrics::counter!("bff_register_attempts_total", "status" => "rate_limited").increment(1);
         return Err(limits::rate_limited().into());
     }
-    if let Some(ip) = &visitor {
-        limits.register_ip.hit(ip, now);
-    }
-    limits.register_user.hit(&user, now);
     let username = crate::auth::register(&session, r.username, r.email, r.password).await?;
     Ok(Json(LoggedIn { username }))
 }

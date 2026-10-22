@@ -98,7 +98,9 @@ fn text(reply: &Value, key: &str) -> String {
 
 /// Logs this browser out if its session belongs to the account `user_id`. A username can change
 /// and be taken by another account, so the user id decides; only a session from before user ids
-/// were stored (or a reply without one) is matched by username.
+/// were stored (or a reply without one) is matched by username. Such sessions last until they
+/// expire: 7 days without use (`Expiry::OnInactivity` in main.rs), so the fallback is dead a week
+/// after this deploy and can go then.
 async fn log_out_if(session: Option<&Session>, user_id: Option<i64>, username: &str) -> bool {
     let Some(session) = session else { return false };
     let id: Option<i64> = session.get(crate::auth::USER_ID_KEY).await.ok().flatten();
