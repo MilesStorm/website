@@ -60,7 +60,7 @@ def rules(t, leaves=tc.LeafRegistry()):
     return [v.rule for v in tc.check_trace(t, tc.RULES, leaves, collections.defaultdict(list))]
 
 
-HTTP_SRV = {"http.request.method": "POST", "http.route": "/bff/x", "http.response.status_code": 200}
+HTTP_SRV = {"http.request.method": "POST", "http.route": "/api/x", "http.response.status_code": 200}
 HTTP_CLI = {"http.request.method": "POST", "http.response.status_code": 200, "peer.service": "auth"}
 
 
@@ -148,6 +148,22 @@ class I3(unittest.TestCase):
                     (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 1, 14))
         self.assertEqual(tc.check_i3(ok, tc.LeafRegistry()), [])
         self.assertIn("browser-server tolerance 2.00", tc.check_i3(bad, tc.LeafRegistry())[0].detail)
+
+    def test_children_of_a_browser_span_cut_short_by_pagehide_may_end_after_it(self):
+        # The login's after-login call: answered, then the page navigated; trace.js ended the
+        # fetch span and the click at pagehide, while the Gateway's span was still closing.
+        cut = {"browser.clock_offset_error_ms": 2.0, "browser.ended_by": "pagehide"}
+        t = trace((1, 0, "milesstorm-web", "INTERNAL", "submit log in", 0, 30, dict(cut, **{"ui.event": "submit"})),
+                  (2, 1, "milesstorm-web", "CLIENT", "POST /api/session/after-login", 5, 30, cut),
+                  (3, 2, "public-istio.istio-ingress", "SERVER", "POST /api/session/after-login", 6, 40))
+        self.assertEqual(tc.check_i3(t, tc.LeafRegistry()), [])
+        # Still never before it, and only a browser span the page cut short.
+        early = trace((1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 10, 30, cut),
+                      (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 2, 40))
+        self.assertIn("starts before", tc.check_i3(early, tc.LeafRegistry())[0].detail)
+        server = trace((1, 0, "frontend", "SERVER", "POST /api/x", 0, 10, {"browser.ended_by": "pagehide"}),
+                       (2, 1, "frontend", "INTERNAL", "work", 1, 15))
+        self.assertEqual(len(tc.check_i3(server, tc.LeafRegistry())), 1)
 
     def test_follows_relation_is_exempt(self):
         t = trace((1, 0, "frontend", "SERVER", "GET /", 0, 10),

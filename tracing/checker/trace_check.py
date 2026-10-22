@@ -26,7 +26,7 @@ MS = 1_000_000  # ns per ms
 RULES = ("I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8")
 TRACE_KINDS = ("browser", "server", "background", "browser_part_missing")
 KIND_NAMES = {0: "UNSPECIFIED", 1: "INTERNAL", 2: "SERVER", 3: "CLIENT", 4: "PRODUCER", 5: "CONSUMER"}
-API_PREFIXES = ("/bff/", "/api/", "/rpc", "/internal/", "/ws/", "/sse/")
+API_PREFIXES = ("/bff/", "/api/", "/telemetry/", "/rpc", "/internal/", "/ws/", "/sse/")
 BROWSER_UI_PREFIXES = ("page load ", "click ", "submit ", "navigate ")
 BROWSER_UI_EVENTS = ("load", "click", "submit", "navigate")
 AUTH_EXPECTED = {401, 404}
@@ -154,6 +154,12 @@ def follows(s, parent, leaves):
     if s.svc == BROWSER and s.name.startswith("page load ") and parent.kind == "SERVER":
         return True
     return leaves.follows(s)
+
+
+def cut_short(parent):
+    """A browser span trace.js ended when the page went away (a navigation, a closed tab): what it
+    started may still be running on the servers, so its children may end after it."""
+    return parent is not None and parent.svc == BROWSER and parent.attrs.get("browser.ended_by") == "pagehide"
 
 
 def messaging_hop(s, parent):
@@ -288,8 +294,9 @@ def check_i3(t, leaves):
         p = t.parent(c)
         if p is None:
             continue
-        # A following span may outlast its parent but still can't start before it.
-        asynchronous = follows(c, p, leaves) or messaging_hop(c, p)
+        # A following span may outlast its parent but still can't start before it; so may the
+        # children of a browser span cut short by the page going away.
+        asynchronous = follows(c, p, leaves) or messaging_hop(c, p) or cut_short(p)
         early, late = p.st - c.st, (0 if asynchronous else c.en - p.en)
         excess = max(early, late)
         if excess <= 0:

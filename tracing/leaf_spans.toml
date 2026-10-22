@@ -100,6 +100,21 @@ reason = "image decoding and encoding: CPU only, on the blocking pool"
 
 [[leaf]]
 service = "frontend"
+name = "telemetry.collect"
+reason = "childless for an upload refused before it is read (length, size, encoding, type, rate, not Faro's)"
+
+[[cpu]]
+service = "frontend"
+name = "telemetry.collect"
+reason = "parses and re-serializes a browser upload (up to 64 KiB) and maps its stack frames"
+
+[[leaf]]
+service = "frontend"
+name = "sourcemap.parse"
+reason = "parses one of the build's source maps from disk: CPU and a local read, once per file"
+
+[[leaf]]
+service = "frontend"
 name = "session close"
 reason = "zero-length summary of a camera session or roll stream"
 
