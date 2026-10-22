@@ -79,7 +79,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     };
     let exchange = |body: axum::Json<Value>| async move {
         match (body["username"].as_str(), body["password"].as_str()) {
-            (Some("tester"), Some("right")) => axum::Json(json!({"token": "all", "username": "tester"})).into_response(),
+            (Some("tester"), Some("right")) => axum::Json(json!({"token": "all", "user_id": 7, "username": "tester"})).into_response(),
             (Some("outage"), _) => (StatusCode::UNAUTHORIZED, "Invalid service token").into_response(),
             _ => (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response(),
         }
@@ -87,7 +87,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     let register = |body: axum::Json<Value>| async move {
         match body["username"].as_str() {
             Some("taken") => (StatusCode::CONFLICT, "Username already taken").into_response(),
-            Some(u) => axum::Json(json!({"token": "none", "username": u})).into_response(),
+            Some(u) => axum::Json(json!({"token": "none", "user_id": 11, "username": u})).into_response(),
             None => StatusCode::BAD_REQUEST.into_response(),
         }
     };
@@ -174,7 +174,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     };
     let oauth_exchange = |body: axum::Json<Value>| async move {
         match body["code"].as_str() {
-            Some("good") => axum::Json(json!({"token": "all", "username": "user-all"})).into_response(),
+            Some("good") => axum::Json(json!({"token": "all", "user_id": 7, "username": "user-all"})).into_response(),
             Some("taken") => (StatusCode::CONFLICT, "email_exists").into_response(),
             _ => (StatusCode::BAD_REQUEST, "bad code").into_response(),
         }
@@ -352,6 +352,8 @@ pub(crate) struct Site {
     pub(crate) auth: Arc<Auth>,
     store: MemoryStore,
     cookie: Option<String>,
+    /// The visitor's address, sent as Cloudflare's `CF-Connecting-IP`.
+    pub(crate) visitor: Option<&'static str>,
     _env: tokio::sync::MutexGuard<'static, ()>,
 }
 
@@ -383,7 +385,7 @@ impl Site {
         };
         let store = MemoryStore::default();
         let app = app.route("/test/seed", post(seed)).layer(SessionManagerLayer::new(store.clone()).with_secure(false));
-        Self { app, auth, store, cookie: None, _env: env }
+        Self { app, auth, store, cookie: None, visitor: None, _env: env }
     }
 
     async fn logged_in(token: &str) -> Self {
@@ -402,6 +404,9 @@ impl Site {
         }
         if let Some(cookie) = &self.cookie {
             req = req.header(header::COOKIE, cookie);
+        }
+        if let Some(visitor) = self.visitor {
+            req = req.header("cf-connecting-ip", visitor);
         }
         let req = match body {
             Some((content_type, bytes)) => req.header(header::CONTENT_TYPE, content_type).body(Body::from(bytes)),
@@ -568,6 +573,63 @@ async fn logging_in_answers_wrong_passwords_and_outages_apart() {
     assert_eq!(reply.status, StatusCode::NO_CONTENT);
     assert_eq!(site.get("/api/session").await.body, json!({"viewer": null}));
     crate::trace_tests::span(&exporter, "bff.logout").await;
+}
+
+#[tokio::test]
+async fn a_login_keeps_auths_user_id_in_the_session() {
+    let mut site = Site::new().await;
+    let reply = site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let session = site.session_data().await;
+    assert_eq!((&session["user_id"], &session["username"]), (&json!(7), &json!("tester")));
+}
+
+#[tokio::test]
+async fn too_many_failed_logins_for_a_username_are_refused_for_a_while() {
+    let mut site = Site::new().await;
+    let wrong = || json!({"username": "Tester", "password": "wrong"});
+    for _ in 0..10 {
+        envelope(&site.json(Method::POST, "/api/session/login", wrong()).await, 401, "invalid");
+    }
+    // Even the right password: auth isn't asked. Usernames are counted without case.
+    let right = json!({"username": "tester", "password": "right"});
+    let reply = site.json(Method::POST, "/api/session/login", right).await;
+    envelope(&reply, 429, "rate_limited");
+    assert_eq!(reply.body["message"], "Too many tries. Wait a few minutes and try again.");
+    // An outage isn't the user's failure, and other usernames go on.
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "outage", "password": "x"})).await, 502, "upstream");
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "other", "password": "x"})).await, 401, "invalid");
+}
+
+#[tokio::test]
+async fn one_visitor_gets_a_limited_number_of_logins_and_registrations() {
+    let mut site = Site::new().await;
+    site.visitor = Some("203.0.113.7");
+    for i in 0..30 {
+        let login = json!({"username": format!("user{i}"), "password": "wrong"});
+        envelope(&site.json(Method::POST, "/api/session/login", login).await, 401, "invalid");
+    }
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await, 429, "rate_limited");
+    site.visitor = Some("198.51.100.1");
+    let reply = site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+    assert_eq!(reply.status, StatusCode::OK, "another visitor: {}", reply.body);
+
+    for i in 0..10 {
+        let new = json!({"username": format!("new{i}"), "email": "a@b.c", "password": "long enough"});
+        assert_eq!(site.json(Method::POST, "/api/session/register", new).await.status, StatusCode::OK);
+    }
+    let new = json!({"username": "new10", "email": "a@b.c", "password": "long enough"});
+    envelope(&site.json(Method::POST, "/api/session/register", new).await, 429, "rate_limited");
+}
+
+#[tokio::test]
+async fn registering_one_username_over_and_over_is_refused_for_a_while() {
+    let mut site = Site::new().await;
+    let taken = || json!({"username": "taken", "email": "a@b.c", "password": "long enough"});
+    for _ in 0..5 {
+        envelope(&site.json(Method::POST, "/api/session/register", taken()).await, 409, "conflict");
+    }
+    envelope(&site.json(Method::POST, "/api/session/register", taken()).await, 429, "rate_limited");
 }
 
 #[tokio::test]
@@ -915,6 +977,28 @@ async fn passwords_are_reset_by_code_and_log_this_browser_out() {
     let reply = site.json(Method::POST, "/api/password/reset", json!({"code": "good", "password": "long enough"})).await;
     assert_eq!(reply.body, json!({"username": "user-all", "logged_out": true}));
     assert_eq!(site.get("/api/session").await.body, json!({"viewer": null}));
+}
+
+#[tokio::test]
+async fn a_deleted_account_is_logged_out_here_by_its_id_not_its_name() {
+    // Logged in as user 7 under a name that has changed since: still the deleted account.
+    let mut site = Site::new().await.with_pictures();
+    site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+    let reply = site.json(Method::POST, "/api/deletion/confirm", json!({"code": "good"})).await;
+    assert_eq!(reply.body, json!({"username": "user-all", "logged_out": true}));
+    drop(site);
+
+    // Another account (user 11), whatever its name: left logged in.
+    let mut site = Site::new().await.with_pictures();
+    site.json(Method::POST, "/api/session/register", json!({"username": "user-all", "email": "a@b.c", "password": "long enough"})).await;
+    let reply = site.json(Method::POST, "/api/deletion/confirm", json!({"code": "good"})).await;
+    assert_eq!(reply.body, json!({"username": "user-all", "logged_out": false}));
+    drop(site);
+
+    // A session from before user ids were kept: matched by name.
+    let mut site = Site::logged_in("all").await.with_pictures();
+    let reply = site.json(Method::POST, "/api/deletion/confirm", json!({"code": "good"})).await;
+    assert_eq!(reply.body, json!({"username": "user-all", "logged_out": true}));
 }
 
 #[tokio::test]

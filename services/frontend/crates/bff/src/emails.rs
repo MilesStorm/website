@@ -96,11 +96,17 @@ fn text(reply: &Value, key: &str) -> String {
     reply.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
-/// Logs this browser out if its session belongs to `username`.
-async fn log_out_if(session: Option<&Session>, username: &str) -> bool {
+/// Logs this browser out if its session belongs to the account `user_id`. A username can change
+/// and be taken by another account, so the user id decides; only a session from before user ids
+/// were stored (or a reply without one) is matched by username.
+async fn log_out_if(session: Option<&Session>, user_id: Option<i64>, username: &str) -> bool {
     let Some(session) = session else { return false };
-    let current: Option<String> = session.get("username").await.ok().flatten();
-    if current.as_deref() != Some(username) {
+    let id: Option<i64> = session.get(crate::auth::USER_ID_KEY).await.ok().flatten();
+    let same = match (id, user_id) {
+        (Some(id), Some(user_id)) => id == user_id,
+        _ => session.get::<String>("username").await.ok().flatten().as_deref() == Some(username),
+    };
+    if !same {
         return false;
     }
     let _ = session.flush().await;
@@ -170,7 +176,8 @@ pub async fn reset(session: Option<&Session>, code: &str, password: &str) -> Res
     crate::trace::rejectable(async {
         let reply = call("/internal/password/reset", json!({ "code": checked(code)?, "password": password })).await?;
         let username = text(&reply, "username");
-        let logged_out = log_out_if(session, &username).await;
+        let user_id = reply.get("user_id").and_then(Value::as_i64);
+        let logged_out = log_out_if(session, user_id, &username).await;
         Ok(Done { username, logged_out })
     })
     .await
@@ -216,7 +223,7 @@ pub async fn delete(session: Option<&Session>, hub: Option<&RollHub>, code: &str
             );
             ApiError::new(e.error, message).with_status(e.status())
         })?;
-        let logged_out = log_out_if(session, &username).await;
+        let logged_out = log_out_if(session, Some(user_id), &username).await;
         Ok(Done { username, logged_out })
     })
     .await
@@ -259,7 +266,7 @@ pub async fn delete_direct(
             );
             ApiError::new(e.error, message).with_status(e.status())
         })?;
-        let logged_out = log_out_if(session, &profile.username).await;
+        let logged_out = log_out_if(session, Some(profile.user_id), &profile.username).await;
         Ok(Done { username: profile.username, logged_out })
     })
     .await

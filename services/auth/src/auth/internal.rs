@@ -114,6 +114,7 @@ struct ExchangePasswordReq {
 #[derive(Serialize)]
 struct TokenResp {
     token: String,
+    user_id: i64,
     username: String,
 }
 
@@ -162,7 +163,7 @@ async fn exchange_password(
     };
 
     if !valid {
-        tracing::warn!(username = %req.username, "password login failed: invalid credentials");
+        tracing::warn!(user_id = user.id, "password login failed: invalid credentials");
         telemetry::login_attempt("password", "failure");
         telemetry::token_operation("exchange", "failure");
         return (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response();
@@ -175,6 +176,7 @@ async fn exchange_password(
             telemetry::token_operation("exchange", "success");
             Json(TokenResp {
                 token: bff_token.token,
+                user_id: user.id,
                 username: user.username,
             })
             .into_response()
@@ -263,6 +265,7 @@ async fn oauth_exchange(
     telemetry::token_operation("exchange", "success");
     Json(TokenResp {
         token: bff_token.token,
+        user_id: user.id,
         username: user.username,
     })
     .into_response()
@@ -436,6 +439,7 @@ async fn register(
                 account_email::send_verification_in_background(&state, u.id);
                 Json(TokenResp {
                     token: bff_token.token,
+                    user_id: u.id,
                     username: u.username,
                 })
                 .into_response()
@@ -448,7 +452,7 @@ async fn register(
         },
         Err(sqlx::Error::Database(db_err)) => match db_err.constraint() {
             Some("users_username_key") => {
-                tracing::warn!(username = %req.username, "registration failed: username already exists");
+                tracing::warn!("registration failed: username already exists");
                 telemetry::token_operation("register", "conflict");
                 (StatusCode::CONFLICT, "User already exists").into_response()
             }
@@ -458,13 +462,13 @@ async fn register(
                 (StatusCode::CONFLICT, "Email already in use").into_response()
             }
             _ => {
-                tracing::error!(username = %req.username, error = %db_err, "registration failed");
+                tracing::error!(error = %db_err, "registration failed");
                 telemetry::token_operation("register", "error");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         },
         Err(e) => {
-            tracing::error!(username = %req.username, error = %e, "registration failed");
+            tracing::error!(error = %e, "registration failed");
             telemetry::token_operation("register", "error");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }

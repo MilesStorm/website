@@ -14,7 +14,7 @@
 //! - `POST /internal/password/forgot` `{login}` (username or email): always 202, so
 //!   it can't be used to learn who has an account; the link is only sent to a password
 //!   account's own address.
-//! - `POST /internal/password/reset` `{code, password}` → `{username}`; logs the
+//! - `POST /internal/password/reset` `{code, password}` → `{user_id, username}`; logs the
 //!   account out everywhere. 400 `weak_password`, 404 `invalid_code`.
 //! - `POST /internal/account/delete/request` `{token}`: email a deletion link.
 //!   409 `no_email`, 429 `too_soon`.
@@ -445,6 +445,7 @@ struct UsernameResp {
     username: String,
 }
 
+/// An account by id and name: the one deleted, or whose password was reset.
 #[derive(Serialize)]
 struct DeletedResp {
     user_id: i64,
@@ -611,7 +612,7 @@ async fn password_reset(State(state): State<InternalState>, Json(req): Json<Rese
     match result {
         Ok(Some((user_id, username))) => {
             tracing::info!(user_id, "password reset by email");
-            Json(UsernameResp { username }).into_response()
+            Json(DeletedResp { user_id, username }).into_response()
         }
         Ok(None) => error(StatusCode::NOT_FOUND, "invalid_code"),
         Err(e) => db_error("resetting a password", e),
