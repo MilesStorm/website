@@ -99,7 +99,9 @@ export async function logIn(context: BrowserContext, who: Who, fresh: boolean | 
 
 /** No serious or critical accessibility problems on the page as it is now. */
 export async function expectAccessible(page: Page): Promise<void> {
-  const { violations } = await new AxeBuilder({ page }).analyze();
+  // The placeholders' text is transparent on purpose (it only sizes them), so it has no contrast
+  // to check. The stand-ins answer before axe looks; staging's real services not always.
+  const { violations } = await new AxeBuilder({ page }).exclude('.text-transparent').analyze();
   const bad = violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 }
