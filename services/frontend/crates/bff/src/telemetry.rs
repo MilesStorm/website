@@ -12,7 +12,7 @@
 //! access to them. Only a frame whose file is exactly one of the build's `/_astro/*.js` files,
 //! on this site's host, is mapped; every other frame is passed on as it came. Each map is parsed
 //! once, on first use, by one request (the others wait for it), and kept: there are only as many
-//! as the build has files.
+//! as the build has files. A failed parse isn't kept, so a passing read error doesn't last.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -59,7 +59,7 @@ impl Telemetry {
 
     pub(crate) fn new(maps: SourceMaps, collect_url: String) -> anyhow::Result<Self> {
         let client = trace::client(trace::Peer { service: "alloy", system: None }, FORWARD_TIMEOUT, |b| b)?;
-        Ok(Self { visitors: Limit::new(PER_VISITOR, Duration::from_secs(60)), maps, collect_url, client })
+        Ok(Self { visitors: Limit::new("telemetry_visitor", PER_VISITOR, Duration::from_secs(60)), maps, collect_url, client })
     }
 }
 
@@ -116,8 +116,9 @@ struct Frame {
 
 // ---- Source maps ----
 
-/// One file's map: parsed on first use (None when it can't be read), then kept.
-type Parsed = tokio::sync::OnceCell<Option<Arc<sourcemap::SourceMap>>>;
+/// One file's map: parsed on first use, then kept. A parse that fails isn't kept: the next
+/// error in that file tries again.
+type Parsed = tokio::sync::OnceCell<Arc<sourcemap::SourceMap>>;
 
 /// The build's source maps: `<file>.js.map` in one directory, for the files under `/_astro/`.
 pub(crate) struct SourceMaps {
@@ -162,25 +163,25 @@ impl SourceMaps {
         let cell = self.files.get(file)?.clone();
         let path = self.dir.join(format!("{file}.map"));
         let parsed = cell
-            .get_or_init(|| async move {
+            .get_or_try_init(|| async move {
                 let parse = move || {
                     let bytes = std::fs::read(&path)?;
                     anyhow::Ok(sourcemap::SourceMap::from_slice(&bytes)?)
                 };
                 match trace::spawn_blocking("sourcemap.parse", parse).await {
-                    Ok(Ok(map)) => Some(Arc::new(map)),
+                    Ok(Ok(map)) => Ok(Arc::new(map)),
                     Ok(Err(e)) => {
                         tracing::error!(error = %e, "a source map of the build can't be read");
-                        None
+                        Err(())
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "parsing a source map panicked");
-                        None
+                        Err(())
                     }
                 }
             })
             .await;
-        parsed.clone()
+        parsed.ok().cloned()
     }
 
     /// Maps every frame in the build's files to its source; returns how many were mapped.
@@ -258,7 +259,7 @@ async fn collect(Extension(telemetry): Extension<Arc<Telemetry>>, req: Request) 
     if let Err((status, reason)) = check_headers(&parts.headers) {
         return refuse(status, reason);
     }
-    if !telemetry.visitors.try_take(&limits::visitor(&parts.headers), Instant::now()) {
+    if telemetry.visitors.try_take(&limits::visitor(&parts.headers), Instant::now()).is_none() {
         return refuse(StatusCode::TOO_MANY_REQUESTS, "rate_limited");
     }
     // The length was checked, but a body may not keep to its header.

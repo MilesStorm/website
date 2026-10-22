@@ -401,20 +401,19 @@ async fn login(
     // The slots are taken before auth is asked (a password check takes ~100 ms, and concurrent
     // attempts must not all pass first), and given back when the login didn't fail on the
     // password: it worked, or auth couldn't answer.
-    let slots = [(&limits.login_ip, visitor.as_str()), (&limits.login_user, user.as_str())];
-    if !limits::take_all(&slots, now) {
+    let Some(slots) = limits::take_all(&[(&limits.login_ip, visitor.as_str()), (&limits.login_user, user.as_str())], now) else {
         metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "rate_limited").increment(1);
         return Err(limits::rate_limited().into());
-    }
+    };
     let result = crate::auth::log_in(&session, login.username, login.password).await;
     match &result {
         Ok(_) => {
-            limits.login_ip.release(&visitor, now);
+            limits.login_ip.release(&visitor, slots[0]);
             limits.login_user.clear(&user);
         }
         Err(e) if e.error != ErrorCode::Invalid => {
-            limits.login_ip.release(&visitor, now);
-            limits.login_user.release(&user, now);
+            limits.login_ip.release(&visitor, slots[0]);
+            limits.login_user.release(&user, slots[1]);
         }
         Err(_) => {}
     }
@@ -435,7 +434,7 @@ async fn register(
     };
     let now = Instant::now();
     let visitor = limits::visitor(&headers);
-    if !limits::take_all(&[(&limits.register_ip, visitor.as_str()), (&limits.register_user, user.as_str())], now) {
+    if limits::take_all(&[(&limits.register_ip, visitor.as_str()), (&limits.register_user, user.as_str())], now).is_none() {
         metrics::counter!("bff_register_attempts_total", "status" => "rate_limited").increment(1);
         return Err(limits::rate_limited().into());
     }

@@ -174,3 +174,17 @@ fn map_sources_become_repository_paths() {
     assert_eq!(super::source_path("../../node_modules/@grafana/faro-core/dist/esm/a.js"), "node_modules/@grafana/faro-core/dist/esm/a.js");
     assert_eq!(super::source_path("./assets/trace.js"), "assets/trace.js");
 }
+
+#[tokio::test]
+async fn a_map_that_failed_to_read_is_tried_again() {
+    let maps = maps();
+    let path = maps.dir.join("app.Ab12.js.map");
+    let good = std::fs::read(&path).unwrap();
+    std::fs::write(&path, "not a map").unwrap();
+    let payload = || serde_json::from_value::<super::Payload>(payload()).unwrap();
+    let mut first = payload();
+    assert_eq!(maps.resolve(&mut first, HOST).await, 0);
+    std::fs::write(&path, good).unwrap();
+    let mut second = payload();
+    assert_eq!(maps.resolve(&mut second, HOST).await, 1);
+}

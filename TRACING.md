@@ -305,11 +305,15 @@ On SIGTERM each service stops accepting, waits for open requests and tracked tas
 Password login and registration (`crates/bff/src/limits.rs`) answer 429 `rate_limited` before
 auth is asked: 30 failed logins per 10 minutes per visitor and 10 per 15 minutes per username;
 10 registrations per hour per visitor and 5 per username. A visitor is Cloudflare's
-`CF-Connecting-IP` (an IPv6 address by its /64); requests without it share one visitor. A slot is
+`CF-Connecting-IP` (an IPv6 address by its /56, a subscriber's usual delegation; IPv4-mapped
+addresses as IPv4); requests without it share one visitor, and the header is trusted because only
+Cloudflare reaches the origin (homelab #98). A slot is
 taken before auth is asked, so concurrent attempts can't pass together, and given back when the
 login worked or auth couldn't answer. `/telemetry/collect` takes 60 uploads a minute per visitor.
-The counts live in each replica's memory (at most 100 000 keys per limit; past that new keys get
-429 until expired ones are swept).
+The counts live in each replica's memory. A key is held only while it has slots counted, and a
+limit holds at most 100 000 keys, a bound on memory only: when it is full even after a sweep, a
+new key's request passes uncounted (`bff_rate_limit_overflow_total{limit}`, and a warning) rather
+than locking everyone out; the other limit of the pair still holds a flood.
 
 The per-username limit lets anyone lock an account out of password login for up to 15 minutes by
 failing ten logins for it. That is accepted: the lock ends by itself, and GitHub and Google logins
