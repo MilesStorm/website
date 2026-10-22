@@ -21,9 +21,13 @@
 //! - `POST /internal/account/delete/check` `{code}` → `{user_id, username}` without
 //!   using the code (the website removes the user's other data first).
 //! - `POST /internal/account/delete/confirm` `{code}` → `{user_id, username}`: deletes.
-//! - `POST /internal/account/delete/direct` `{token}` → `{user_id, username}`: deletes
-//!   an account without a confirmed email (GitHub logins, or an address that may be
-//!   wrong), which a link might never reach.
+//! - `POST /internal/account/delete/direct` `{token, check?}` → `{user_id, username}`:
+//!   deletes an account without a confirmed email (GitHub logins, or an address that may
+//!   be wrong), which a link might never reach. With `check`, only says whether it could
+//!   (`{}`). 409 `has_email`.
+//!
+//! The last account with `manage_permissions` can't be deleted: each of the delete
+//! endpoints answers 409 `last_admin` for it (the deletion itself in the same transaction).
 
 use axum::{
     Json, Router,
@@ -624,9 +628,23 @@ async fn delete_request(State(state): State<InternalState>, Json(req): Json<Toke
     let Some(email) = account.email.clone() else {
         return error(StatusCode::CONFLICT, "no_email");
     };
+    if let Some(refused) = unless_only_admin(&state.db, account.id).await {
+        return refused;
+    }
     match issue_and_send(&state.db, &state.mailer, &account, &email, Purpose::DeleteAccount).await {
         Ok(()) => Json(SentResp { email }).into_response(),
         Err(r) => r,
+    }
+}
+
+/// 409 `last_admin` when the account is the only one with `manage_permissions` (deleting it
+/// would leave nobody able to give admin rights), else `None`. Asked early, so no link is sent and
+/// the website removes nothing; the deletion checks again, atomically ([`delete_unless_last_admin`]).
+async fn unless_only_admin(db: &Db, user_id: i64) -> Option<Response> {
+    match super::internal::only_admin(db, user_id).await {
+        Ok(false) => None,
+        Ok(true) => Some(super::internal::last_admin()),
+        Err(e) => Some(db_error("checking for other admins", e)),
     }
 }
 
@@ -637,6 +655,9 @@ async fn delete_check(State(state): State<InternalState>, Json(req): Json<CodeRe
         Ok(None) => return error(StatusCode::NOT_FOUND, "invalid_code"),
         Err(e) => return db_error("checking a delete code", e),
     };
+    if let Some(refused) = unless_only_admin(&state.db, user_id).await {
+        return refused;
+    }
     match account_by_id(&state.db, user_id).await {
         Ok(Some(a)) => Json(DeletedResp { user_id: a.id, username: a.username }).into_response(),
         Ok(None) => error(StatusCode::NOT_FOUND, "invalid_code"),
@@ -644,29 +665,62 @@ async fn delete_check(State(state): State<InternalState>, Json(req): Json<CodeRe
     }
 }
 
+enum Deletion {
+    Deleted(i64, String),
+    /// The code (or the account it was for) is gone.
+    Gone,
+    /// It was the last account with `manage_permissions`: nothing was deleted.
+    LastAdmin,
+}
+
+/// Runs `delete` (`... RETURNING id, username`) in `tx` and commits, unless that leaves nobody
+/// with `manage_permissions`: then nothing is deleted.
+async fn delete_unless_last_admin(
+    mut tx: trace::Tx<'_>,
+    delete: sqlx::query::QueryAs<'_, sqlx::Postgres, (i64, String), sqlx::postgres::PgArguments>,
+) -> Result<Deletion, sqlx::Error> {
+    let before = super::internal::admins(&mut tx).await?;
+    let Some((user_id, username)) = delete.fetch_optional(&mut tx.executor()).await? else {
+        trace::rollback(tx).await;
+        return Ok(Deletion::Gone);
+    };
+    if before > 0 && super::internal::admins(&mut tx).await? == 0 {
+        trace::rollback(tx).await;
+        return Ok(Deletion::LastAdmin);
+    }
+    trace::commit(tx).await?;
+    Ok(Deletion::Deleted(user_id, username))
+}
+
 #[tracing::instrument(name = "account.delete_confirm", skip_all)]
 async fn delete_confirm(State(state): State<InternalState>, Json(req): Json<CodeReq>) -> Response {
-    let result: Result<Option<(i64, String)>, sqlx::Error> = async {
+    let result: Result<Deletion, sqlx::Error> = async {
         let mut tx = trace::begin(&state.db).await?;
         let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::DeleteAccount, true).await? else {
             trace::rollback(tx).await;
-            return Ok(None);
+            return Ok(Deletion::Gone);
         };
         // Only while the address is still the one the link was sent to.
-        let deleted = sqlx::query_as("DELETE FROM users WHERE id = $1 AND email = $2 RETURNING id, username")
+        let delete = sqlx::query_as("DELETE FROM users WHERE id = $1 AND email = $2 RETURNING id, username")
             .bind(user_id)
-            .bind(&email)
-            .fetch_optional(&mut tx.executor())
-            .await?;
-        trace::commit(tx).await?;
-        Ok(deleted)
+            .bind(email);
+        delete_unless_last_admin(tx, delete).await
     }
     .await;
     deleted_reply(result)
 }
 
+#[derive(Deserialize)]
+struct DirectReq {
+    token: String,
+    /// Only check that it can be deleted (the website asks before removing the account's
+    /// other data): `{}`, or the refusal it would get.
+    #[serde(default)]
+    check: bool,
+}
+
 #[tracing::instrument(name = "account.delete_direct", skip_all)]
-async fn delete_direct(State(state): State<InternalState>, Json(req): Json<TokenReq>) -> Response {
+async fn delete_direct(State(state): State<InternalState>, Json(req): Json<DirectReq>) -> Response {
     let account = match token_account(&state.db, &req.token).await {
         Ok(Some(a)) => a,
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "logged_out"),
@@ -676,23 +730,33 @@ async fn delete_direct(State(state): State<InternalState>, Json(req): Json<Token
         // Accounts with a confirmed email confirm by email.
         return error(StatusCode::CONFLICT, "has_email");
     }
-    let result = sqlx::query_as(
-        "DELETE FROM users WHERE id = $1 AND (email IS NULL OR email_verified_at IS NULL) RETURNING id, username",
-    )
-        .bind(account.id)
-        .fetch_optional(&state.db)
-        .await;
+    if req.check {
+        return unless_only_admin(&state.db, account.id).await.unwrap_or_else(|| Json(serde_json::json!({})).into_response());
+    }
+    let result = async {
+        let tx = trace::begin(&state.db).await?;
+        let delete = sqlx::query_as(
+            "DELETE FROM users WHERE id = $1 AND (email IS NULL OR email_verified_at IS NULL) RETURNING id, username",
+        )
+        .bind(account.id);
+        delete_unless_last_admin(tx, delete).await
+    }
+    .await;
     deleted_reply(result)
 }
 
-fn deleted_reply(result: Result<Option<(i64, String)>, sqlx::Error>) -> Response {
+fn deleted_reply(result: Result<Deletion, sqlx::Error>) -> Response {
     match result {
-        Ok(Some((user_id, username))) => {
+        Ok(Deletion::Deleted(user_id, username)) => {
             tracing::info!(user_id, "account deleted");
             super::telemetry::token_operation("delete_account", "success");
             Json(DeletedResp { user_id, username }).into_response()
         }
-        Ok(None) => error(StatusCode::NOT_FOUND, "invalid_code"),
+        Ok(Deletion::Gone) => error(StatusCode::NOT_FOUND, "invalid_code"),
+        Ok(Deletion::LastAdmin) => {
+            tracing::warn!("refused to delete the last admin's account");
+            super::internal::last_admin()
+        }
         Err(e) => db_error("deleting an account", e),
     }
 }
