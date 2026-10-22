@@ -17,6 +17,9 @@ export default defineConfig({
   integrations: [react()],
   vite: {
     plugins: [tailwindcss()],
+    // Source maps next to the scripts in /_astro/ (the repository is public): Faro's error stacks
+    // are mapped back to the source by the collector, which downloads them (homelab repo).
+    build: { sourcemap: true },
     server: {
       proxy: {
         '/api': bff,

@@ -52,7 +52,7 @@ jobs:
         working-directory: services/frontend/web
         env:
           ASTRO_TELEMETRY_DISABLED: 1
-        run: npm run vendor && npm run check
+        run: npm run tracing && npm run check
       - name: Component tests
         working-directory: services/frontend/web
         run: npm test

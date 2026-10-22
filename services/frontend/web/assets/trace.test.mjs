@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
+import * as trace from './trace.js';
 
 const SRC = readFileSync(new URL('./trace.js', import.meta.url), 'utf8');
 const REMOTE = '00-' + 'a'.repeat(32) + '-' + 'b'.repeat(16) + '-01';
@@ -49,7 +49,7 @@ function fakeOtel(clk, processor) {
           this.events.push({ name: n, attrs, time });
         },
         setStatus(st) { this.status = st; },
-        end(t) { this.endTime = t ?? clk.now(); processor?.onEnd(this); },
+        end(t) { if (this.endTime !== undefined) return; this.endTime = t ?? clk.now(); processor?.onEnd(this); },
       };
       spans.push(span);
       processor?.onStart(span);
@@ -85,11 +85,9 @@ const NAV = { responseStart: 20, responseEnd: 25, domInteractive: 40, domContent
 
 // `fetchSpans`: each fetch gets a CLIENT child span, as Faro's fetch instrumentation does; the test
 // ends it (`endFetchSpan`) the way OTel does: at the body's end, reported 300 ms later.
-function setup({ meta = null, readyState = 'loading', fetchSpans = false, path = '/login' } = {}) {
+function setup({ meta = null, readyState = 'loading', fetchSpans = false, path = '/login', userActions, Observer, onLongFrame } = {}) {
   const clk = clock();
-  const sandbox = { URL, Date, crypto };
-  vm.runInNewContext(SRC, sandbox);
-  const api = sandbox.__msTrace;
+  const api = trace;
   const exported = [];
   const perfNow = () => 30 + (clk.now() - 1_000_000);
   const clockSync = api.clockSync({ now: clk.now, performance: { now: perfNow } });
@@ -131,8 +129,10 @@ function setup({ meta = null, readyState = 'loading', fetchSpans = false, path =
     otel, window: win, document: doc, now: clk.now, setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout,
     // timeOrigin lags the wall clock, as after the machine sleeps; only now() - responseStart counts.
     performance: { timeOrigin: 500_000, now: perfNow, getEntriesByType: () => [NAV] },
-    PerformanceObserver: class { constructor(fn) { this.fn = fn; } observe(opts) { observers.push({ fn: this.fn, opts }); } },
+    PerformanceObserver: Observer || class { constructor(fn) { this.fn = fn; } observe(opts) { observers.push({ fn: this.fn, opts }); } },
     spans: processor,
+    userActions,
+    onLongFrame,
   });
   tracer.install();
   return {
@@ -369,7 +369,7 @@ test('anchors are named by templated path, never by their text', async () => {
   await h.win.fetch('/api/post');
   assert.equal(h.spans[0].name, 'click /blog/{id}/comments/{id}');
   assert.equal(h.tracer.labelFor(el('button', { 'aria-label': 'Close' }, 'x')), 'Close');
-  assert.equal(h.tracer.labelFor(el('div', { 'data-trace-name': 'roll dice' }, 'ignored')), 'roll dice');
+  assert.equal(h.tracer.labelFor(el('div', { 'data-faro-user-action-name': 'roll dice' }, 'ignored')), 'roll dice');
   assert.equal(h.tracer.labelFor(el('button', {}, 'x'.repeat(60))), 'x'.repeat(40));
 });
 
@@ -388,62 +388,97 @@ test('wrapper returns the same response and rethrows the same rejection', async 
   assert.equal(h.tracer.current().inflight, 0);
 });
 
-function bootSandbox(hostname) {
-  const sandbox = {
-    inits: 0,
-    URL, Date, setTimeout, clearTimeout, crypto,
-    location: { origin: 'https://' + hostname, hostname },
-    document: { readyState: 'loading', addEventListener() {}, querySelector: () => null, visibilityState: 'visible' },
-    GrafanaFaroWebSdk: {
-      FetchTransport: class { constructor(opts) { this.opts = opts; } },
-      ErrorsInstrumentation: class {},
-      WebVitalsInstrumentation: class {},
-      SessionInstrumentation: class {},
-      ViewInstrumentation: class {},
-      faro: { api: { pushTraces: (t) => sandbox.pushed.push(t) }, metas: { value: {} } },
-      initializeFaro: (cfg) => { sandbox.inits++; sandbox.cfg = cfg; return { api: { getOTEL: () => fakeOtel(clock()).otel } }; },
+// A page for boot(): fake Faro exports that record what boot asks of them.
+function bootSandbox(hostname, { version = null } = {}) {
+  const order = [];
+  const listeners = {};
+  let action = null;
+  const api = {
+    pushTraces: (t) => sandbox.pushed.push(t),
+    getOTEL: () => fakeOtel(clock()).otel,
+    getActiveUserAction: () => action,
+    startUserAction(name, attributes, options) {
+      action = { name, attributes, options, parentId: 'ua1', getState: () => 0, end() { sandbox.ended++; action = null; } };
+      sandbox.actions.push(action);
+      return action;
     },
-    OtelSdkTraceWeb: {
-      BatchSpanProcessor: class {
-        constructor(exporter, opts) { this.exporter = exporter; sandbox.batchOpts = opts; }
-        onEnd(span) { this.exporter.export([span], () => {}); }
-        forceFlush() { return Promise.resolve(); }
-        shutdown() { return Promise.resolve(); }
-      },
-    },
-    GrafanaFaroWebTracing: {
-      TracingInstrumentation: class { constructor(opts) { sandbox.tracingOpts = opts; } },
-      FaroTraceExporter: class { constructor(cfg) { this.cfg = cfg; } export(spans) { this.cfg.api.pushTraces(spans); } },
-      FaroMetaAttributesSpanProcessor: class { constructor(inner, metas) { this.inner = inner; this.metas = metas; } },
-    },
-    pushed: [],
+    pushEvent: (name, attributes) => sandbox.events.push([name, attributes]),
+    pushMeasurement: (measurement, options) => sandbox.measurements.push([measurement, options]),
   };
-  sandbox.window = { location: { href: `https://${hostname}/` }, addEventListener() {}, fetch() {} };
-  vm.createContext(sandbox);
+  const named = (name) => class { constructor() { this.name = name; } };
+  const sandbox = {
+    inits: 0, pushed: [], actions: [], events: [], measurements: [], ended: 0, flushed: 0, order, listeners,
+    location: { origin: 'https://' + hostname, hostname, href: `https://${hostname}/`, pathname: '/' },
+    document: {
+      readyState: 'loading', visibilityState: 'visible',
+      addEventListener(type, fn) { listeners['doc:' + type] = fn; },
+      querySelector: (selector) => (selector === 'meta[name="service-version"]' && version ? { getAttribute: () => version } : null),
+    },
+    addEventListener(type, fn) { order.push('page:' + type); (listeners[type] ||= []).push(fn); },
+    setTimeout, clearTimeout,
+    fetch() {},
+  };
+  sandbox.sdk = {
+    FetchTransport: class { constructor(opts) { this.opts = opts; order.push('transport'); } },
+    ErrorsInstrumentation: named('errors'),
+    WebVitalsInstrumentation: named('web-vitals'),
+    SessionInstrumentation: named('session'),
+    ViewInstrumentation: named('view'),
+    ConsoleInstrumentation: named('console'),
+    PerformanceInstrumentation: named('performance'),
+    UserActionInstrumentation: named('user-actions'),
+    LogLevel: { TRACE: 'trace', DEBUG: 'debug', LOG: 'log', INFO: 'info', WARN: 'warn', ERROR: 'error' },
+    UserActionState: { Started: 0 },
+    faro: { api, metas: { value: {} } },
+    initializeFaro: (cfg) => { sandbox.inits++; sandbox.cfg = cfg; return sandbox.sdk.faro; },
+  };
+  sandbox.tracing = {
+    TracingInstrumentation: class { constructor(opts) { this.name = 'tracing'; sandbox.tracingOpts = opts; } },
+    FaroTraceExporter: class { constructor(cfg) { this.cfg = cfg; } export(spans) { this.cfg.api.pushTraces(spans); } },
+    FaroMetaAttributesSpanProcessor: class { constructor(inner, metas) { this.inner = inner; this.metas = metas; } },
+  };
+  sandbox.BatchSpanProcessor = class {
+    constructor(exporter, opts) { this.exporter = exporter; sandbox.batchOpts = opts; }
+    onEnd(span) { this.exporter.export([span], () => {}); }
+    forceFlush() { sandbox.flushed++; return Promise.resolve(); }
+    shutdown() { return Promise.resolve(); }
+  };
   return sandbox;
 }
 
-test('loading the script twice keeps the first instance and boots Faro once', () => {
+function boot(sandbox) {
+  return trace.boot({ global: sandbox, sdk: sandbox.sdk, tracing: sandbox.tracing, BatchSpanProcessor: sandbox.BatchSpanProcessor });
+}
+
+test('booting twice keeps the first instance and starts Faro once', () => {
   const sandbox = bootSandbox('milesstorm.com');
-  vm.runInContext(SRC, sandbox);
-  const first = sandbox.__msTrace;
-  const wrapped = sandbox.window.fetch;
-  vm.runInContext(SRC, sandbox);
+  const first = boot(sandbox);
+  const wrapped = sandbox.fetch;
+  assert.equal(boot(sandbox), first);
   assert.equal(sandbox.inits, 1);
-  assert.equal(sandbox.__msTrace, first);
-  assert.equal(sandbox.window.fetch, wrapped);
+  assert.equal(sandbox.fetch, wrapped);
+  assert.notEqual(first.tracer, null);
+});
+
+test('Faro sends to /faro/collect with an unsampled traceparent and every instrumentation on', () => {
+  const sandbox = bootSandbox('milesstorm.com');
+  boot(sandbox);
   assert.equal(sandbox.cfg.url, undefined);
   const [transport] = sandbox.cfg.transports;
   assert.equal(transport.opts.url, 'https://milesstorm.com/faro/collect');
   assert.match(transport.opts.requestOptions.headers.traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-00$/);
-  assert.equal(sandbox.cfg.instrumentations.length, 5);
+  assert.deepEqual(sandbox.cfg.instrumentations.map((i) => i.name),
+    ['errors', 'web-vitals', 'session', 'view', 'console', 'performance', 'user-actions', 'tracing']);
   assert.equal(sandbox.cfg.app.name, 'milesstorm-web');
   assert.equal(sandbox.cfg.app.environment, 'production');
+  assert.equal(sandbox.cfg.trackResources, true);
+  assert.equal(sandbox.cfg.webVitalsInstrumentation.trackAttributionSources, true);
+  assert.deepEqual(sandbox.cfg.consoleInstrumentation.disabledLevels, ['trace', 'debug', 'log', 'info']);
 });
 
 test('the fetch request hook renames Faro fetch spans', () => {
   const sandbox = bootSandbox('milesstorm.com');
-  vm.runInContext(SRC, sandbox);
+  boot(sandbox);
   const hook = sandbox.tracingOpts.instrumentationOptions.fetchInstrumentationOptions.requestHook;
   const span = { name: 'POST', attributes: { 'http.request.method': 'POST', 'url.full': 'https://milesstorm.com/api/session/login?x=1' },
     updateName(n) { this.name = n; } };
@@ -453,18 +488,57 @@ test('the fetch request hook renames Faro fetch spans', () => {
 
 test('fetch spans keep their network timing events', () => {
   const sandbox = bootSandbox('milesstorm.com');
-  vm.runInContext(SRC, sandbox);
+  boot(sandbox);
   assert.equal(sandbox.tracingOpts.instrumentationOptions.fetchInstrumentationOptions.ignoreNetworkEvents, false);
 });
 
 test('Faro is not started off milesstorm.com and its staging host', () => {
   for (const host of ['localhost', 'dev.milesstorm.com', 'milesstorm.com.evil.example']) {
     const sandbox = bootSandbox(host);
-    vm.runInContext(SRC, sandbox);
+    const state = boot(sandbox);
     assert.equal(sandbox.inits, 0, host);
     assert.equal(sandbox.tracingOpts, undefined, host);
-    assert.equal(typeof sandbox.__msTrace.create, 'function', host);
+    assert.equal(state.tracer, null, host);
   }
+});
+
+test('pagehide is handled before Faro flushes: open spans end, the user action ends, all is flushed', () => {
+  const sandbox = bootSandbox('milesstorm.com');
+  const state = boot(sandbox);
+  assert.ok(sandbox.order.indexOf('page:pagehide') < sandbox.order.indexOf('transport'), sandbox.order.join());
+  let hidden = 0;
+  state.tracer.pageHide = () => { hidden++; };
+  sandbox.sdk.faro.api.startUserAction('Log In', {}, { triggerName: 'submit' });
+  const pagehide = () => sandbox.listeners.pagehide.forEach((fn) => fn({ type: 'pagehide' }));
+  pagehide();
+  assert.deepEqual([hidden, sandbox.ended, sandbox.flushed], [1, 1, 1]);
+  pagehide();
+  assert.deepEqual([hidden, sandbox.ended, sandbox.flushed], [2, 1, 2], 'no action left to end');
+});
+
+test('frustration goes to Faro under the names of Faro\'s own frustration events', () => {
+  const sandbox = bootSandbox('milesstorm.com');
+  sandbox.document.addEventListener = (type, fn) => { (sandbox.listeners['doc:' + type] ||= []).push(fn); };
+  boot(sandbox);
+  const target = el('button', {}, 'Save');
+  for (let i = 0; i < 3; i++) sandbox.listeners['doc:click'].forEach((fn) => fn({ target, clientX: 1, clientY: 1 }));
+  assert.deepEqual(sandbox.events.filter(([n]) => n.startsWith('faro.frustration')),
+    [['faro.frustration.rage_click', { target: 'Save', clickCount: '3' }]]);
+});
+
+test('a long animation frame goes to Faro as a measurement, at most 20 per page', () => {
+  const m = trace.longFrameMeasurement({
+    duration: 180.4, blockingDuration: 120.6,
+    scripts: [
+      { duration: 20, invoker: 'a', sourceURL: 'https://milesstorm.com/_astro/a.js' },
+      { duration: 150, invoker: 'BUTTON#go.onclick', sourceURL: 'https://milesstorm.com/_astro/b.js?v=1', sourceFunctionName: 'go' },
+    ],
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(m)), {
+    measurement: { type: 'long-animation-frame', values: { duration: 180, blocking_duration: 121 } },
+    options: { context: { invoker: 'BUTTON#go.onclick', source: 'https://milesstorm.com/_astro/b.js', function: 'go' } },
+  });
+  assert.deepEqual(trace.longFrameMeasurement({ duration: 60 }).options.context, {});
 });
 
 test('beforeSend strips query strings and fragments from page and span URLs', () => {
@@ -480,10 +554,19 @@ test('beforeSend strips query strings and fragments from page and span URLs', ()
   const attrs = item.payload.resourceSpans[0].scopeSpans[0].spans[0].attributes;
   assert.equal(attrs[0].value.stringValue, 'https://milesstorm.com/api/a');
   assert.equal(attrs[1].value.stringValue, 'https://milesstorm.com/api/b');
-  const ctx = h.api.scrubItem({ payload: { context: { url: 'https://milesstorm.com/reset?code=abc', href: '/x#t', page_url: '/p?q', other: '/keep?q' } } });
-  assert.deepEqual({ ...ctx.payload.context }, { url: 'https://milesstorm.com/reset', href: '/x', page_url: '/p', other: '/keep?q' });
-  const event = h.api.scrubItem({ payload: { attributes: { 'http.url': 'https://milesstorm.com/api/a?q=1' } } });
-  assert.equal(event.payload.attributes['http.url'], 'https://milesstorm.com/api/a');
+  // Web vitals attribution and error context: every value that is a URL or a path.
+  const ctx = h.api.scrubItem({ payload: { context: {
+    url: 'https://milesstorm.com/reset?code=abc', href: '/x#t', resource_url: '/_astro/a.js?v=1', target_element: 'button#go?', count: 3,
+  } } });
+  assert.deepEqual({ ...ctx.payload.context }, { url: 'https://milesstorm.com/reset', href: '/x', resource_url: '/_astro/a.js', target_element: 'button#go?', count: 3 });
+  // Events: resource timings, user actions.
+  const event = h.api.scrubItem({ payload: { name: 'faro.performance.resource', attributes: {
+    'http.url': 'https://milesstorm.com/api/a?q=1', name: 'https://milesstorm.com/invite#c0de', initiatorType: 'fetch',
+  } } });
+  assert.deepEqual({ ...event.payload.attributes }, { 'http.url': 'https://milesstorm.com/api/a', name: 'https://milesstorm.com/invite', initiatorType: 'fetch' });
+  // console.warn and console.error messages.
+  const log = h.api.scrubItem({ payload: { level: 'warn', message: 'GET https://milesstorm.com/verify-email#c0de failed' } });
+  assert.equal(log.payload.message, 'GET https://milesstorm.com/verify-email failed');
 });
 
 test('beacon traceparent is unsampled with random non-zero ids', () => {
@@ -500,12 +583,12 @@ test('beforeSend strips URLs from exception frames and messages', () => {
     value: 'failed to load https://milesstorm.com/reset-password?code=s3cret (see "https://x.dev/a#frag")',
     stacktrace: { frames: [
       { filename: 'https://milesstorm.com/reset-password?code=s3cret', function: '?' },
-      { filename: 'https://milesstorm.com/assets/web.js', lineno: 1 },
+      { filename: 'https://milesstorm.com/_astro/Layout.astro_astro_type_script_index_0_lang.Ab12Cd.js', lineno: 1 },
     ] },
   } });
   assert.equal(item.payload.value, 'failed to load https://milesstorm.com/reset-password (see "https://x.dev/a")');
   assert.equal(item.payload.stacktrace.frames[0].filename, 'https://milesstorm.com/reset-password');
-  assert.equal(item.payload.stacktrace.frames[1].filename, 'https://milesstorm.com/assets/web.js');
+  assert.equal(item.payload.stacktrace.frames[1].filename, 'https://milesstorm.com/_astro/Layout.astro_astro_type_script_index_0_lang.Ab12Cd.js');
   assert.ok(!JSON.stringify(item).includes('s3cret'));
 });
 
@@ -615,7 +698,7 @@ test('a span that cannot be corrected is sent unchanged and never throws', () =>
 
 test('Faro beforeSend scrubs URLs and then corrects the clock', () => {
   const sandbox = bootSandbox('milesstorm.com');
-  vm.runInContext(SRC, sandbox);
+  boot(sandbox);
   const item = sandbox.cfg.beforeSend({ meta: { page: { url: 'https://milesstorm.com/reset?code=abc' } }, payload: {} });
   assert.equal(item.meta.page.url, 'https://milesstorm.com/reset');
 });
@@ -753,27 +836,17 @@ test('a held trace pushed out by newer ones is sent, not dropped', () => {
   assert.deepEqual(h.exported.map((s) => s.name), ['old']);
 });
 
-// The real BatchSpanProcessor, bundled as scripts/vendor.mjs bundles it, behind our processor:
-// a span reaches the exporter.
-test('the vendored BatchSpanProcessor exports what the span processor lets through', async (t) => {
-  let bundle;
-  try {
-    const { buildSync } = await import('esbuild');
-    bundle = buildSync({
-      stdin: { contents: "export { BatchSpanProcessor } from '@opentelemetry/sdk-trace-web';", resolveDir: new URL('..', import.meta.url).pathname },
-      bundle: true, format: 'iife', globalName: 'OtelSdkTraceWeb', target: 'es2019', write: false,
-    }).outputFiles[0].text;
-  } catch (err) { return t.skip(`run npm ci (${err.message})`); }
-  const sandbox = { URL, Date, crypto, setTimeout, clearTimeout, performance, Promise, console };
-  sandbox.globalThis = sandbox;
-  vm.runInNewContext(bundle + ';globalThis.OtelSdkTraceWeb = OtelSdkTraceWeb;' + SRC, sandbox);
+// The real BatchSpanProcessor (the one the bundle has) behind our processor: a span reaches the
+// exporter.
+test('OTel\'s BatchSpanProcessor exports what the span processor lets through', async () => {
+  const { BatchSpanProcessor } = await import('@opentelemetry/sdk-trace-web');
   const sent = [];
-  const batch = new sandbox.OtelSdkTraceWeb.BatchSpanProcessor(
+  const batch = new BatchSpanProcessor(
     { export: (spans, done) => { sent.push(...spans); done({ code: 0 }); }, shutdown: () => Promise.resolve() },
     { scheduledDelayMillis: 1000, maxExportBatchSize: 30 },
   );
-  const clockSync = sandbox.__msTrace.clockSync({ now: Date.now, performance: { now: () => 0 } });
-  const processor = sandbox.__msTrace.spanProcessor({ next: batch, clock: clockSync });
+  const clockSync = trace.clockSync({ now: Date.now, performance: { now: () => 0 } });
+  const processor = trace.spanProcessor({ next: batch, clock: clockSync });
   const span = { name: 'click', spanContext: () => ({ traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1 }), endTime: [1, 0], resource: { asyncAttributesPending: false } };
   processor.onStart(span);
   processor.onEnd(span);
@@ -842,7 +915,7 @@ test('other WebSockets are left alone', () => {
 
 test('staging starts Faro tagged staging, with the span processor in Faro\'s chain', () => {
   const sandbox = bootSandbox('staging.milesstorm.com');
-  vm.runInContext(SRC, sandbox);
+  boot(sandbox);
   assert.equal(sandbox.inits, 1);
   assert.equal(sandbox.cfg.app.environment, 'staging');
   assert.equal(sandbox.cfg.transports[0].opts.url, 'https://staging.milesstorm.com/faro/collect');
@@ -852,14 +925,12 @@ test('staging starts Faro tagged staging, with the span processor in Faro\'s cha
 });
 
 test('the version comes from the page the server rendered', () => {
-  const sandbox = bootSandbox('milesstorm.com');
-  sandbox.document.querySelector = (selector) =>
-    selector === 'meta[name="service-version"]' ? { getAttribute: () => '0123abc' } : null;
-  vm.runInContext(SRC, sandbox);
+  const sandbox = bootSandbox('milesstorm.com', { version: '0123abc' });
+  boot(sandbox);
   assert.equal(sandbox.cfg.app.version, '0123abc');
 
   const without = bootSandbox('milesstorm.com');
-  vm.runInContext(SRC, without);
+  boot(without);
   assert.equal(without.cfg.app.version, undefined);
 });
 
@@ -867,10 +938,155 @@ test('the environment comes from the host, so one bundle serves staging and prod
   const envs = {};
   for (const host of ['staging.milesstorm.com', 'milesstorm.com']) {
     const sandbox = bootSandbox(host);
-    vm.runInContext(SRC, sandbox);
+    boot(sandbox);
     envs[host] = sandbox.cfg.app.environment;
   }
   assert.deepEqual(envs, { 'staging.milesstorm.com': 'staging', 'milesstorm.com': 'production' });
   // 'production' appears only in the host table, never as a fixed value.
   assert.equal(SRC.match(/'production'/g).length, 1);
+});
+
+// ---- Leaving the page, Faro user actions, long animation frames, frustration ----
+
+test('leaving the page ends the click, its open fetch span and the camera handshake, at once', async () => {
+  const h = setup({ fetchSpans: true });
+  h.click(el('button', { type: 'submit' }, 'Log In'));
+  await h.win.fetch('/api/session/login');
+  await h.win.fetch('/api/session/after-login');
+  h.endFetchSpan(0, h.clk.now());
+  const ws = new h.win.WebSocket('wss://milesstorm.com/ws/arcane');
+  h.clk.advance(20);
+  h.tracer.pageHide();
+  const [root, login, afterLogin, camera] = h.spans;
+  assert.deepEqual(ids(h.spans), ['click Log In', 'POST', 'POST', 'camera session']);
+  assert.equal(root.endTime, 1_000_020);
+  assert.equal(afterLogin.endTime, 1_000_020, 'the call answered before the navigation, OTel had not ended it');
+  assert.equal(camera.endTime, 1_000_020);
+  assert.equal(login.endTime, 1_000_000, 'already ended: left alone');
+  assert.equal(afterLogin.parent, root);
+  assert.equal(h.tracer.current(), null);
+  ws.fire('open');
+  h.processor.forceFlush();
+  assert.deepEqual(ids(h.exported).sort(), ['POST', 'POST', 'camera session', 'click Log In']);
+});
+
+test('leaving the page during the page load ends it with the marks it has', () => {
+  const h = setup({ meta: REMOTE });
+  h.clk.advance(50);
+  h.tracer.pageHide();
+  assert.equal(h.spans[0].endTime, 1_000_050);
+  assert.ok(h.spans[0].events.some((e) => e.name === 'domInteractive'));
+});
+
+test('a click starts the Faro user action named by its label, and the root span and action name each other', async () => {
+  const started = [];
+  const action = { name: 'Log In', parentId: 'ua1', attributes: {} };
+  const userActions = { start: (name, trigger) => started.push([name, trigger]), active: () => action };
+  const h = setup({ userActions });
+  const button = el('button', { type: 'submit' }, 'Log In');
+  h.click(button);
+  h.submit(el('form'), button);
+  await h.win.fetch('/api/session/login');
+  assert.deepEqual(started, [['Log In', 'click'], ['Log In', 'submit']], 'Faro keeps the first: one action at a time');
+  const [root] = h.spans;
+  assert.equal(root.opts.attributes['faro.action.user.name'], 'Log In');
+  assert.equal(root.opts.attributes['faro.action.user.parentId'], 'ua1');
+  assert.equal(action.attributes.trace_id, root.ctx.traceId);
+});
+
+test('without a running user action the root span carries none, and a failing hook never breaks the click', async () => {
+  const userActions = { start: () => { throw new Error('faro'); }, active: () => null };
+  const h = setup({ userActions });
+  h.click(el('button', {}, 'Go'));
+  await h.win.fetch('/api/a');
+  assert.deepEqual(Object.keys(h.spans[0].opts.attributes), ['ui.event']);
+});
+
+test('long animation frames, where the browser has them, become events and go to Faro', () => {
+  const frames = [];
+  const observers = [];
+  class Observer {
+    static supportedEntryTypes = ['longtask', 'long-animation-frame'];
+    constructor(fn) { this.fn = fn; }
+    observe(opts) { observers.push({ fn: this.fn, opts }); }
+  }
+  const h = setup({ meta: REMOTE, Observer, onLongFrame: (e) => frames.push(e) });
+  const [obs] = observers;
+  assert.deepEqual({ ...obs.opts }, { type: 'long-animation-frame', buffered: true });
+  const entry = { entryType: 'long-animation-frame', startTime: 25, duration: 90.4, blockingDuration: 40.2 };
+  obs.fn({ getEntries: () => [entry] });
+  assert.deepEqual(h.spans[0].events.map((e) => [e.name, e.time, e.attrs]),
+    [['long-animation-frame', 999_995, { 'loaf.duration_ms': 90, 'loaf.blocking_ms': 40 }]]);
+  assert.deepEqual(frames, [entry]);
+});
+
+function frustrationPage() {
+  const clk = clock();
+  const listeners = {};
+  const pushed = [];
+  let mutated = null;
+  const on = (prefix) => (type, fn) => { (listeners[prefix + type] ||= []).push(fn); };
+  const fire = (key, e = {}) => (listeners[key] || []).forEach((fn) => fn(e));
+  trace.frustration({
+    window: { location: { href: 'https://milesstorm.com/profile' }, addEventListener: on('win:') },
+    document: { addEventListener: on('') },
+    MutationObserver: class { constructor(fn) { mutated = fn; } observe() {} },
+    now: clk.now,
+    setTimeout: clk.setTimeout,
+    push: (kind, target, count) => pushed.push(count ? [kind, target, count] : [kind, target]),
+  }).install();
+  return {
+    clk, pushed,
+    click: (target, x = 10, y = 10) => fire('click', { target, clientX: x, clientY: y }),
+    mutate: () => mutated(),
+    error: () => fire('win:error'),
+    rejection: () => fire('win:unhandledrejection'),
+    hide: () => fire('win:pagehide'),
+  };
+}
+
+test('three quick clicks on one spot are a rage click, reported once per burst', () => {
+  const p = frustrationPage();
+  const save = el('button', {}, 'Save');
+  for (let i = 0; i < 5; i++) { p.click(save, 10 + i, 10); p.mutate(); p.clk.advance(200); }
+  assert.deepEqual(p.pushed, [['rage', 'Save', 3]]);
+  p.clk.advance(2000);
+  p.click(save, 10, 10); p.mutate(); p.clk.advance(400);
+  p.click(save, 200, 10); p.mutate(); p.clk.advance(400);
+  p.click(save, 10, 10); p.mutate();
+  assert.deepEqual(p.pushed, [['rage', 'Save', 3]], 'spread out, or too slow: not rage');
+});
+
+test('a button click after which nothing changes for 3 s is a dead click; links never are', () => {
+  const p = frustrationPage();
+  p.click(el('button', {}, 'Refresh'));
+  p.clk.advance(2999);
+  assert.deepEqual(p.pushed, []);
+  p.clk.advance(1);
+  assert.deepEqual(p.pushed, [['dead', 'Refresh']]);
+  p.click(el('button', {}, 'Open'));
+  p.clk.advance(500);
+  p.mutate();
+  p.click(el('a', { href: '/arcane' }, 'Arcane'), 100, 100);
+  p.click(el('button', { 'aria-disabled': 'true' }, 'Wait'), 200, 200);
+  p.clk.advance(3000);
+  assert.deepEqual(p.pushed, [['dead', 'Refresh']]);
+  p.click(el('button', {}, 'Leave'));
+  p.hide();
+  p.clk.advance(3000);
+  assert.deepEqual(p.pushed, [['dead', 'Refresh']], 'the page went away');
+});
+
+test('an uncaught error or rejection within 1 s of a click is an error click', () => {
+  const p = frustrationPage();
+  p.click(el('button', {}, 'Roll'));
+  p.mutate();
+  p.clk.advance(300);
+  p.error();
+  p.rejection();
+  p.click(el('button', {}, 'Later'));
+  p.mutate();
+  p.clk.advance(1001);
+  p.rejection();
+  assert.deepEqual(p.pushed, [['error', 'Roll']]);
 });

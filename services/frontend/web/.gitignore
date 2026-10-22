@@ -2,8 +2,9 @@
 dist/
 .astro/
 node_modules/
-# The tracing script, made by `npm run vendor`
+# The tracing script and its name, made by `npm run tracing`
 src/vendor/
+public/_astro/
 # Playwright
 test-results/
 playwright-report/

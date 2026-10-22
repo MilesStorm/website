@@ -15,7 +15,7 @@ COPY web/ ./
 RUN cp src/api/schema.d.ts /tmp/schema.d.ts && \
     npm run api:types && \
     cmp src/api/schema.d.ts /tmp/schema.d.ts && \
-    npm run vendor && \
+    npm run tracing && \
     npx astro check && \
     npm run build
 
