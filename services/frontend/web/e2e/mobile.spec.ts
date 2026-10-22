@@ -1,6 +1,6 @@
 // The menus on a phone, by touch (the `pixel` and `iphone` projects): a tap opens them.
-import { expect, test } from '@playwright/test';
-import { expectAccessible, logIn } from './site';
+import { expect } from '@playwright/test';
+import { expectAccessible, logIn, test } from './site';
 
 // iOS Safari gives the page no touch pointer events while the only listener for them is React's,
 // on an island's `display: contents` root (facebook/react#29890); the tap's click still arrives.

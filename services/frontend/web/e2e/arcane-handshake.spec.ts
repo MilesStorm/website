@@ -1,7 +1,7 @@
 // The camera WebSocket's door, safe on staging too: a handshake opens for an account with
 // `arcane` and is closed at once, before any frame; without the permission it never opens.
-import { expect, test, type Page } from '@playwright/test';
-import { logIn } from './site';
+import { expect, type Page } from '@playwright/test';
+import { logIn, test } from './site';
 
 /** Opens `/ws/arcane` from the page and closes it as soon as it opens: whether it opened. */
 function handshake(page: Page): Promise<boolean> {

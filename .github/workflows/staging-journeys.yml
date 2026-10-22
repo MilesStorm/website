@@ -5,12 +5,16 @@ name: staging-journeys
 # The accounts' names and passwords are secrets of the `staging` environment (ENV.md, "Staging
 # test accounts"): one with no permissions, one with every permission the site knows. Nothing
 # is uploaded: this repository is public, and a report would hold those accounts' sessions.
+# Staging is behind Miles's GitHub login; the tests get past it with this job's GitHub Actions
+# token (id-token), which the gateway accepts only from this workflow in the staging environment
+# (homelab: istio/manifests/login-admin-pages.yaml; e2e/site.ts asks for it).
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   journeys:
@@ -26,7 +30,7 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npx playwright test
         env:
           E2E_BASE_URL: https://staging.milesstorm.com

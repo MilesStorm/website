@@ -1,8 +1,8 @@
 // Every page for every kind of viewer, as its access in PAGES says: served by the server from
 // Astro's build with the viewer on <html> before any script runs, and accessible; or a redirect
 // (to log in, or home from a guest-only page), the 403 page or the 503 page.
-import { expect, test } from '@playwright/test';
-import { PAGES, STAGING, expectAccessible, logIn, type Access, type Who } from './site';
+import { expect } from '@playwright/test';
+import { PAGES, STAGING, expectAccessible, logIn, test, type Access, type Who } from './site';
 
 // No page gets a camera: on /arcane the browser refuses it, so no frame goes anywhere (staging's
 // ai_pipeline included).
@@ -102,7 +102,10 @@ test('what isn’t a page load gets no page: the icon, unknown API paths, unknow
     expect(res.status(), path).toBe(404);
     expect((await res.json()).error, path).toBe('not_found');
   }
-  const file = await request.get('/robots.txt');
-  expect(file.status()).toBe(404);
-  expect(await file.text()).toBe('');
+  // Behind Cloudflare, Cloudflare answers /robots.txt itself (its managed robots.txt).
+  if (!STAGING) {
+    const file = await request.get('/robots.txt');
+    expect(file.status()).toBe(404);
+    expect(await file.text()).toBe('');
+  }
 });

@@ -1,8 +1,8 @@
 // The profile and the Ark panel in a browser. Against staging only what changes nothing runs:
 // looking at them. Changing a name or picture, sharing, and Ark commands (which would start or
 // stop the real game server) run against the stand-ins only.
-import { expect, test, type Browser } from '@playwright/test';
-import { STAGING, expectAccessible, logIn, shownHeight } from './site';
+import { expect, type Browser } from '@playwright/test';
+import { STAGING, expectAccessible, logIn, shownHeight, test } from './site';
 
 /** A 2×2 PNG: small, and a picture the server can read. */
 const PNG = Buffer.from(

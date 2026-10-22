@@ -1,7 +1,7 @@
 // The admin panel in a browser. Against staging it is only looked at: no role, permission or
 // invite link is changed there.
-import { expect, test, type Page } from '@playwright/test';
-import { STAGING, expectAccessible, logIn, shownHeight } from './site';
+import { expect, type Page } from '@playwright/test';
+import { STAGING, expectAccessible, logIn, shownHeight, test } from './site';
 
 async function tab(page: Page, name: 'Users' | 'Roles' | 'Invites') {
   await page.getByRole('tab', { name }).click();

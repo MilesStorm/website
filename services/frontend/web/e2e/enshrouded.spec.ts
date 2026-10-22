@@ -1,7 +1,7 @@
 // The Enshrouded panel in a browser. Against staging it is only looked at, never a Restart or
 // Force update: those act on the real game server.
-import { expect, test } from '@playwright/test';
-import { STAGING, expectAccessible, logIn, shownHeight } from './site';
+import { expect } from '@playwright/test';
+import { STAGING, expectAccessible, logIn, shownHeight, test } from './site';
 
 test('the panel shows the server, in light and dark', async ({ context, page }) => {
   await logIn(context, 'all');
