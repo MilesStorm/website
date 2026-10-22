@@ -1,7 +1,7 @@
 // Who is looking at the page. The server puts it into every page it serves (a `bootstrap` JSON
 // tag and `data-session`/`data-perms` on <html>); a page served without it (`astro dev`, a
 // bundled app) asks `GET /api/session` instead. Both are the same typed `Bootstrap`.
-import { client, type Schemas } from './client';
+import { bffUrl, client, type Schemas } from './client';
 
 export type Bootstrap = Schemas['Bootstrap'];
 export type Viewer = Schemas['Viewer'];
@@ -37,6 +37,13 @@ export function applySession(bootstrap: Bootstrap, root: HTMLElement = document.
 export function sameViewer(a: Bootstrap, b: Bootstrap): boolean {
   const key = (x: Bootstrap) => (x.viewer ? `${x.viewer.username}:${x.viewer.permissions.join(' ')}` : '');
   return key(a) === key(b);
+}
+
+/** Logs out, then loads the start page: a new page, so everything on it is the logged-out one.
+ * The user menu's and the profile page's. */
+export async function logOut(): Promise<void> {
+  await client.DELETE('/api/session');
+  location.assign(bffUrl('/'));
 }
 
 const VIEWER_CHANGED = 'ms:viewer';

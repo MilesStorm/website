@@ -20,5 +20,10 @@ export default defineConfig({
     screenshot: 'off',
     video: 'off',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: 'mobile.spec.ts' },
+    // Phones, by touch: Android's browser and an iPhone's WebKit.
+    { name: 'pixel', use: { ...devices['Pixel 7'] }, testMatch: 'mobile.spec.ts' },
+    { name: 'iphone', use: { ...devices['iPhone 14'] }, testMatch: 'mobile.spec.ts' },
+  ],
 });
