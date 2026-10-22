@@ -11,11 +11,12 @@ import { TextField } from '@/components/TextField';
 import { client } from '@/api/client';
 import { FORGOT_INTRO, NO_PASSWORD } from '@/lib/copy';
 import { attempt } from '@/lib/errors';
+import { island } from '@/lib/island';
 
 const schema = z.object({ login: z.string().trim().min(1, 'Enter your username or email.') });
 
 /** Asking for a password reset link. The answer is the same whether the account exists or not. */
-export function ForgotForm() {
+export const ForgotForm = island('ForgotForm', function ForgotForm() {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const form = useForm({ resolver: zodResolver(schema), defaultValues: { login: '' } });
@@ -39,7 +40,7 @@ export function ForgotForm() {
     );
   }
   return (
-    <form onSubmit={submit} noValidate>
+    <form onSubmit={submit} noValidate data-faro-user-action-name="forgot password">
       <FieldGroup>
         <FieldDescription className="text-center">{FORGOT_INTRO}</FieldDescription>
         <TextField form={form} name="login" label="Username or email" autoComplete="username" />
@@ -56,4 +57,4 @@ export function ForgotForm() {
       </FieldGroup>
     </form>
   );
-}
+});

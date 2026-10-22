@@ -9,6 +9,7 @@ import { applySession, fetchBootstrap } from '@/api/session';
 import { attempt, type Outcome } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
 import type { PagePath } from '@/lib/pages';
+import { island } from '@/lib/island';
 
 /** The button to the page the server says joining leads to (`Opened.next`). */
 export function joinedButton(next: PagePath): string {
@@ -17,7 +18,7 @@ export function joinedButton(next: PagePath): string {
 
 /** The page an invite link opens (`/invite#<code>`). Logged in, it joins at once. Logged out, the
  * server keeps the invite: logging in or signing up joins, and the login comes back here. */
-export function InviteOpen() {
+export const InviteOpen = island('InviteOpen', function InviteOpen() {
   const [opened, setOpened] = useState<Outcome<Schemas['Opened']> | null>(null);
   useEffect(() => {
     const code = linkCode();
@@ -72,4 +73,4 @@ export function InviteOpen() {
       </a>
     </div>
   );
-}
+});

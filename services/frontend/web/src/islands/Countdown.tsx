@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
+import { island } from '@/lib/island';
 
 const DAY = 86_400;
 
@@ -9,7 +10,7 @@ export function split(secs: number): [number, number, number, number] {
 }
 
 /** A countdown to a random moment 30 to 365 days away; a draw under 30 days reloads the page. */
-export function Countdown({ random = Math.random }: { random?: () => number }) {
+export const Countdown = island('Countdown', function Countdown({ random = Math.random }: { random?: () => number }) {
   const [left, setLeft] = useState<number | null>(null);
   useEffect(() => {
     const days = 1 + Math.floor(random() * 365);
@@ -25,7 +26,7 @@ export function Countdown({ random = Math.random }: { random?: () => number }) {
   }, [random]);
   if (left === null) return <CountdownSkeleton />;
   return <Tiles values={split(left)} />;
-}
+});
 
 const UNITS = ['Days', 'Hours', 'Minutes', 'Seconds'];
 

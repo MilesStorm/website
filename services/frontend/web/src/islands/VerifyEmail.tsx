@@ -7,10 +7,11 @@ import { VerifySkeleton } from './FormSkeleton';
 import { client } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
+import { island } from '@/lib/island';
 
 /** Confirming an email address from its link (`/verify-email#<code>`): opening it is enough, so
  * a link checker opening it too does no harm. */
-export function VerifyEmail() {
+export const VerifyEmail = island('VerifyEmail', function VerifyEmail() {
   const [result, setResult] = useState<Outcome<{ username: string }> | null>(null);
   useEffect(() => {
     const code = linkCode();
@@ -48,4 +49,4 @@ export function VerifyEmail() {
       </a>
     </div>
   );
-}
+});

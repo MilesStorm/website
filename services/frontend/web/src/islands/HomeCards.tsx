@@ -7,9 +7,10 @@ import { cn } from '@/lib/utils';
 import { bffUrl } from '@/api/client';
 import defaultPicture from '@/assets/default-profile.png';
 import { HERO_NAME, HERO_SECTION, HomeSkeleton } from './HomeSkeleton';
+import { island } from '@/lib/island';
 
 /** The logged-in start page: a greeting and the parts of the site, open or locked. */
-export function HomeCards() {
+export const HomeCards = island('HomeCards', function HomeCards() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   useEffect(() => {
     void readBootstrap().then((b) => setViewer(b.viewer));
@@ -42,4 +43,4 @@ export function HomeCards() {
       </section>
     </div>
   );
-}
+});

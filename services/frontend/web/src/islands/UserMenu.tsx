@@ -14,9 +14,10 @@ import { bffUrl } from '@/api/client';
 import { logOut, onViewerChange, readBootstrap, type Viewer } from '@/api/session';
 import { useMenu } from '@/lib/menu';
 import defaultPicture from '@/assets/default-profile.png';
+import { island } from '@/lib/island';
 
 /** The logged-in user's menu: their name and picture, the profile, logging out. */
-export function UserMenu() {
+export const UserMenu = island('UserMenu', function UserMenu() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const menu = useMenu();
   useEffect(() => {
@@ -49,4 +50,4 @@ export function UserMenu() {
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
+});

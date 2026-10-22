@@ -11,6 +11,7 @@ import { client } from '@/api/client';
 import { attempt, oauthError } from '@/lib/errors';
 import { FORGOT_LINK, NO_ACCOUNT } from '@/lib/copy';
 import { landAfterLogin, nextFrom } from '@/lib/login';
+import { island } from '@/lib/island';
 
 const schema = z.object({
   username: z.string().trim().min(1, 'Enter your username.'),
@@ -19,7 +20,7 @@ const schema = z.object({
 
 /** Logging in: GitHub, Google or a password, then on to `?next=` (or a waiting invite). An OAuth
  * login that failed comes back here with `?error=`. */
-export function LoginForm() {
+export const LoginForm = island('LoginForm', function LoginForm() {
   const [search] = useState(() => location.search);
   const next = nextFrom(search);
   const [error, setError] = useState(() => oauthError(new URLSearchParams(search).get('error')));
@@ -35,7 +36,7 @@ export function LoginForm() {
   const withNext = (path: string) => (next ? `${path}?next=${encodeURIComponent(next)}` : path);
   return (
     <div className="grid gap-6">
-      <form onSubmit={submit} noValidate>
+      <form onSubmit={submit} noValidate data-faro-user-action-name="log in">
         <FieldGroup>
           <TextField form={form} name="username" label="Username" autoComplete="username" />
           <TextField
@@ -65,4 +66,4 @@ export function LoginForm() {
       </FieldDescription>
     </div>
   );
-}
+});

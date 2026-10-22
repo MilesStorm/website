@@ -60,6 +60,7 @@ import {
 import { attempt, type Outcome } from '@/lib/errors';
 import { isKnownPermission } from '@/lib/gates';
 import { useMenu } from '@/lib/menu';
+import { island } from '@/lib/island';
 
 type RoleRef = Schemas['AdminRoleRef'];
 type Permission = Schemas['AdminPermission'];
@@ -68,7 +69,7 @@ type Permission = Schemas['AdminPermission'];
 export const SEARCH_DELAY_MS = 250;
 
 /** The admin panel: users and their roles, roles and their permissions, invite links. */
-export function AdminPanel() {
+export const AdminPanel = island('AdminPanel', function AdminPanel() {
   // The small lists the pickers need: every role, every permission.
   const [roles, setRoles] = useState<Outcome<RoleRef[]> | null>(null);
   const [permissions, setPermissions] = useState<Outcome<Permission[]> | null>(null);
@@ -111,7 +112,7 @@ export function AdminPanel() {
       </AdminTabs>
     </div>
   );
-}
+});
 
 /** A searched, paged listing: what to show, and the controls' state. */
 function useListing<T>(load: (page: number, search: string) => Promise<Outcome<{ items: T[]; total: number }>>) {
@@ -517,6 +518,7 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
   return (
     <Card>
       <form
+        data-faro-user-action-name="admin create invite"
         className="flex flex-col gap-(--card-spacing)"
         onSubmit={(e) => {
           e.preventDefault();

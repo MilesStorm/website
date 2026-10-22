@@ -6,10 +6,11 @@ import { attempt, type Outcome } from '@/lib/errors';
 import { DELETE_LINK } from '@/lib/copy';
 import { MISSING_CODE, linkCode } from '@/lib/login';
 import { DeleteLinkSkeleton } from './FormSkeleton';
+import { island } from '@/lib/island';
 
 /** Deleting an account from its emailed link (`/delete-account#<code>`): says whose account the
  * link is for, and deletes it only when the button is pressed. */
-export function DeleteAccount() {
+export const DeleteAccount = island('DeleteAccount', function DeleteAccount() {
   const [code] = useState(() => linkCode());
   const [account, setAccount] = useState<Outcome<{ username: string }> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,7 +49,7 @@ export function DeleteAccount() {
       </p>
       <FormAlert message={error} />
       <div className="flex flex-col gap-2 sm:flex-row-reverse">
-        <Button variant="destructive" className="sm:flex-1" disabled={busy} onClick={() => void remove()}>
+        <Button variant="destructive" className="sm:flex-1" disabled={busy} onClick={() => void remove()} data-faro-user-action-name="delete account link">
           Delete my account
         </Button>
         <a href="/" className={buttonVariants({ variant: 'outline', className: 'sm:flex-1' })}>
@@ -57,4 +58,4 @@ export function DeleteAccount() {
       </div>
     </div>
   );
-}
+});

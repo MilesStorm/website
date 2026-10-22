@@ -10,9 +10,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useMenu } from '@/lib/menu';
 import { THEME_KEY, getTheme, setTheme, type Theme } from '@/lib/theme';
+import { island } from '@/lib/island';
 
 /** Light, dark or the system's theme (shadcn's Astro mode toggle). */
-export function ModeToggle() {
+export const ModeToggle = island('ModeToggle', function ModeToggle() {
   const [theme, set] = useState<Theme>('system');
   const menu = useMenu();
   useEffect(() => {
@@ -52,4 +53,4 @@ export function ModeToggle() {
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
+});

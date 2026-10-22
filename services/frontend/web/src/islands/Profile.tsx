@@ -24,6 +24,7 @@ import {
 } from '@/lib/copy';
 import { ProfileSkeleton, SharingFacts, SharingSkeleton } from './ProfileSkeleton';
 import defaultPicture from '@/assets/default-profile.png';
+import { island } from '@/lib/island';
 
 type Account = Schemas['AccountInfo'];
 
@@ -48,7 +49,7 @@ function NoteLine({ note }: { note: Note }) {
 
 /** The logged-in user's profile: name and picture, email, sharing roll pictures (with the
  * `arcane` permission), deleting the account. The theme is the page's own card. */
-export function Profile() {
+export const Profile = island('Profile', function Profile() {
   const [account, setAccount] = useState<Outcome<Account> | null>(null);
   const [viewer, setViewer] = useState<Viewer | null>(null);
   useEffect(() => {
@@ -76,7 +77,7 @@ export function Profile() {
       <DeleteCard account={account.data} />
     </div>
   );
-}
+});
 
 function AccountCard({ account, update }: { account: Account; update: (a: Account) => void }) {
   const [name, setName] = useState(account.display_name ?? '');
@@ -146,11 +147,11 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
           {account.pictures_available ? (
             <>
               <div className="flex gap-2">
-                <Button size="sm" disabled={busy} onClick={() => file.current?.click()}>
+                <Button size="sm" disabled={busy} onClick={() => file.current?.click()} data-faro-user-action-name="profile upload picture">
                   Upload
                 </Button>
                 {account.picture_version !== null && (
-                  <Button size="sm" variant="outline" disabled={busy} onClick={() => void remove()}>
+                  <Button size="sm" variant="outline" disabled={busy} onClick={() => void remove()} data-faro-user-action-name="profile remove picture">
                     Remove
                   </Button>
                 )}
@@ -179,6 +180,7 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
           <NoteLine note={pictureNote} />
         </div>
         <form
+          data-faro-user-action-name="profile save name"
           onSubmit={(e) => {
             e.preventDefault();
             void saveName();
@@ -249,7 +251,7 @@ function EmailCard({ account }: { account: Account }) {
         )}
         {unconfirmed && (
           <CardAction>
-            <Button size="sm" disabled={busy} onClick={() => void send()}>
+            <Button size="sm" disabled={busy} onClick={() => void send()} data-faro-user-action-name="profile send confirmation">
               Send confirmation email
             </Button>
           </CardAction>
@@ -336,7 +338,7 @@ function SharingCard() {
               <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
                 Cancel
               </Button>
-              <Button size="sm" variant="destructive" disabled={busy} onClick={() => void removeAll()}>
+              <Button size="sm" variant="destructive" disabled={busy} onClick={() => void removeAll()} data-faro-user-action-name="profile delete data">
                 Delete everything
               </Button>
             </div>
@@ -410,13 +412,14 @@ function DeleteCard({ account }: { account: Account }) {
                 <Button size="sm" variant="ghost" onClick={close}>
                   Cancel
                 </Button>
-                <Button size="sm" variant="destructive" disabled={busy} onClick={() => void sendLink()}>
+                <Button size="sm" variant="destructive" disabled={busy} onClick={() => void sendLink()} data-faro-user-action-name="profile email delete link">
                   Email me the link
                 </Button>
               </div>
             </>
           ) : (
             <form
+              data-faro-user-action-name="profile delete account"
               onSubmit={(e) => {
                 e.preventDefault();
                 void deleteNow();
