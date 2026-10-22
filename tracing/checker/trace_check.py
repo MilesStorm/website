@@ -148,7 +148,7 @@ def is_browser_ui(s):
 
 def follows(s, parent, leaves):
     """trace.relation=follows counts only where the contract allows it: the browser's page load
-    under the server render, and the detached work named in leaf_spans.toml's [[follows]]."""
+    under the server's span for the page, and the detached work named in leaf_spans.toml's [[follows]]."""
     if s.attrs.get("trace.relation") != "follows" or parent is None:
         return False
     if s.svc == BROWSER and s.name.startswith("page load ") and parent.kind == "SERVER":
@@ -452,7 +452,7 @@ def check_i6(t):
 class LeafRegistry:
     """tracing/leaf_spans.toml. [[leaf]]: spans allowed to have no children (declared CPU or
     single-I/O leaves). [[follows]]: detached work allowed to outlast its parent. [[cpu]]: parents
-    whose own time is CPU work by design (a page render), exempt from the own-time limit. Each
+    whose own time is CPU work by design (an image conversion), exempt from the own-time limit. Each
     entry has service, name (fnmatch globs) and a reason."""
 
     def __init__(self, leaf=(), follows=(), cpu=()):

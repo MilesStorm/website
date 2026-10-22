@@ -327,7 +327,7 @@ test('page load span is a child of the meta traceparent and parents fetches unti
   h.clk.advance(1000);
   await h.win.fetch('/api/account');
   await tick();
-  assert.equal(h.calls[1].parent, span, 'a hydration-time call 1s after load still joins');
+  assert.equal(h.calls[1].parent, span, 'an island\'s first call 1s after load still joins');
   h.clk.advance(1499);
   assert.equal(span.endTime, undefined);
   h.clk.advance(1);

@@ -1256,7 +1256,7 @@ mod server {
                 }
             };
             let app = axum::Router::new()
-                .route("/stream", axum::routing::get(body("application/wasm")))
+                .route("/stream", axum::routing::get(body("application/octet-stream")))
                 .route("/events", axum::routing::get(body("text/event-stream")))
                 .layer(axum::middleware::from_fn(super::end_span_with_body))
                 .layer(OtelAxumLayer::default());
