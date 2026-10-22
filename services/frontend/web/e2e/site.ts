@@ -36,22 +36,33 @@ async function stagingToken(): Promise<string> {
   return value;
 }
 
-/** Against staging, gives `context` the token, and says which requests left staging (they would
- * carry it too; the site loads nothing from elsewhere, so a test fails on any). */
+const TOKEN = 'x-staging-journeys-token';
+
+/** The only hosts besides staging a page may reach, though the token goes along: Cloudflare's
+ * analytics beacon, which Cloudflare puts in every page it serves (it already sees every request,
+ * token included), and GitHub, where the login with GitHub link goes (it issued the token). */
+const ELSEWHERE = new Set(['static.cloudflareinsights.com', 'github.com']);
+
+/** Against staging, gives `context` the token, and says which requests reached a host other than
+ * staging and those above. */
 async function admit(context: BrowserContext): Promise<string[]> {
   const away: string[] = [];
   if (!STAGING) return away;
-  await context.setExtraHTTPHeaders({ 'x-staging-journeys-token': await stagingToken() });
+  await context.setExtraHTTPHeaders({ [TOKEN]: await stagingToken() });
   const origin = new URL(process.env.E2E_BASE_URL!).origin;
   context.on('request', (r) => {
     const url = new URL(r.url());
-    if (url.protocol.startsWith('http') && url.origin !== origin) away.push(r.url());
+    if (url.protocol.startsWith('http') && url.origin !== origin && !ELSEWHERE.has(url.host)) away.push(r.url());
   });
   return away;
 }
 
-/** Playwright's `test`, with every test's browser context admitted to staging. */
+/** Playwright's `test`, with every test's browser context and API requests admitted to staging. */
 export const test = base.extend({
+  // Used by both `context` and `request`.
+  extraHTTPHeaders: async ({ extraHTTPHeaders }, use) => {
+    await use(STAGING ? { ...extraHTTPHeaders, [TOKEN]: await stagingToken() } : extraHTTPHeaders);
+  },
   context: async ({ context }, use) => {
     const away = await admit(context);
     await use(context);
