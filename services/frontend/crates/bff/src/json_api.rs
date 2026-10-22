@@ -384,8 +384,9 @@ async fn after_login(NoApi(session): NoApi<Session>, Body(a): Body<AfterLogin>) 
     Json(next_page(&session, a.next).await)
 }
 
-/// `POST /api/session/login`. 429 `rate_limited` after too many logins from one visitor, or too
-/// many failed ones for one username (`limits`).
+/// `POST /api/session/login`. 429 `rate_limited` after too many failed logins from one visitor or
+/// for one username (`limits`). Logins that work don't count: the staging journeys log in dozens
+/// of times a run from one address.
 async fn login(
     NoApi(session): NoApi<Session>,
     NoApi(Extension(limits)): NoApi<Extension<Arc<Limits>>>,
@@ -399,9 +400,6 @@ async fn login(
         metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "rate_limited").increment(1);
         return Err(limits::rate_limited().into());
     }
-    if let Some(ip) = &visitor {
-        limits.login_ip.hit(ip, now);
-    }
     match crate::auth::log_in(&session, login.username, login.password).await {
         Ok(username) => {
             limits.login_user.clear(&user);
@@ -410,6 +408,9 @@ async fn login(
         Err(e) => {
             if e.error == ErrorCode::Invalid {
                 limits.login_user.hit(&user, now);
+                if let Some(ip) = &visitor {
+                    limits.login_ip.hit(ip, now);
+                }
             }
             Err(e.into())
         }

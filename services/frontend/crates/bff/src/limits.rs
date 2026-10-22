@@ -55,7 +55,7 @@ impl Limit {
 
 /// The limits of the login and registration endpoints.
 pub(crate) struct Limits {
-    /// Password logins per visitor, failed or not.
+    /// Failed password logins per visitor.
     pub(crate) login_ip: Limit,
     /// Failed password logins per username.
     pub(crate) login_user: Limit,

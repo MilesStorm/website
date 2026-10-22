@@ -602,9 +602,14 @@ async fn too_many_failed_logins_for_a_username_are_refused_for_a_while() {
 }
 
 #[tokio::test]
-async fn one_visitor_gets_a_limited_number_of_logins_and_registrations() {
+async fn one_visitor_gets_a_limited_number_of_failed_logins_and_registrations() {
     let mut site = Site::new().await;
     site.visitor = Some("203.0.113.7");
+    // Logins that work don't count (the staging journeys log in dozens of times a run).
+    for _ in 0..50 {
+        let reply = site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    }
     for i in 0..30 {
         let login = json!({"username": format!("user{i}"), "password": "wrong"});
         envelope(&site.json(Method::POST, "/api/session/login", login).await, 401, "invalid");
