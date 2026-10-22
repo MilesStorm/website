@@ -7,6 +7,12 @@
       "description": "Every version bump waits for a manual merge.",
       "matchPackageNames": ["*"],
       "automerge": false
+    },
+    {
+      "description": "The website's own images are deployed by Argo CD Image Updater, not by version bumps here.",
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["ghcr.io/milesstorm/**"],
+      "enabled": false
     }
   ],
   "customManagers": [
@@ -15,6 +21,13 @@
       "customType": "regex",
       "managerFilePatterns": ["/services/frontend/web/e2e/serve\\.sh$/"],
       "matchStrings": ["(?<depName>(?:surrealdb/surrealdb|caddy|redis)):(?<currentValue>[\\w.-]+)"],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "description": "Container images in the Kubernetes manifests under crds/ (staging's Redis).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^crds/.+\\.ya?ml$/"],
+      "matchStrings": ["image:\\s*[\"']?(?<depName>[^\\s:@\"']+):(?<currentValue>[^\\s@\"']+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?"],
       "datasourceTemplate": "docker"
     }
   ]
