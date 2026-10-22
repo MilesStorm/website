@@ -135,4 +135,11 @@ if (!STAGING) {
     await page.waitForURL('**/invite#join');
     await expect(page.getByRole('link', { name: 'Open Arcane dice' })).toBeVisible();
   });
+
+  test('an invite whose group has since gained admin rights is refused, with why', async ({ context, page }) => {
+    await logIn(context, 'plain');
+    await page.goto('/invite#admin');
+    await expect(page.getByText(/admin rights, which links never give/)).toBeVisible();
+    await expectAccessible(page);
+  });
 }

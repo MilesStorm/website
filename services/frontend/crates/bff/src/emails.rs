@@ -68,6 +68,10 @@ async fn call(path: &str, body: Value) -> Result<Value, ApiError> {
         "already_verified" => (ErrorCode::Conflict, "Your email is already confirmed."),
         "no_email" => (ErrorCode::Invalid, "Your account has no email address."),
         "weak_password" => (ErrorCode::Invalid, "Use at least 8 characters."),
+        "last_admin" => (
+            ErrorCode::Conflict,
+            "Yours is the only account with admin rights, so it can't be deleted. Give them to another account first.",
+        ),
         "logged_out" => return Err(ApiError::logged_out()),
         _ if refused => {
             tracing::warn!(path, status, code, "auth refused an email request");
@@ -243,6 +247,8 @@ pub async fn delete_direct(
         if confirm.trim() != profile.username {
             return Err(ApiError::new(ErrorCode::Invalid, "Type your username exactly to confirm."));
         }
+        // Auth's own refusals (the last admin) before anything is removed.
+        call("/internal/account/delete/direct", json!({ "token": token, "check": true })).await?;
         forget(profile.user_id, &profile.username, hub).await?;
         call("/internal/account/delete/direct", json!({ "token": token })).await?;
         let logged_out = log_out_if(session, &profile.username).await;

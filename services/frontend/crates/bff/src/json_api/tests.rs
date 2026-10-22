@@ -158,10 +158,11 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
             _ => axum::Json(json!({})).into_response(),
         }
     };
-    let invite = |body: axum::Json<Value>| async move {
+    let invite = move |body: axum::Json<Value>| async move {
         match (body["code"].as_str(), body["token"].as_str()) {
             (_, Some("dead")) => StatusCode::UNAUTHORIZED.into_response(),
             (Some("join"), _) => axum::Json(json!({"role": "arcane_user"})).into_response(),
+            (Some("admin"), _) => refuse(StatusCode::FORBIDDEN, "admin_role"),
             _ => StatusCode::NOT_FOUND.into_response(),
         }
     };
@@ -291,9 +292,13 @@ fn stand_in_panels(auth: Arc<Auth>) -> axum::Router {
     let all_roles = |_: &str, _: Option<&Value>| axum::Json(json!([{"id": 2, "name": "arcane_user"}])).into_response();
     let permissions =
         |_: &str, _: Option<&Value>| axum::Json(json!([{"id": 3, "name": "arcane"}, {"id": 9, "name": "brand_new"}])).into_response();
-    // User 404 doesn't exist; user 400 is refused for a reason this site doesn't know.
+    // User 404 doesn't exist; user 400 is refused for a reason this site doesn't know; user 409
+    // and role 409 hold the last admin rights.
     let done = |path: &str, _: Option<&Value>| match path {
         p if p.contains("/users/404/") => (StatusCode::NOT_FOUND, axum::Json(json!({"error": "no_user"}))).into_response(),
+        p if p.contains("/users/409/") || p.contains("/roles/409/") => {
+            (StatusCode::CONFLICT, axum::Json(json!({"error": "last_admin"}))).into_response()
+        }
         p if p.contains("/users/400/") => (StatusCode::BAD_REQUEST, axum::Json(json!({"error": "something_new"}))).into_response(),
         _ => StatusCode::NO_CONTENT.into_response(),
     };
@@ -961,6 +966,10 @@ async fn invites_join_or_wait_for_a_login() {
     assert_eq!(reply.body["kind"], "joined");
     // The dice test group's page.
     assert_eq!(reply.body["next"], "/arcane");
+    // A link whose role has gained admin rights since: refused, with why.
+    let reply = site.json(Method::POST, "/api/invites/open", json!({"code": "admin"})).await;
+    envelope(&reply, 403, "forbidden");
+    assert!(reply.body["message"].as_str().unwrap().contains("admin rights, which links never give"));
     drop(site);
     // A session auth dropped joins after logging in, like a logged-out one.
     let mut site = Site::logged_in("dead").await;
@@ -1203,6 +1212,12 @@ async fn admin_refusals_and_failures_have_messages() {
     // Refusals without a message of their own: 404 is not_found, any other 4xx invalid.
     envelope(&site.send(Method::PUT, "/api/admin/users/404/roles/2", Some(SITE), None).await, 404, "not_found");
     envelope(&site.send(Method::DELETE, "/api/admin/users/400/roles/2", Some(SITE), None).await, 400, "invalid");
+    // Taking the last admin rights away: auth's 409, with why.
+    for path in ["/api/admin/users/409/roles/1", "/api/admin/roles/409/permissions/4"] {
+        let reply = site.send(Method::DELETE, path, Some(SITE), None).await;
+        envelope(&reply, 409, "conflict");
+        assert_eq!(reply.body["message"], crate::admin::LAST_ADMIN);
+    }
 
     // Bad ids and paging never reach auth.
     let before = site.calls().len();

@@ -107,10 +107,18 @@ pub async fn permissions() -> Result<Vec<AdminPermission>, ApiError> {
     .await
 }
 
+/// Auth's 409 `last_admin`: the change would leave nobody with `manage_permissions`.
+pub(crate) const LAST_ADMIN: &str =
+    "That would leave nobody with admin rights (manage_permissions). Give them to another account first.";
+
 /// `POST` (give) or `DELETE` (take away) on an admin path that answers 204.
 async fn change(method: reqwest::Method, path: String) -> Result<(), ApiError> {
     let req = http_client().request(method, format!("{}{path}", auth_url()));
-    send(req, SAVE, |_, _| None).await.map(|_| ())
+    send(req, SAVE, |status, code| {
+        (status == 409 && code == "last_admin").then(|| ApiError::new(ErrorCode::Conflict, LAST_ADMIN))
+    })
+    .await
+    .map(|_| ())
 }
 
 #[tracing::instrument(name = "bff.admin_assign_user_role", skip_all, fields(user_id, role_id))]
