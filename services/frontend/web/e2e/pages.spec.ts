@@ -102,7 +102,10 @@ test('what isn’t a page load gets no page: the icon, unknown API paths, unknow
     expect(res.status(), path).toBe(404);
     expect((await res.json()).error, path).toBe('not_found');
   }
-  const file = await request.get('/robots.txt');
-  expect(file.status()).toBe(404);
-  expect(await file.text()).toBe('');
+  // Behind Cloudflare, Cloudflare answers /robots.txt itself (its managed robots.txt).
+  if (!STAGING) {
+    const file = await request.get('/robots.txt');
+    expect(file.status()).toBe(404);
+    expect(await file.text()).toBe('');
+  }
 });
