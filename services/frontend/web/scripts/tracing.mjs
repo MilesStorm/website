@@ -1,6 +1,7 @@
 // The browser telemetry as one classic script: assets/main.js (Grafana Faro's modules, OTel's
 // BatchSpanProcessor and assets/trace.js) bundled, tree-shaken and minified into
-// public/_astro/tracing.<hash>.js, with its source map next to it. src/vendor/tracing.json names
+// public/_astro/tracing.<hash>.js, with its source map next to it (without a sourceMappingURL
+// comment: scripts/sourcemaps.mjs moves the map out of what is served). src/vendor/tracing.json names
 // the file for the layout, which loads it synchronously in <head>, before every module script,
 // so fetch and WebSocket are wrapped before an island can call them (TRACING.md, "Browser").
 // Astro copies public/ into dist/, so the script is served and cached like Astro's own files.
@@ -42,7 +43,7 @@ const { metafile } = await build({
   bundle: true,
   format: 'iife',
   minify: true,
-  sourcemap: 'linked',
+  sourcemap: 'external',
   // The sources in the map are the repository's (public), not node_modules' only.
   sourcesContent: true,
   target: 'es2020',

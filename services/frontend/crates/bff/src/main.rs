@@ -14,6 +14,7 @@ mod limits;
 mod pages;
 mod rolls;
 mod sharing;
+mod telemetry;
 mod trace;
 #[cfg(test)]
 mod trace_tests;
@@ -328,6 +329,7 @@ async fn router(
         .route("/oauth/callback/{provider}", get(oauth_callback))
         .route("/ws/arcane", arcane_ws_route())
         .merge(json_api::router())
+        .merge(telemetry::router(std::sync::Arc::new(telemetry::Telemetry::from_env()?)))
         .route(
             "/metrics",
             get(move || async move { metric_handle.render() }),

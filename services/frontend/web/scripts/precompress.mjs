@@ -8,7 +8,7 @@ import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), '../dist/_astro');
 // Fonts and images are compressed already.
-const TEXT = new Set(['.js', '.mjs', '.css', '.svg', '.json', '.map']);
+const TEXT = new Set(['.js', '.mjs', '.css', '.svg', '.json']);
 
 for (const name of readdirSync(dir, { recursive: true })) {
   const file = join(dir, name);

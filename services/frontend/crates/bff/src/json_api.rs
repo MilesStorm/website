@@ -315,7 +315,7 @@ async fn access(State(access): State<Access>, req: Request, next: Next) -> Respo
 /// HTTP in a debug build). Requests without an `Origin` aren't from a browser and pass.
 /// `ARCANE_ALLOWED_ORIGINS` (the extension's) doesn't apply here; a debug build also takes the
 /// local dev proxies' origins from `DEV_ALLOWED_ORIGINS` (ENV.md).
-async fn same_origin(req: Request, next: Next) -> Response {
+pub(crate) async fn same_origin(req: Request, next: Next) -> Response {
     let read = req.method() == Method::GET || req.method() == Method::HEAD;
     let dev = std::env::var("DEV_ALLOWED_ORIGINS").unwrap_or_default();
     if read || origin_allowed(req.headers(), &dev, cfg!(debug_assertions)) {

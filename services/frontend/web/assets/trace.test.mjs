@@ -292,7 +292,7 @@ test('fetch span names are method plus templated path', () => {
 test('ignored URLs are neither parented nor counted', async () => {
   const h = setup();
   h.click(el('button', {}, 'Go'));
-  await h.win.fetch('https://milesstorm.com/faro/collect', { method: 'POST' });
+  await h.win.fetch('https://milesstorm.com/telemetry/collect', { method: 'POST' });
   await h.win.fetch(new URL('https://milesstorm.com/api/arcane/rolls'));
   await h.win.fetch('https://milesstorm.com/cdn-cgi/rum', { method: 'POST' });
   assert.equal(h.spans.length, 0);
@@ -460,12 +460,12 @@ test('booting twice keeps the first instance and starts Faro once', () => {
   assert.notEqual(first.tracer, null);
 });
 
-test('Faro sends to /faro/collect with an unsampled traceparent and every instrumentation on', () => {
+test('Faro sends to /telemetry/collect with an unsampled traceparent and every instrumentation on', () => {
   const sandbox = bootSandbox('milesstorm.com');
   boot(sandbox);
   assert.equal(sandbox.cfg.url, undefined);
   const [transport] = sandbox.cfg.transports;
-  assert.equal(transport.opts.url, 'https://milesstorm.com/faro/collect');
+  assert.equal(transport.opts.url, 'https://milesstorm.com/telemetry/collect');
   assert.match(transport.opts.requestOptions.headers.traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-00$/);
   assert.deepEqual(sandbox.cfg.instrumentations.map((i) => i.name),
     ['errors', 'web-vitals', 'session', 'view', 'console', 'performance', 'user-actions', 'tracing']);
@@ -918,7 +918,8 @@ test('staging starts Faro tagged staging, with the span processor in Faro\'s cha
   boot(sandbox);
   assert.equal(sandbox.inits, 1);
   assert.equal(sandbox.cfg.app.environment, 'staging');
-  assert.equal(sandbox.cfg.transports[0].opts.url, 'https://staging.milesstorm.com/faro/collect');
+  assert.equal(sandbox.cfg.trackResources, false, 'resource timings from production only');
+  assert.equal(sandbox.cfg.transports[0].opts.url, 'https://staging.milesstorm.com/telemetry/collect');
   const chain = sandbox.tracingOpts.spanProcessor;
   assert.equal(typeof chain.inner.onEnd, 'function');
   assert.deepEqual({ ...chain.metas.value }, {});

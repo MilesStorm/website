@@ -136,7 +136,12 @@ impl Built {
     /// row in `PAGES` would have no access rule.
     pub fn load(dir: &Path, rows: &[Page]) -> anyhow::Result<Self> {
         let mut found = BTreeSet::new();
-        html_files(dir, dir, &mut found).map_err(|e| anyhow::anyhow!("can't read the Astro build at {}: {e}", dir.display()))?;
+        let mut maps = BTreeSet::new();
+        html_files(dir, dir, &mut found, &mut maps).map_err(|e| anyhow::anyhow!("can't read the Astro build at {}: {e}", dir.display()))?;
+        // Everything here is served: the source maps belong in SOURCE_MAPS (scripts/sourcemaps.mjs).
+        if !maps.is_empty() {
+            anyhow::bail!("{}: source maps where they would be served: {maps:?}", dir.display());
+        }
         let expected: BTreeSet<&str> = rows.iter().map(|p| p.file).chain(STATUS_PAGES.iter().copied()).collect();
         let unlisted: Vec<_> = found.iter().filter(|f| !expected.contains(f.as_str())).collect();
         if !unlisted.is_empty() {
@@ -157,15 +162,18 @@ impl Built {
     }
 }
 
-/// The `.html` files under `dir`, by their path relative to `root`.
-fn html_files(root: &Path, dir: &Path, found: &mut BTreeSet<String>) -> std::io::Result<()> {
+/// The `.html` files under `dir` (and in `maps`, the `.map` files), by their path relative to
+/// `root`.
+fn html_files(root: &Path, dir: &Path, found: &mut BTreeSet<String>, maps: &mut BTreeSet<String>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
+        let relative = || path.strip_prefix(root).expect("under the root").to_string_lossy().replace('\\', "/");
         if path.is_dir() {
-            html_files(root, &path, found)?;
+            html_files(root, &path, found, maps)?;
         } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("html")) {
-            let relative = path.strip_prefix(root).expect("under the root");
-            found.insert(relative.to_string_lossy().replace('\\', "/"));
+            found.insert(relative());
+        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("map")) {
+            maps.insert(relative());
         }
     }
     Ok(())

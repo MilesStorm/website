@@ -50,8 +50,9 @@ A camera session and a roll stream are not one long span: see [Streams](#streams
 
 The services send spans to Alloy over OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`). Istio sends its spans to
 Tempo directly. The browser sends its spans (and errors, web vitals) through Grafana Faro to
-`https://milesstorm.com/faro/collect`, which the homelab routes to Alloy's `faro.receiver`
-(`monitor/alloy.yaml`, `monitor/manifests/routes.yaml`).
+the site's own `/telemetry/collect`, and the frontend passes them on to Alloy's `faro.receiver`
+inside the cluster (`FARO_COLLECT_URL`; homelab `monitor/alloy.yaml`). See
+[Telemetry endpoint](#telemetry-endpoint).
 
 Sampling: the first traced hop decides and everything after follows the `traceparent` flag. For
 browser traffic that is Faro (session sampling, `sessionTracking.samplingRate`, default all); for
@@ -121,19 +122,38 @@ and the error reaches Faro with `context.island` naming it. The boundary reports
 page's Faro (`window.faro`), which the tracing script started.
 
 Errors are reported with stacks into the minified files under `/_astro/`. The build writes a
-source map next to every one (`vite.build.sourcemap`, and `tracing.<hash>.js.map`); they are
-public, like the repository. `service.version` (Faro's `app.version`) is the commit, from the
-page's `<meta name="service-version">`.
+source map for every one (`vite.build.sourcemap: 'hidden'`, and `tracing.<hash>.js.map`) without
+a `sourceMappingURL` comment; `scripts/sourcemaps.mjs` moves them from `dist/_astro/` to
+`web/sourcemaps/`, which the image keeps (`SOURCE_MAPS`) but never serves (the server refuses to
+start on a build with `.map` files in it). `service.version` (Faro's `app.version`) is the commit,
+from the page's `<meta name="service-version">`.
 
-Faro's fetch instrumentation sends `traceparent` on same-origin requests only. It ignores `/faro/`,
+Faro's fetch instrumentation sends `traceparent` on same-origin requests only. It ignores `/telemetry/`,
 `/ws/` and `/api/arcane/rolls`. Faro's own uploads send an unsampled `traceparent` (flags `00`):
 the Gateway traces everything else, and would start a trace per upload.
 
-`/faro/collect` is public, so its input is untrusted (homelab repo): the Gateway rejects compressed
-or non-JSON bodies and bodies over 64 KiB (`istio/manifests/faro-guard.yaml`); Alloy caps the rate,
-downloads source maps from the site's own origins only, sets `service.name` to `milesstorm-web`, keeps only INTERNAL and CLIENT
-spans, drops attributes that would add service-graph nodes and strips query strings
+### Telemetry endpoint
+
+`POST /telemetry/collect` (`crates/bff/src/telemetry.rs`) is public, so its input is untrusted.
+The frontend:
+
+- refuses an upload without `Content-Length` (411), over 64 KiB (413), with a
+  `Content-Encoding` or not JSON (415), from another site (403), or the visitor's 61st in a
+  minute (429, by `CF-Connecting-IP`), and one that doesn't parse as a Faro payload (400);
+- maps the stack frames of errors back to the source with the build's source maps, for a frame
+  whose file is exactly one of the build's `/_astro/*.js` files on the page's own host (query
+  ignored). Every other frame, and everything else in the upload, goes on as it came. A map is
+  parsed on first use (`sourcemap.parse`) and kept; there are only as many as the build has
+  scripts, and no file name from an upload reaches the disk unless the build has a map for it;
+- sends the upload to Alloy (a CLIENT span to `alloy`) and answers 202, Alloy's 429, or 502.
+  Uploads carry an unsampled `traceparent`, so these spans are only recorded when someone sends a
+  sampled one.
+
+`bff_telemetry_uploads_total{status}` counts the outcomes. In the homelab, Alloy caps the rate
+(shared by production and staging), sets `service.name` to `milesstorm-web`, keeps only INTERNAL
+and CLIENT spans, drops attributes that would add service-graph nodes and strips query strings
 (`monitor/alloy.yaml`); Tempo leaves browser spans out of span-metrics (`monitor/tempo.yaml`).
+Alloy downloads no source maps. Staging reaches Alloy through `website-staging/manifests/egress.yaml`.
 
 ### Browser clock
 
@@ -347,7 +367,7 @@ on the version Faro depends on (`npm ls @opentelemetry/sdk-trace-web` shows one 
   (the event names are the same).
 
 After a bump, run `npm run test:trace`, `npm test` and `npm run tracing` (check the size it
-prints), then check on the site that `/faro/collect` uploads carry a `traceparent` ending in
+prints), then check on the site that `/telemetry/collect` uploads carry a `traceparent` ending in
 `-00`, and in Tempo that a click still roots its trace and fetch spans are named like
 `POST /api/session/login`.
 
@@ -365,7 +385,7 @@ prints), then check on the site that `/faro/collect` uploads carry a `traceparen
 - **No orphans.** The trace view shows no "root span not yet received". Expected exceptions:
   - Gateway and waypoint spans while Tempo restarts: Istio sends them to Tempo directly, without
     Alloy's retry, so a trace from that minute misses its Envoy spans;
-  - browsers that never send their spans (an ad blocker blocks `/faro/collect`, or the tab closed
+  - browsers that never send their spans (an ad blocker blocks `/telemetry/collect`, or the tab closed
     within Faro's 1 s batch): the request still carries the browser's `traceparent`, so the
     `milesstorm-web` root is missing.
 

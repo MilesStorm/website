@@ -8,7 +8,7 @@
   "scripts": {
     "tracing": "node scripts/tracing.mjs",
     "dev": "astro dev",
-    "build": "astro build && node scripts/precompress.mjs",
+    "build": "astro build && node scripts/sourcemaps.mjs && node scripts/precompress.mjs",
     "check": "astro check",
     "test": "vitest run",
     "test:trace": "node --test assets/trace.test.mjs",

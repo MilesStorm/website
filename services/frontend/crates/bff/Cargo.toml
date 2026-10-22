@@ -68,6 +68,8 @@ base64 = "0.22"
 # Profile pictures: decode uploads and re-encode them as small JPEGs (src/account.rs).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 tokio-tungstenite = "0.29"
+# Maps browser error stacks back to the source before they go to Alloy (src/telemetry.rs).
+sourcemap = "9.3"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 [dev-dependencies]

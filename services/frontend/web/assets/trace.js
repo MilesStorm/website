@@ -2,7 +2,7 @@
 // "Browser"). assets/main.js imports Faro and calls `boot`; scripts/tracing.mjs bundles both
 // into the one classic script the layout loads synchronously in <head>.
 //
-// Faro exports spans to /faro/collect, its fetch instrumentation creates a CLIENT span per
+// Faro exports spans to /telemetry/collect, its fetch instrumentation creates a CLIENT span per
 // request and injects `traceparent`, and its user actions record what a click or submit led to.
 // Faro never makes a user action the parent of those spans, so this module:
 //   - turns a click or form submit into a ROOT span, started lazily when its first server call
@@ -26,7 +26,7 @@
 // Requests that never join an interaction: telemetry (ours, and Cloudflare's /cdn-cgi/rum beacon,
 // which Faro's XHR instrumentation would otherwise trace as a root span per page view), the
 // WebSocket, the live dice feed.
-export var IGNORE = [/\/faro\//, /\/cdn-cgi\//, /\/ws\//, /\/api\/arcane\/rolls/];
+export var IGNORE = [/\/telemetry\//, /\/cdn-cgi\//, /\/ws\//, /\/api\/arcane\/rolls/];
 var QUIET_MS = 300;
 // The islands' first calls can start well after the page's scripts have loaded.
 var PAGE_QUIET_MS = 1500;
@@ -762,8 +762,13 @@ export function longFrameMeasurement(entry) {
   };
 }
 
-// Hosts that send telemetry, and the deployment environment their spans are tagged with.
-var ENVIRONMENTS = { 'milesstorm.com': 'production', 'staging.milesstorm.com': 'staging' };
+// Hosts that send telemetry: the deployment environment their spans are tagged with, and whether
+// every resource's timing is sent (production only: staging shares Alloy's rate limit with it,
+// and its traffic is mostly the journeys).
+var ENVIRONMENTS = {
+  'milesstorm.com': { name: 'production', resources: true },
+  'staging.milesstorm.com': { name: 'staging', resources: false },
+};
 
 // Starts Faro and everything above, once per page. `deps.sdk` and `deps.tracing` are the Faro
 // exports (assets/main.js); `deps.sdk.faro` is the live Faro instance once initializeFaro has
@@ -777,8 +782,9 @@ export function boot(deps) {
     var tracing = deps.tracing;
     var document = g.document;
     var location = g.location;
-    var environment = location ? ENVIRONMENTS[location.hostname] : undefined;
-    if (!document || !environment) return state;
+    var env = location ? ENVIRONMENTS[location.hostname] : undefined;
+    if (!document || !env) return state;
+    var environment = env.name;
     var Observer = typeof g.PerformanceObserver === 'function' && g.performance ? g.PerformanceObserver : null;
     var clock = clockSync({ now: Date.now, performance: g.performance });
     if (Observer) clock.observe(Observer);
@@ -811,15 +817,17 @@ export function boot(deps) {
     var version = (versionMeta && versionMeta.getAttribute('content')) || undefined;
     var LogLevel = sdk.LogLevel;
     var faro = sdk.initializeFaro({
-      // Beacons carry an unsampled traceparent so the Gateway does not trace each one.
+      // To the site's own server, which checks the upload, maps error stacks with the build's
+      // source maps and passes it on to Alloy (crates/bff/src/telemetry.rs). Beacons carry an
+      // unsampled traceparent so the Gateway does not trace each one.
       transports: [new sdk.FetchTransport({
-        url: location.origin + '/faro/collect',
+        url: location.origin + '/telemetry/collect',
         requestOptions: { headers: { traceparent: unsampledTraceparent() } },
       })],
       app: { name: 'milesstorm-web', namespace: 'milesstorm', environment: environment, version: version },
       // Every page's scripts, fonts and styles (/_astro/), not only fetches; beforeSend strips
       // their query strings like every other URL.
-      trackResources: true,
+      trackResources: env.resources,
       webVitalsInstrumentation: { trackAttributionSources: true },
       // console.warn and console.error; uncaught errors and rejections come from the errors
       // instrumentation.
