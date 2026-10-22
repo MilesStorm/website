@@ -250,7 +250,15 @@ pub async fn delete_direct(
         // Auth's own refusals (the last admin) before anything is removed.
         call("/internal/account/delete/direct", json!({ "token": token, "check": true })).await?;
         forget(profile.user_id, &profile.username, hub).await?;
-        call("/internal/account/delete/direct", json!({ "token": token })).await?;
+        // Rare: another admin's change since the check left this account the last admin.
+        call("/internal/account/delete/direct", json!({ "token": token })).await.map_err(|e| {
+            tracing::warn!(user_id = profile.user_id, "deleting an account: data removed but the account wasn't");
+            let message = format!(
+                "The data you shared was removed, but the account itself wasn't deleted: {}",
+                e.message
+            );
+            ApiError::new(e.error, message).with_status(e.status())
+        })?;
         let logged_out = log_out_if(session, &profile.username).await;
         Ok(Done { username: profile.username, logged_out })
     })

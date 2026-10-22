@@ -696,6 +696,9 @@ async fn delete_unless_last_admin(
 async fn delete_confirm(State(state): State<InternalState>, Json(req): Json<CodeReq>) -> Response {
     let result: Result<Deletion, sqlx::Error> = async {
         let mut tx = trace::begin(&state.db).await?;
+        // The admins lock first, as every deletion takes it: a token row deleted before it
+        // could deadlock with another deletion of the same account.
+        super::internal::admins(&mut tx).await?;
         let Some((user_id, email)) = redeem(&mut tx.executor(), &req.code, Purpose::DeleteAccount, true).await? else {
             trace::rollback(tx).await;
             return Ok(Deletion::Gone);
