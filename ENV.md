@@ -64,7 +64,7 @@ Login and registration are rate limited per visitor and per username (TRACING.md
 
 ### Staging test accounts (GitHub environment `staging`, secrets)
 
-The `staging-journeys` workflow logs in with these. Create the accounts on staging and set the secrets by hand.
+The staging journeys (release workflow, `.github/workflows/release.yml`) log in with these. Create the accounts on staging and set the secrets by hand.
 
 | Secret | Description |
 |---|---|

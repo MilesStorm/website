@@ -4,8 +4,9 @@ name: release
 # 1. builds every service whose files changed (all of them on a manual run) as sha-<commit>;
 #    and moves the staging tag to it, which staging.milesstorm.com follows (homelab
 #    argo/apps/website-staging.yaml).
-# 2. lists every service whose newest build isn't in production yet (also ones held back earlier)
-#    and waits for approval. The Review deployments dialog shows one box per such service
+# 2. runs the end-to-end tests against staging once it serves the new build (staging journeys).
+# 3. lists every service whose newest build isn't in production yet (also ones held back earlier)
+#    and, once the staging journeys passed, waits for approval. The Review deployments dialog shows one box per such service
 #    (production-<service>) plus "production" for all of them; tick either, then approve.
 # Shipping moves the production tag (and latest) to that build and adds prod-sha-<commit>; the
 # production apps follow the production tag (homelab argo/apps/{frontend,auth,ai-pipeline}.yaml).
@@ -14,6 +15,12 @@ name: release
 # RELEASE_TOKEN (repo secret): a fine-grained token of the approver, for this repo only, with
 # Administration and Deployments read/write. It creates the missing production-<service>
 # environments and, after "production" is approved, approves the run's remaining boxes.
+#
+# The staging journeys log in with staging's test accounts, secrets of the `staging` environment
+# (ENV.md, "Staging test accounts"). Staging is behind Miles's GitHub login; they get past it
+# with this job's GitHub Actions token (id-token), which the gateway accepts only from this
+# workflow in the staging environment (homelab istio/manifests/login-admin-pages.yaml;
+# services/frontend/web/e2e/site.ts asks for it).
 
 env:
   REGISTRY: ghcr.io
@@ -134,6 +141,76 @@ jobs:
           docker image prune -f
           docker builder prune -f --keep-storage 20GB
 
+  # The end-to-end tests (services/frontend/web/e2e) against https://staging.milesstorm.com, with
+  # real auth and staging's test accounts. Nothing is uploaded: this repository is public, and a
+  # report would hold those accounts' sessions.
+  journeys:
+    needs: build
+    # Not after a failed build; a run that built nothing still tests staging.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    name: staging journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: services/frontend/web
+    steps:
+      - name: check out repo code
+        uses: actions/checkout@v4
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Staging follows the staging tags through Image Updater (every 2 minutes), then Argo syncs
+      # and the pods roll out. The frontend says which commit it was built from (<meta
+      # name="service-version">): wait until it is the staging tag's. Auth and ai-pipeline can't
+      # be asked from outside; Image Updater pins all three in the same pass, so when this run
+      # built them with the frontend, the frontend's wait covers them. When it built them without
+      # the frontend, wait a fixed 5 minutes instead.
+      - name: wait for staging to serve the new build
+        run: |
+          revision() {
+            docker buildx imagetools inspect "$REGISTRY/milesstorm/$1:staging" \
+              --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null
+          }
+          frontend=$(revision frontend) || true
+          [ -n "$frontend" ] || { echo "::error::No frontend staging build"; exit 1; }
+          deadline=$((SECONDS + 600))
+          until curl -sSf --max-time 20 -H "x-staging-journeys-token: $(curl -sSf --max-time 20 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=staging.milesstorm.com" | jq -r .value)" https://staging.milesstorm.com/ \
+            | grep -qF "<meta name=\"service-version\" content=\"$frontend\">"; do
+            [ "$SECONDS" -lt "$deadline" ] || { echo "::error::Staging didn't serve frontend ${frontend::7} within 10 minutes"; exit 1; }
+            sleep 15
+          done
+          echo "staging serves frontend ${frontend::7}"
+          if [ "$frontend" != "$GITHUB_SHA" ] \
+            && { [ "$(revision auth)" = "$GITHUB_SHA" ] || [ "$(revision ai-pipeline)" = "$GITHUB_SHA" ]; }; then
+            echo "auth or ai-pipeline built without the frontend: waiting 5 minutes for them to roll out"
+            sleep 300
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npx playwright test
+        env:
+          E2E_BASE_URL: https://staging.milesstorm.com
+          E2E_PLAIN_USERNAME: ${{ secrets.STAGING_PLAIN_USERNAME }}
+          E2E_PLAIN_PASSWORD: ${{ secrets.STAGING_PLAIN_PASSWORD }}
+          E2E_ALL_USERNAME: ${{ secrets.STAGING_ALL_USERNAME }}
+          E2E_ALL_PASSWORD: ${{ secrets.STAGING_ALL_PASSWORD }}
+
   # Every service whose staging build (staging tag) isn't what production runs (production tag),
   # compared by the commit each was built from. A failed build leaves the staging tag where it was.
   plan:
@@ -206,7 +283,7 @@ jobs:
   # The "production" box: ships every service in the plan, then approves the run's other boxes
   # (their jobs just repeat the same tagging).
   ship-all:
-    needs: plan
+    needs: [plan, journeys]
     if: needs.plan.outputs.matrix != '[]' && needs.plan.outputs.matrix != ''
     environment: production
     concurrency:
@@ -246,7 +323,7 @@ jobs:
 
   # One box per service (production-<service>): ships just that service.
   ship:
-    needs: plan
+    needs: [plan, journeys]
     if: needs.plan.outputs.matrix != '[]' && needs.plan.outputs.matrix != ''
     strategy:
       fail-fast: false

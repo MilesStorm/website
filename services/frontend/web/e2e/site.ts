@@ -17,7 +17,7 @@ export const STAGING = !!process.env.E2E_BASE_URL;
  * can't be asked (only the stand-ins can arrange that). */
 export type Who = 'anonymous' | 'plain' | 'all' | 'down';
 
-/** Staging is behind Miles's GitHub login. The staging-journeys workflow gets past it with a
+/** Staging is behind Miles's GitHub login. The staging journeys (release.yml) get past it with a
  * GitHub Actions token for this audience, which the gateway checks is that workflow's
  * (homelab: istio/manifests/login-admin-pages.yaml). A token lasts five minutes, so a fresh one
  * is asked for shortly before the last one runs out. */
@@ -26,7 +26,7 @@ async function stagingToken(): Promise<string> {
   if (token && token.exp - 60 > Date.now() / 1000) return token.value;
   const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const bearer = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  if (!url || !bearer) throw new Error('Against staging the tests need a GitHub Actions token: run the staging-journeys workflow');
+  if (!url || !bearer) throw new Error('Against staging the tests need a GitHub Actions token: they run in the release workflow');
   const audience = new URL(process.env.E2E_BASE_URL!).host;
   const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, { headers: { Authorization: `Bearer ${bearer}` } });
   if (!res.ok) throw new Error(`GitHub gave no token: ${res.status} ${await res.text()}`);
