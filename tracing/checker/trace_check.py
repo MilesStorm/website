@@ -582,11 +582,19 @@ def tempo_search(tempo, query, start, end, limit=500):
     return list(dict.fromkeys(_hex_id(i) for i in ids))
 
 
-def tempo_fetch(tempo, ids, failed, workers=8):
-    """Spans of each trace; IDs that couldn't be fetched (or came back empty) go into `failed`."""
+def tempo_fetch(tempo, ids, failed, start=None, end=None, workers=2, pad=3600):
+    """Spans of each trace; IDs that couldn't be fetched (or came back empty) go into `failed`.
+
+    Bounded to [start - pad, end + pad]: without a range Tempo opens every block in retention for
+    each ID (seconds per trace, and gigabytes of memory per run). The pad keeps a trace whose
+    spans straddle the window whole. No range (--trace-ids): every block is searched.
+    Two at a time: Tempo holds each trace's blocks in memory while it reads them; 8 at once took
+    it from ~150 MiB to ~2.8 GiB on a busy hour."""
+    qs = "" if start is None else "?" + urllib.parse.urlencode({"start": int(start) - pad, "end": int(end) + pad})
+
     def one(tid):
         try:
-            spans = parse_trace(_get_json(f"{tempo.rstrip('/')}/api/traces/{tid}"))
+            spans = parse_trace(_get_json(f"{tempo.rstrip('/')}/api/traces/{tid}{qs}"))
         except Exception as e:  # e.g. a trace that expired between search and fetch
             print(f"warning: trace {tid}: {e}", file=sys.stderr)
             spans = []
@@ -846,7 +854,7 @@ def main(argv=None):
                 ids = [_hex_id(x.split("#")[0].strip()) for x in f if x.split("#")[0].strip()]
         else:
             ids = tempo_search(a.tempo, a.query, since, until)
-        raw = tempo_fetch(a.tempo, ids, failed)
+        raw = tempo_fetch(a.tempo, ids, failed, *((None, None) if a.trace_ids else (since, until)))
     elif "I8" not in rules or not a.vlogs:
         ap.error("give --dir, or --tempo (with --trace-ids or a time window), or --vlogs with --rules I8")
     else:
