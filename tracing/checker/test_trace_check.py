@@ -497,5 +497,23 @@ class Output(unittest.TestCase):
         self.assertEqual(tc.parse_time("2026-10-09T00:00:00Z"), 1791504000)
 
 
+
+class TempoFetch(unittest.TestCase):
+    def fetched_urls(self, **window):
+        urls, real = [], tc._get_json
+        tc._get_json = lambda url: urls.append(url) or {"batches": []}
+        try:
+            list(tc.tempo_fetch("http://tempo/", ["ab"], [], **window))
+        finally:
+            tc._get_json = real
+        return urls
+
+    def test_window_bounds_the_fetch(self):
+        self.assertEqual(self.fetched_urls(start=10000.5, end=20000.5),
+                         ["http://tempo/api/traces/ab?start=6400&end=23600"])
+
+    def test_no_window_searches_everything(self):
+        self.assertEqual(self.fetched_urls(), ["http://tempo/api/traces/ab"])
+
 if __name__ == "__main__":
     unittest.main()

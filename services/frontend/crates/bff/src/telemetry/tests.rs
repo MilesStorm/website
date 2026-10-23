@@ -46,7 +46,7 @@ async fn alloy(status: StatusCode) -> (String, Arc<Mutex<Vec<Value>>>) {
 }
 
 fn app(url: String) -> axum::Router {
-    super::router(Arc::new(Telemetry::new(maps(), url).unwrap()))
+    super::router(Arc::new(Telemetry::new(maps(), url, PER_VISITOR).unwrap()))
 }
 
 fn upload(body: &[u8]) -> axum::http::request::Builder {

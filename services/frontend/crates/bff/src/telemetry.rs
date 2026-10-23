@@ -4,7 +4,8 @@
 //! The endpoint is public, so it checks what the Gateway's faro-guard checked for Alloy's own
 //! public `/faro/` route: at most [`MAX_BODY`] (413 for a longer declared length, and the read
 //! stops there; Cloudflare may send HTTP/2 without a length), no `Content-Encoding` (415), JSON,
-//! from this site, and at most [`PER_VISITOR`] uploads a minute per visitor (429; requests without
+//! from this site, and at most [`PER_VISITOR`] uploads a minute per visitor (`TELEMETRY_PER_VISITOR`
+//! overrides it: staging's journeys run several browsers from one address; 429; requests without
 //! Cloudflare's address share one visitor). The body must parse as a Faro payload (400).
 //!
 //! Error stack frames in the site's own scripts are mapped back to the source here, with the
@@ -50,16 +51,20 @@ pub(crate) struct Telemetry {
 
 impl Telemetry {
     /// From `SOURCE_MAPS` (default `web/sourcemaps`, as in a checkout; missing means no frame is
-    /// mapped) and `FARO_COLLECT_URL`.
+    /// mapped), `FARO_COLLECT_URL` and `TELEMETRY_PER_VISITOR` (default [`PER_VISITOR`]).
     pub(crate) fn from_env() -> anyhow::Result<Self> {
         let dir = std::env::var_os("SOURCE_MAPS").map_or_else(|| PathBuf::from("web/sourcemaps"), PathBuf::from);
         let url = std::env::var("FARO_COLLECT_URL").unwrap_or_else(|_| DEFAULT_COLLECT_URL.into());
-        Self::new(SourceMaps::load(dir), url)
+        let per_visitor = match std::env::var("TELEMETRY_PER_VISITOR") {
+            Ok(v) => v.parse().map_err(|e| anyhow::anyhow!("TELEMETRY_PER_VISITOR={v:?}: {e}"))?,
+            Err(_) => PER_VISITOR,
+        };
+        Self::new(SourceMaps::load(dir), url, per_visitor)
     }
 
-    pub(crate) fn new(maps: SourceMaps, collect_url: String) -> anyhow::Result<Self> {
+    pub(crate) fn new(maps: SourceMaps, collect_url: String, per_visitor: u32) -> anyhow::Result<Self> {
         let client = trace::client(trace::Peer { service: "alloy", system: None }, FORWARD_TIMEOUT, |b| b)?;
-        Ok(Self { visitors: Limit::new("telemetry_visitor", PER_VISITOR, Duration::from_secs(60)), maps, collect_url, client })
+        Ok(Self { visitors: Limit::new("telemetry_visitor", per_visitor, Duration::from_secs(60)), maps, collect_url, client })
     }
 }
 
