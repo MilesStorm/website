@@ -146,9 +146,11 @@ jobs:
   # report would hold those accounts' sessions.
   journeys:
     needs: build
-    if: ${{ !cancelled() }}
+    # Not after a failed build; a run that built nothing still tests staging.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     name: staging journeys
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     environment: staging
     permissions:
       contents: read
@@ -180,10 +182,10 @@ jobs:
             docker buildx imagetools inspect "$REGISTRY/milesstorm/$1:staging" \
               --format '{{index .Image.Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null
           }
-          frontend=$(revision frontend)
+          frontend=$(revision frontend) || true
           [ -n "$frontend" ] || { echo "::error::No frontend staging build"; exit 1; }
           deadline=$((SECONDS + 600))
-          until curl -sSf -H "x-staging-journeys-token: $(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          until curl -sSf --max-time 20 -H "x-staging-journeys-token: $(curl -sSf --max-time 20 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=staging.milesstorm.com" | jq -r .value)" https://staging.milesstorm.com/ \
             | grep -qF "<meta name=\"service-version\" content=\"$frontend\">"; do
             [ "$SECONDS" -lt "$deadline" ] || { echo "::error::Staging didn't serve frontend ${frontend::7} within 10 minutes"; exit 1; }
