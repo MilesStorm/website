@@ -332,8 +332,8 @@ the profiler hasn't read that binary yet. Narrow the time range past it or filte
 
 ## Checks
 
-`.github/workflows/checks.yml` runs clippy (`-D warnings`) and the tests of all three services
-on every pull request and push to main. The frontend and auth tests start Redis and Postgres with
+`.github/workflows/ci.yml` runs clippy (`-D warnings`) and the tests of all three services
+on every push. The frontend and auth tests start Redis and Postgres with
 testcontainers, so they need Docker (auth: or `TEST_DATABASE_URL`). The same locally:
 
 ```sh

@@ -1,22 +1,21 @@
-name: checks
+name: ci
 
-# Clippy and the tests of every service, on every pull request and push to main (TRACING.md,
-# "Checks"). Pushes to other branches don't run it: a pull request's would run each job twice.
-# No path filters, so the jobs can be required checks. ai_pipeline builds without CUDA (burn
-# loads it at run time) and no test needs a GPU, so all three run on GitHub's runners. The
-# built image's browser tests are e2e.yml.
+# Every check of a commit, on every push to any branch. No pull_request trigger: a pull
+# request's commits are checked by their push, so nothing runs twice and a skipped job can never
+# stand in for a required check (a skipped required check counts as passed). A fork's pull
+# request waits at "Expected" until its branch is pushed here. No path filters: frontend, auth,
+# ai-pipeline and e2e are required checks (ruleset "Main protection"), so they must always run.
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # The frontend: clippy and tests of the BFF, the API contract and its TypeScript types, the
+  # Astro pages' types, component tests and build.
   frontend:
     name: frontend
     runs-on: ubuntu-latest
@@ -64,8 +63,7 @@ jobs:
           ASTRO_TELEMETRY_DISABLED: 1
         run: (cd web && npm run build) && cargo run -q -p bff --bin server -- check-pages web/dist
 
-  # The browser extension's scripts, type-checked (tsconfig.json); a job of its own so it runs
-  # beside the frontend's.
+  # The browser extension's scripts, type-checked (tsconfig.json).
   extension-types:
     name: extension-types
     runs-on: ubuntu-latest
@@ -80,6 +78,7 @@ jobs:
       - run: npm ci
       - run: npm run types
 
+  # The auth service: clippy and tests.
   auth:
     name: auth
     runs-on: ubuntu-latest
@@ -97,6 +96,8 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
+  # The dice pipeline: clippy and tests, then its models for real in ONNX Runtime on the CPU.
+  # It builds without CUDA (burn loads it at run time) and no test needs a GPU.
   ai-pipeline:
     name: ai-pipeline
     runs-on: ubuntu-latest
@@ -138,3 +139,67 @@ jobs:
           ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=/tmp/dice_head.onnx \
             YOLO_FP16_ONNX_PATH=/tmp/yolo_fp16.onnx DICE_HEAD_FP16_ONNX_PATH=/tmp/dice_head_fp16.onnx \
             cargo test -- --ignored fp16
+
+  # The frontend's built image, as it runs, in a browser: every page for every kind of viewer,
+  # the navbar without JavaScript, theme and cookie notice, and axe (no serious or critical
+  # violations). Auth and Ark are stand-ins (services/frontend/web/e2e/fake-upstreams.mjs);
+  # SurrealDB is a real one in memory (e2e/serve.sh). Built on eta, like the release images: its
+  # Docker keeps unchanged layers and the cargo cache mounts between runs. Renovate's branches
+  # carry dependency versions no one has reviewed yet, so they build on a GitHub runner instead.
+  e2e:
+    name: e2e
+    runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || fromJSON('["self-hosted", "eta"]') }}
+    # A newer push to the same branch replaces a run still waiting; other branches queue.
+    concurrency:
+      group: e2e-${{ github.ref }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: services/frontend/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+      - name: Build the image
+        uses: docker/build-push-action@v5
+        with:
+          context: services/frontend
+          load: true
+          tags: frontend:e2e
+          build-args: GIT_SHA=${{ github.sha }}
+      - name: No Node in the image
+        run: docker run --rm --entrypoint sh frontend:e2e -c '! command -v node && test -z "$(find / -xdev -name node -type f 2>/dev/null)"'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: e2e/serve.sh
+      # The browser runs in Playwright's image (the locked version), so the runner needs no
+      # browser packages. No install scripts: the image has the browser already.
+      - name: Playwright
+        run: |
+          version=$(node -p 'require("./package-lock.json").packages["node_modules/@playwright/test"].version')
+          docker run --rm --network host --ipc host --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=1 \
+            -v "$PWD:/work" -w /work "mcr.microsoft.com/playwright:v$version-noble" \
+            sh -c 'npm ci --ignore-scripts --no-audit --no-fund && npx playwright test'
+      - name: Server, proxy and stand-in logs
+        if: failure()
+        run: docker logs frontend-e2e; docker logs frontend-e2e-tls; docker logs frontend-e2e-surreal; cat e2e/fake.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: services/frontend/web/playwright-report
+      - if: always()
+        run: e2e/serve.sh stop; docker image rm frontend:e2e >/dev/null 2>&1 || true
+
+  # The trace contract checker's own tests (tracing/checker).
+  trace-checker:
+    name: trace-checker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m unittest tracing/checker/test_trace_check.py

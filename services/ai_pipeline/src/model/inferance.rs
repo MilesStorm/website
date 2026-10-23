@@ -769,7 +769,7 @@ mod tests {
         }
     }
 
-    /// The real model in ONNX Runtime, on the CPU. CI runs it (checks.yml downloads the
+    /// The real model in ONNX Runtime, on the CPU. CI runs it (ci.yml downloads the
     /// library): `ORT_DYLIB_PATH=<libonnxruntime.so> cargo test -- --ignored yolo`.
     #[test]
     #[ignore = "needs ONNX Runtime: set ORT_DYLIB_PATH"]
@@ -783,7 +783,7 @@ mod tests {
     }
 
     /// The real head in ONNX Runtime, on the CPU. CI builds the model from the released
-    /// weights and runs this (checks.yml):
+    /// weights and runs this (ci.yml):
     /// `ORT_DYLIB_PATH=<libonnxruntime.so> DICE_HEAD_ONNX_PATH=<head.onnx> cargo test -- --ignored head_runs`.
     #[test]
     #[ignore = "needs ONNX Runtime and the head model: set ORT_DYLIB_PATH and DICE_HEAD_ONNX_PATH"]
@@ -810,7 +810,7 @@ mod tests {
     /// models answer the test pattern as the f32 models do. CI builds both and runs this:
     /// `... YOLO_FP16_ONNX_PATH=<yolo_fp16.onnx> DICE_HEAD_FP16_ONNX_PATH=<head_fp16.onnx> cargo test -- --ignored fp16`.
     #[test]
-    #[ignore = "needs ONNX Runtime and the built models: see checks.yml"]
+    #[ignore = "needs ONNX Runtime and the built models: see ci.yml"]
     fn the_fp16_models_answer_the_test_pattern_as_the_f32_models_do() {
         let session = |path: String| load_session("test", &path, false).unwrap();
         let confidences = |path: String| {
