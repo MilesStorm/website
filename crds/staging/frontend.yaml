@@ -19,3 +19,5 @@ spec:
             - {name: SURREAL_USER, value: "dice_staging"}
             - {name: SURREAL_NS, value: "milesstorm_staging"}
             - {name: SURREAL_DB, value: "arcane"}
+            # Its journeys run several browsers from one address (the BFF's default is 60 a minute).
+            - {name: TELEMETRY_PER_VISITOR, value: "300"}
