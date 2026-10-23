@@ -142,10 +142,29 @@ pub async fn upload_picture(
         return Err(ApiError::new(ErrorCode::Invalid, "That picture is too large (at most 5 MB).").with_status(413).into());
     }
     let not_image = || ApiError::new(ErrorCode::Invalid, "That file isn't a picture that can be read. Use JPEG, PNG, WebP or GIF.");
+    // A conversion holds the decoded image (up to `PICTURE_MAX_ALLOC`, and a rotated copy) in
+    // memory: at most `PICTURE_CONVERSIONS` at a time. A few more wait their turn; past that, or
+    // after `PICTURE_WAIT`, an upload is refused at once.
+    let busy = || ApiError::new(ErrorCode::Unavailable, "Pictures are busy right now. Try again in a moment.");
+    let permit = {
+        let _waiting = Waiting::enter(&WAITING).ok_or_else(|| {
+            tracing::warn!("profile picture upload refused: too many waiting");
+            busy()
+        })?;
+        match tokio::time::timeout(PICTURE_WAIT, CONVERSIONS.acquire()).await {
+            Ok(Ok(permit)) => permit,
+            _ => {
+                tracing::warn!("profile picture upload refused: conversions busy");
+                return Err(busy().into());
+            }
+        }
+    };
     // In a span of its own (made inside the closure), so the conversion's CPU time shows
-    // under its own name.
+    // under its own name. The permit goes with the work: a request dropped meanwhile doesn't
+    // free the slot while the conversion still runs.
     let convert = move || {
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        let _permit = permit;
         tracing::Span::current().set_attribute("bytes", body.len() as i64);
         to_profile_jpeg(&body)
     };
@@ -172,6 +191,40 @@ pub async fn upload_picture(
     }
 }
 
+/// Picture conversions running at once (per replica).
+const PICTURE_CONVERSIONS: usize = 2;
+static CONVERSIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(PICTURE_CONVERSIONS);
+/// Uploads waiting for a conversion slot at most; more are refused at once.
+const PICTURE_MAX_WAITING: usize = 4;
+static WAITING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// One upload counted in a waiting count (`WAITING`) while it lives.
+struct Waiting(&'static std::sync::atomic::AtomicUsize);
+
+impl Waiting {
+    fn enter(count: &'static std::sync::atomic::AtomicUsize) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        if count.fetch_add(1, Ordering::SeqCst) >= PICTURE_MAX_WAITING {
+            count.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Waiting(count))
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// How long an upload waits for a conversion slot before it is refused.
+const PICTURE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The largest width or height decoded, and the most memory one decode may claim (a 40
+/// megapixel photo; phones take 12 to 48).
+const PICTURE_MAX_SIDE: u32 = 8192;
+const PICTURE_MAX_ALLOC: u64 = 128 * 1024 * 1024;
+
 /// Decode any JPEG/PNG/WebP/GIF (upright, per its orientation tag), crop the
 /// centre square and re-encode it as a `PICTURE_SIDE`² JPEG. Transparent areas
 /// become white. Decoding is bounded so a small file can't claim huge memory.
@@ -180,11 +233,16 @@ pub(crate) fn to_profile_jpeg(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
 
     let mut reader = ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = Limits::default();
-    limits.max_image_width = Some(10_000);
-    limits.max_image_height = Some(10_000);
-    limits.max_alloc = Some(512 * 1024 * 1024);
+    limits.max_image_width = Some(PICTURE_MAX_SIDE);
+    limits.max_image_height = Some(PICTURE_MAX_SIDE);
+    limits.max_alloc = Some(PICTURE_MAX_ALLOC);
     reader.limits(limits);
     let mut decoder = reader.into_decoder()?;
+    // Not every decoder holds itself to `max_alloc`: the decoded size, from the header, before
+    // anything is decoded.
+    if decoder.total_bytes() > PICTURE_MAX_ALLOC {
+        anyhow::bail!("image too large: {} bytes decoded", decoder.total_bytes());
+    }
     let orientation = decoder.orientation()?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
@@ -237,6 +295,25 @@ mod tests {
         // A truncated PNG.
         let png = encode(&RgbaImage::new(50, 50), ImageFormat::Png);
         assert!(to_profile_jpeg(&png[..png.len() / 2]).is_err());
+    }
+
+    #[test]
+    fn only_a_few_uploads_wait_for_a_slot() {
+        static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let waiting: Vec<_> = (0..super::PICTURE_MAX_WAITING).map(|_| super::Waiting::enter(&COUNT).expect("room")).collect();
+        assert!(super::Waiting::enter(&COUNT).is_none());
+        drop(waiting);
+        assert!(super::Waiting::enter(&COUNT).is_some());
+    }
+
+    #[test]
+    fn images_past_the_caps_are_refused() {
+        // Wider than PICTURE_MAX_SIDE, though small in bytes.
+        let wide = encode(&RgbaImage::new(super::PICTURE_MAX_SIDE + 1, 1), ImageFormat::Png);
+        assert!(to_profile_jpeg(&wide).is_err());
+        // Within the sides, but its pixels need more than PICTURE_MAX_ALLOC.
+        let big = encode(&RgbaImage::new(super::PICTURE_MAX_SIDE, 4200), ImageFormat::Png);
+        assert!(to_profile_jpeg(&big).is_err());
     }
 
     #[test]

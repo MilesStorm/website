@@ -3,6 +3,7 @@ import { Cookie } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { getConsent, setConsent } from '@/lib/theme';
+import { island } from '@/lib/island';
 
 /** The room the open notice takes at the bottom of the window (global.css pads the page by it). */
 export const CONSENT_HEIGHT = '--consent-h';
@@ -11,7 +12,7 @@ const GAP_PX = 16;
 
 /** Says which cookies the site uses, until accepted or dismissed (`ms.cookie-consent`). While it is
  * open, the page ends that much lower, so nothing under the notice is out of reach. */
-export function CookieConsent() {
+export const CookieConsent = island('CookieConsent', function CookieConsent() {
   const [open, setOpen] = useState(false);
   const notice = useRef<HTMLDivElement>(null);
   useEffect(() => setOpen(getConsent() === null), []);
@@ -49,14 +50,14 @@ export function CookieConsent() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={() => close('dismissed')}>
+          <Button variant="ghost" size="sm" onClick={() => close('dismissed')} data-faro-user-action-name="cookies dismiss">
             Dismiss
           </Button>
-          <Button size="sm" onClick={() => close('accepted')}>
+          <Button size="sm" onClick={() => close('accepted')} data-faro-user-action-name="cookies accept">
             Accept
           </Button>
         </div>
       </CardContent>
     </Card>
   );
-}
+});

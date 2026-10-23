@@ -29,14 +29,16 @@ use api_types::{
 use axum::Extension;
 use axum::extract::{FromRequest, FromRequestParts, Request, State};
 use axum::http::request::Parts;
-use axum::http::{Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, NoContent, Response};
 use axum::Json;
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
+use std::time::Instant;
 use tower_sessions::Session;
 
+use crate::limits::{self, Limits};
 use crate::rolls::RollHub;
 use crate::{account, capture, emails, invites, rolls, sharing};
 
@@ -313,7 +315,7 @@ async fn access(State(access): State<Access>, req: Request, next: Next) -> Respo
 /// HTTP in a debug build). Requests without an `Origin` aren't from a browser and pass.
 /// `ARCANE_ALLOWED_ORIGINS` (the extension's) doesn't apply here; a debug build also takes the
 /// local dev proxies' origins from `DEV_ALLOWED_ORIGINS` (ENV.md).
-async fn same_origin(req: Request, next: Next) -> Response {
+pub(crate) async fn same_origin(req: Request, next: Next) -> Response {
     let read = req.method() == Method::GET || req.method() == Method::HEAD;
     let dev = std::env::var("DEV_ALLOWED_ORIGINS").unwrap_or_default();
     if read || origin_allowed(req.headers(), &dev, cfg!(debug_assertions)) {
@@ -382,14 +384,60 @@ async fn after_login(NoApi(session): NoApi<Session>, Body(a): Body<AfterLogin>) 
     Json(next_page(&session, a.next).await)
 }
 
-/// `POST /api/session/login`.
-async fn login(NoApi(session): NoApi<Session>, Body(login): Body<Login>) -> Result<Json<LoggedIn>, ApiError> {
-    let username = crate::auth::log_in(&session, login.username, login.password).await?;
+/// `POST /api/session/login`. 429 `rate_limited` after too many failed logins from one visitor or
+/// for one username (`limits`); 400 for a username longer than any account's. Logins that work
+/// don't count: the staging journeys log in dozens of times a run from one address.
+async fn login(
+    NoApi(session): NoApi<Session>,
+    NoApi(Extension(limits)): NoApi<Extension<Arc<Limits>>>,
+    NoApi(headers): NoApi<HeaderMap>,
+    Body(login): Body<Login>,
+) -> Result<Json<LoggedIn>, ApiError> {
+    let Some(user) = limits::username_key(&login.username) else {
+        return Err(limits::username_too_long().into());
+    };
+    let now = Instant::now();
+    let visitor = limits::visitor(&headers);
+    // The slots are taken before auth is asked (a password check takes ~100 ms, and concurrent
+    // attempts must not all pass first), and given back when the login didn't fail on the
+    // password: it worked, or auth couldn't answer.
+    let Some(slots) = limits::take_all(&[(&limits.login_ip, visitor.as_str()), (&limits.login_user, user.as_str())], now) else {
+        metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "rate_limited").increment(1);
+        return Err(limits::rate_limited().into());
+    };
+    let result = crate::auth::log_in(&session, login.username, login.password).await;
+    match &result {
+        Ok(_) => {
+            limits.login_ip.release(&visitor, slots[0]);
+            limits.login_user.clear(&user);
+        }
+        Err(e) if e.error != ErrorCode::Invalid => {
+            limits.login_ip.release(&visitor, slots[0]);
+            limits.login_user.release(&user, slots[1]);
+        }
+        Err(_) => {}
+    }
+    let username = result?;
     Ok(Json(LoggedIn { username }))
 }
 
-/// `POST /api/session/register`.
-async fn register(NoApi(session): NoApi<Session>, Body(r): Body<Registration>) -> Result<Json<LoggedIn>, ApiError> {
+/// `POST /api/session/register`. 429 `rate_limited` after too many registrations from one visitor,
+/// or for one username (`limits`); 400 for a username longer than any account's.
+async fn register(
+    NoApi(session): NoApi<Session>,
+    NoApi(Extension(limits)): NoApi<Extension<Arc<Limits>>>,
+    NoApi(headers): NoApi<HeaderMap>,
+    Body(r): Body<Registration>,
+) -> Result<Json<LoggedIn>, ApiError> {
+    let Some(user) = limits::username_key(&r.username) else {
+        return Err(limits::username_too_long().into());
+    };
+    let now = Instant::now();
+    let visitor = limits::visitor(&headers);
+    if limits::take_all(&[(&limits.register_ip, visitor.as_str()), (&limits.register_user, user.as_str())], now).is_none() {
+        metrics::counter!("bff_register_attempts_total", "status" => "rate_limited").increment(1);
+        return Err(limits::rate_limited().into());
+    }
     let username = crate::auth::register(&session, r.username, r.email, r.password).await?;
     Ok(Json(LoggedIn { username }))
 }
@@ -755,6 +803,7 @@ pub(crate) fn router_with(arcane_origins: &str) -> axum::Router {
         .route("/api/{*rest}", axum::routing::any(not_found))
         // `{*rest}` matches one character or more.
         .route("/api/", axum::routing::any(not_found))
+        .layer(Extension(Arc::new(Limits::default())))
 }
 
 /// An API path that doesn't exist: the error envelope, 404 (`/api/*`, and `/bff/*` under the

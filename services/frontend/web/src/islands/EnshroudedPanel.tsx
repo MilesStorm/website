@@ -10,6 +10,7 @@ import { client, type Schemas } from '@/api/client';
 import { attempt } from '@/lib/errors';
 import { CONFIRM, SENT, STATES, actionText, ago, busy, duration, playersOnline, type Command } from '@/lib/enshrouded';
 import { ENSHROUDED_BUTTONS, EnshroudedHeader, EnshroudedSkeleton, Figures, UPTIME_NOTE } from '@/islands/EnshroudedSkeleton';
+import { island } from '@/lib/island';
 
 type Status = Schemas['EnshroudedStatus'];
 
@@ -29,7 +30,7 @@ const unixNow = () => Math.floor(Date.now() / 1000);
 /** The Enshrouded server: its state, an update on Steam, who is on, Restart and Force update,
  * and the latest commands. Asked again every 10 seconds while the tab is visible, when it is
  * shown again, and after a command; the countdowns tick every second. */
-export function EnshroudedPanel() {
+export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPanel() {
   // The last status the server gave, and why the latest ask failed (shown above it): a failed
   // poll keeps the panel, and an open confirmation, where they were.
   const [status, setStatus] = useState<Status | null>(null);
@@ -116,7 +117,7 @@ export function EnshroudedPanel() {
       <Activity recent={s.recent} now={now} />
     </div>
   );
-}
+});
 
 /** Players of the slots, with a bar of how full the server is. */
 function PlayersFigure({ status }: { status: Status }) {
@@ -241,11 +242,11 @@ function Controls({
       description={STATES[status.state].hint || undefined}
       buttons={
         <>
-          <Button disabled={disabled} onClick={() => ask('restart')}>
+          <Button disabled={disabled} onClick={() => ask('restart')} data-faro-user-action-name="enshrouded restart">
             {sendingAny('restart') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
             {ENSHROUDED_BUTTONS.restart}
           </Button>
-          <Button variant="outline" disabled={disabled} onClick={() => ask('update')}>
+          <Button variant="outline" disabled={disabled} onClick={() => ask('update')} data-faro-user-action-name="enshrouded update">
             {sendingAny('update', 'update_now') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
             {ENSHROUDED_BUTTONS.update}
           </Button>
@@ -303,10 +304,10 @@ function Answer({
               </p>
               <p>"Update now anyway" saves and stops the server right away, disconnecting them. Updating takes several minutes.</p>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => confirm('update')}>
+                <Button size="sm" onClick={() => confirm('update')} data-faro-user-action-name="enshrouded confirm update">
                   Update when empty
                 </Button>
-                <Button size="sm" variant="destructive" onClick={() => confirm('update_now')}>
+                <Button size="sm" variant="destructive" onClick={() => confirm('update_now')} data-faro-user-action-name="enshrouded confirm update_now">
                   Update now anyway
                 </Button>
                 <Button size="sm" variant="ghost" onClick={cancel}>
@@ -323,7 +324,7 @@ function Answer({
             <p>{CONFIRM[command.cmd].question}</p>
             {online > 0 && <p className="font-semibold">{playersOnline(online)} They will be disconnected.</p>}
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => confirm(command.cmd)}>
+              <Button size="sm" onClick={() => confirm(command.cmd)} data-faro-user-action-name={`enshrouded confirm ${command.cmd}`}>
                 {CONFIRM[command.cmd].yes}
               </Button>
               <Button size="sm" variant="ghost" onClick={cancel}>

@@ -51,6 +51,10 @@
 | `ARCANE_ALLOWED_ORIGINS` | _(empty)_ | Extra page origins the Arcane routes accept requests from, comma-separated: `/ws/arcane` and `/api/arcane/flag` (the browser extension's one change; its own `moz-extension://`/`chrome-extension://` origin is always let in there). Not the JSON API's other routes (`DEV_ALLOWED_ORIGINS`). Same-host origins are always allowed; plain-http ones only in debug builds. |
 | `DEV_ALLOWED_ORIGINS` | _(empty)_ | **Debug builds only; release builds ignore it.** Extra page origins the JSON API (`/api/session/*`, `/api/account/*`, including the picture at `/api/account/picture`) accepts changes from, comma-separated. Only for a dev proxy that changes the host the server sees; `astro dev`'s keeps it (`changeOrigin: false`), so it needs none. |
 | `WEB_DIST` | `web/dist` | Where the Astro build is. Set to `/app/web` in the Dockerfile. The server refuses to start unless it has exactly the pages in `PAGES` (`crates/api-types`) and the status pages. |
+| `SOURCE_MAPS` | `web/sourcemaps` | The build's source maps (`npm run build` moves them there from `dist/`). Set to `/app/sourcemaps` in the Dockerfile. Used to map browser error stacks at `/telemetry/collect`, never served. Missing: errors are passed on unmapped. |
+| `FARO_COLLECT_URL` | `http://alloy.monitoring.svc.cluster.local:12347/collect` | Alloy's `faro.receiver`, where `/telemetry/collect` sends the browser's telemetry on. |
+
+Login and registration are rate limited per visitor and per username (TRACING.md, "Rate limits"); someone failing ten password logins for an account locks its password login for up to 15 minutes, while GitHub and Google logins keep working.
 
 ### Astro dev server (`services/frontend/web`, `npm run dev`)
 

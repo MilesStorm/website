@@ -34,6 +34,9 @@ pub(crate) struct Auth {
     calls: Mutex<Vec<String>>,
     /// The game hosts and auth's database are down: those endpoints fail.
     failing: std::sync::atomic::AtomicBool,
+    /// Password logins and registrations that reached auth.
+    logins: std::sync::atomic::AtomicUsize,
+    registrations: std::sync::atomic::AtomicUsize,
 }
 
 impl Auth {
@@ -52,6 +55,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     let auth_panels = auth.clone();
     let pictures = auth.clone();
     let confirmed = auth.clone();
+    let (logins, registrations) = (auth.clone(), auth.clone());
     let introspect = move |body: axum::Json<Value>| async move {
         let token = body["token"].as_str().unwrap_or_default().to_string();
         *auth.introspected.lock().unwrap().entry(token.clone()).or_default() += 1;
@@ -77,17 +81,22 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
         }
         axum::Json(profile(body["token"].as_str().unwrap_or_default(), Some(name))).into_response()
     };
-    let exchange = |body: axum::Json<Value>| async move {
+    // As slow as a password check (argon2), so concurrent logins overlap.
+    let exchange = move |body: axum::Json<Value>| async move {
+        logins.logins.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         match (body["username"].as_str(), body["password"].as_str()) {
-            (Some("tester"), Some("right")) => axum::Json(json!({"token": "all", "username": "tester"})).into_response(),
+            (Some("tester"), Some("right")) => axum::Json(json!({"token": "all", "user_id": 7, "username": "tester"})).into_response(),
             (Some("outage"), _) => (StatusCode::UNAUTHORIZED, "Invalid service token").into_response(),
             _ => (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response(),
         }
     };
-    let register = |body: axum::Json<Value>| async move {
+    let register = move |body: axum::Json<Value>| async move {
+        registrations.registrations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         match body["username"].as_str() {
             Some("taken") => (StatusCode::CONFLICT, "Username already taken").into_response(),
-            Some(u) => axum::Json(json!({"token": "none", "username": u})).into_response(),
+            Some(u) => axum::Json(json!({"token": "none", "user_id": 11, "username": u})).into_response(),
             None => StatusCode::BAD_REQUEST.into_response(),
         }
     };
@@ -174,7 +183,7 @@ async fn stand_in_auth(auth: Arc<Auth>) -> String {
     };
     let oauth_exchange = |body: axum::Json<Value>| async move {
         match body["code"].as_str() {
-            Some("good") => axum::Json(json!({"token": "all", "username": "user-all"})).into_response(),
+            Some("good") => axum::Json(json!({"token": "all", "user_id": 7, "username": "user-all"})).into_response(),
             Some("taken") => (StatusCode::CONFLICT, "email_exists").into_response(),
             _ => (StatusCode::BAD_REQUEST, "bad code").into_response(),
         }
@@ -352,6 +361,8 @@ pub(crate) struct Site {
     pub(crate) auth: Arc<Auth>,
     store: MemoryStore,
     cookie: Option<String>,
+    /// The visitor's address, sent as Cloudflare's `CF-Connecting-IP`.
+    pub(crate) visitor: Option<&'static str>,
     _env: tokio::sync::MutexGuard<'static, ()>,
 }
 
@@ -383,7 +394,7 @@ impl Site {
         };
         let store = MemoryStore::default();
         let app = app.route("/test/seed", post(seed)).layer(SessionManagerLayer::new(store.clone()).with_secure(false));
-        Self { app, auth, store, cookie: None, _env: env }
+        Self { app, auth, store, cookie: None, visitor: None, _env: env }
     }
 
     async fn logged_in(token: &str) -> Self {
@@ -402,6 +413,9 @@ impl Site {
         }
         if let Some(cookie) = &self.cookie {
             req = req.header(header::COOKIE, cookie);
+        }
+        if let Some(visitor) = self.visitor {
+            req = req.header("cf-connecting-ip", visitor);
         }
         let req = match body {
             Some((content_type, bytes)) => req.header(header::CONTENT_TYPE, content_type).body(Body::from(bytes)),
@@ -568,6 +582,114 @@ async fn logging_in_answers_wrong_passwords_and_outages_apart() {
     assert_eq!(reply.status, StatusCode::NO_CONTENT);
     assert_eq!(site.get("/api/session").await.body, json!({"viewer": null}));
     crate::trace_tests::span(&exporter, "bff.logout").await;
+}
+
+#[tokio::test]
+async fn a_login_keeps_auths_user_id_in_the_session() {
+    let mut site = Site::new().await;
+    let reply = site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let session = site.session_data().await;
+    assert_eq!((&session["user_id"], &session["username"]), (&json!(7), &json!("tester")));
+}
+
+#[tokio::test]
+async fn too_many_failed_logins_for_a_username_are_refused_for_a_while() {
+    let mut site = Site::new().await;
+    let wrong = || json!({"username": "Tester", "password": "wrong"});
+    for _ in 0..10 {
+        envelope(&site.json(Method::POST, "/api/session/login", wrong()).await, 401, "invalid");
+    }
+    // Even the right password: auth isn't asked. Usernames are counted without case.
+    let right = json!({"username": "tester", "password": "right"});
+    let reply = site.json(Method::POST, "/api/session/login", right).await;
+    envelope(&reply, 429, "rate_limited");
+    assert_eq!(reply.body["message"], "Too many tries. Wait a few minutes and try again.");
+    // An outage isn't the user's failure, and other usernames go on.
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "outage", "password": "x"})).await, 502, "upstream");
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "other", "password": "x"})).await, 401, "invalid");
+}
+
+#[tokio::test]
+async fn one_visitor_gets_a_limited_number_of_failed_logins_and_registrations() {
+    let mut site = Site::new().await;
+    site.visitor = Some("203.0.113.7");
+    // Logins that work don't count (the staging journeys log in dozens of times a run).
+    for _ in 0..50 {
+        let reply = site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    }
+    for i in 0..30 {
+        let login = json!({"username": format!("user{i}"), "password": "wrong"});
+        envelope(&site.json(Method::POST, "/api/session/login", login).await, 401, "invalid");
+    }
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await, 429, "rate_limited");
+    site.visitor = Some("198.51.100.1");
+    let reply = site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+    assert_eq!(reply.status, StatusCode::OK, "another visitor: {}", reply.body);
+
+    for i in 0..10 {
+        let new = json!({"username": format!("new{i}"), "email": "a@b.c", "password": "long enough"});
+        assert_eq!(site.json(Method::POST, "/api/session/register", new).await.status, StatusCode::OK);
+    }
+    let new = json!({"username": "new10", "email": "a@b.c", "password": "long enough"});
+    envelope(&site.json(Method::POST, "/api/session/register", new).await, 429, "rate_limited");
+}
+
+/// `n` copies of a request sent at once, as separate browsers.
+async fn at_once(site: &Site, n: usize, path: &str, body: Value) -> Vec<StatusCode> {
+    let requests = (0..n).map(|_| {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::HOST, HOST)
+            .header(header::ORIGIN, SITE)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        site.app.clone().oneshot(req)
+    });
+    futures_util::future::join_all(requests).await.into_iter().map(|r| r.unwrap().status()).collect()
+}
+
+#[tokio::test]
+async fn concurrent_attempts_cant_pass_the_limits_together() {
+    use std::sync::atomic::Ordering;
+    let site = Site::new().await;
+    let statuses = at_once(&site, 20, "/api/session/login", json!({"username": "tester", "password": "wrong"})).await;
+    assert_eq!(site.auth.logins.load(Ordering::SeqCst), 10, "{statuses:?}");
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::TOO_MANY_REQUESTS).count(), 10);
+
+    let statuses = at_once(&site, 20, "/api/session/register", json!({"username": "taken", "email": "a@b.c", "password": "long enough"})).await;
+    assert_eq!(site.auth.registrations.load(Ordering::SeqCst), 5, "{statuses:?}");
+}
+
+#[tokio::test]
+async fn a_username_longer_than_any_accounts_is_refused_before_the_limits() {
+    use std::sync::atomic::Ordering;
+    let mut site = Site::new().await;
+    let long = "a".repeat(crate::limits::MAX_USERNAME + 1);
+    envelope(&site.json(Method::POST, "/api/session/login", json!({"username": long, "password": "x"})).await, 400, "invalid");
+    envelope(&site.json(Method::POST, "/api/session/register", json!({"username": long, "email": "a@b.c", "password": "long enough"})).await, 400, "invalid");
+    assert_eq!(site.auth.logins.load(Ordering::SeqCst) + site.auth.registrations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_outage_gives_the_login_slots_back() {
+    let mut site = Site::new().await;
+    for _ in 0..15 {
+        envelope(&site.json(Method::POST, "/api/session/login", json!({"username": "outage", "password": "x"})).await, 502, "upstream");
+    }
+}
+
+#[tokio::test]
+async fn registering_one_username_over_and_over_is_refused_for_a_while() {
+    let mut site = Site::new().await;
+    let taken = || json!({"username": "taken", "email": "a@b.c", "password": "long enough"});
+    for _ in 0..5 {
+        envelope(&site.json(Method::POST, "/api/session/register", taken()).await, 409, "conflict");
+    }
+    envelope(&site.json(Method::POST, "/api/session/register", taken()).await, 429, "rate_limited");
 }
 
 #[tokio::test]
@@ -758,6 +880,56 @@ async fn login_spans_fail_on_outages_not_on_wrong_passwords() {
 }
 
 #[tokio::test]
+async fn every_api_route_has_a_server_span_named_by_its_route() {
+    use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let doc: Value = serde_json::from_str(&super::openapi_json()).unwrap();
+    let mut site = Site::serving(super::router().layer(OtelAxumLayer::default())).await;
+    let mut routes = Vec::new();
+    for (path, item) in doc["paths"].as_object().unwrap() {
+        for method in item.as_object().unwrap().keys() {
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            // Path parameters are ids: any number reaches the route.
+            let concrete = path.split('/').map(|seg| if seg.starts_with('{') { "1" } else { seg }).collect::<Vec<_>>().join("/");
+            // Logged out: every route answers without waiting on a stream.
+            site.send(method.clone(), &concrete, Some(SITE), Some(("application/json", b"{}".to_vec()))).await;
+            routes.push(format!("{method} {path}"));
+        }
+    }
+    let names: std::collections::HashSet<String> = exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.span_kind == opentelemetry::trace::SpanKind::Server)
+        .map(|s| s.name.to_string())
+        .collect();
+    let unnamed: Vec<_> = routes.iter().filter(|r| !names.contains(*r)).collect();
+    assert!(unnamed.is_empty(), "routes without a SERVER span of their name: {unnamed:?}\nspans: {names:?}");
+}
+
+#[tokio::test]
+async fn a_failed_login_or_registration_leaves_the_typed_username_out_of_spans_and_logs() {
+    let (exporter, _guard) = crate::trace_tests::exporting();
+    let mut site = Site::new().await;
+    let typed = "Hunter2-typed-in-the-username-box";
+    site.json(Method::POST, "/api/session/login", json!({"username": typed, "password": "wrong"})).await;
+    site.json(Method::POST, "/api/session/login", json!({"username": "outage", "password": typed})).await;
+    site.json(Method::POST, "/api/session/register", json!({"username": "taken", "email": "a@b.c", "password": typed})).await;
+    let spans = exporter.get_finished_spans().unwrap();
+    assert!(spans.iter().any(|s| s.name == "bff.login_password"));
+    // Log lines inside a span are its events, with their fields as attributes.
+    for span in &spans {
+        let attributes = span.attributes.iter().chain(span.events.iter().flat_map(|e| e.attributes.iter()));
+        for kv in attributes {
+            assert!(!kv.value.to_string().contains(typed), "{}: {} = {}", span.name, kv.key, kv.value);
+        }
+        for event in span.events.iter() {
+            assert!(!event.name.contains(typed), "{}: {}", span.name, event.name);
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_picture_is_uploaded_served_and_removed() {
     let mut site = Site::logged_in("all").await.with_pictures();
     let mut png = std::io::Cursor::new(Vec::new());
@@ -915,6 +1087,28 @@ async fn passwords_are_reset_by_code_and_log_this_browser_out() {
     let reply = site.json(Method::POST, "/api/password/reset", json!({"code": "good", "password": "long enough"})).await;
     assert_eq!(reply.body, json!({"username": "user-all", "logged_out": true}));
     assert_eq!(site.get("/api/session").await.body, json!({"viewer": null}));
+}
+
+#[tokio::test]
+async fn a_deleted_account_is_logged_out_here_by_its_id_not_its_name() {
+    // Logged in as user 7 under a name that has changed since: still the deleted account.
+    let mut site = Site::new().await.with_pictures();
+    site.json(Method::POST, "/api/session/login", json!({"username": "tester", "password": "right"})).await;
+    let reply = site.json(Method::POST, "/api/deletion/confirm", json!({"code": "good"})).await;
+    assert_eq!(reply.body, json!({"username": "user-all", "logged_out": true}));
+    drop(site);
+
+    // Another account (user 11), whatever its name: left logged in.
+    let mut site = Site::new().await.with_pictures();
+    site.json(Method::POST, "/api/session/register", json!({"username": "user-all", "email": "a@b.c", "password": "long enough"})).await;
+    let reply = site.json(Method::POST, "/api/deletion/confirm", json!({"code": "good"})).await;
+    assert_eq!(reply.body, json!({"username": "user-all", "logged_out": false}));
+    drop(site);
+
+    // A session from before user ids were kept: matched by name.
+    let mut site = Site::logged_in("all").await.with_pictures();
+    let reply = site.json(Method::POST, "/api/deletion/confirm", json!({"code": "good"})).await;
+    assert_eq!(reply.body, json!({"username": "user-all", "logged_out": true}));
 }
 
 #[tokio::test]

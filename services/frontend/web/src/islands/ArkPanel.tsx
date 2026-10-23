@@ -6,6 +6,7 @@ import { ServerControls, StatNote } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
 import { ARK_BUTTONS, PlayersCard } from '@/islands/ArkSkeleton';
+import { island } from '@/lib/island';
 
 type Command = Schemas['ArkCommand'];
 
@@ -34,7 +35,7 @@ export function players(count: number | null): { value: string; note: string } {
 
 /** The Ark server: who is online (asked again every 30 seconds while the page is in view, when
  * the tab is shown again, and after a command), and start, stop and restart. */
-export function ArkPanel() {
+export const ArkPanel = island('ArkPanel', function ArkPanel() {
   const [count, setCount] = useState<Outcome<Schemas['ArkPlayers']> | null>(null);
   const [running, setRunning] = useState<Command | null>(null);
   const [said, setSaid] = useState<{ cmd: Command; outcome: Outcome<Schemas['ArkResult']> } | null>(null);
@@ -80,7 +81,7 @@ export function ArkPanel() {
       />
       <ServerControls
         buttons={ARK_BUTTONS.map(([cmd, label], i) => (
-          <Button key={cmd} variant={i === 0 ? 'default' : 'outline'} disabled={running !== null} onClick={() => void run(cmd)}>
+          <Button key={cmd} variant={i === 0 ? 'default' : 'outline'} disabled={running !== null} onClick={() => void run(cmd)} data-faro-user-action-name={`ark ${cmd}`}>
             {running === cmd ? `${label}…` : label}
           </Button>
         ))}
@@ -94,4 +95,4 @@ export function ArkPanel() {
       </ServerControls>
     </div>
   );
-}
+});

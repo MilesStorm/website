@@ -13,6 +13,7 @@ import { applySession } from '@/api/session';
 import { attempt } from '@/lib/errors';
 import { MISSING_CODE, linkCode } from '@/lib/login';
 import { MIN_PASSWORD, NEW_PASSWORD_HINT } from '@/lib/copy';
+import { island } from '@/lib/island';
 
 const schema = z
   .object({
@@ -23,7 +24,7 @@ const schema = z
 
 /** Choosing a new password from an emailed link (`/reset-password#<code>`). It logs the account
  * out everywhere, this browser included when it was that account's. */
-export function ResetForm() {
+export const ResetForm = island('ResetForm', function ResetForm() {
   const [code] = useState(() => linkCode());
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; expired: boolean } | null>(null);
@@ -57,7 +58,7 @@ export function ResetForm() {
     );
   }
   return (
-    <form onSubmit={submit} noValidate>
+    <form onSubmit={submit} noValidate data-faro-user-action-name="reset password">
       <FieldGroup>
         <TextField
           form={form}
@@ -82,4 +83,4 @@ export function ResetForm() {
       </FieldGroup>
     </form>
   );
-}
+});

@@ -7,12 +7,12 @@ spec:
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 0
       activeDeadlineSeconds: 900
-      # A failed run (e.g. Tempo restarting) would otherwise sit in Error until three more fail.
+      # A failed run (e.g. Tempo restarting) would otherwise sit in Error until the next one fails.
       ttlSecondsAfterFinished: 86400
       template:
         spec:

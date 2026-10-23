@@ -94,12 +94,12 @@ pub async fn start_oauth(provider: &str) -> Result<(String, String), String> {
     Ok((data.auth_url, data.state))
 }
 
-/// Exchange an OAuth authorization code for a BFF opaque token + username.
+/// Exchange an OAuth authorization code for a BFF opaque token, username and auth's user id.
 #[tracing::instrument(name = "bff.exchange_oauth_code", skip_all, fields(provider = %provider))]
 pub async fn exchange_oauth_code(
     provider: &str,
     code: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, Option<i64>), String> {
     use session::{auth_url, service_secret};
 
     #[derive(Serialize)]
@@ -111,6 +111,8 @@ pub async fn exchange_oauth_code(
     struct Resp {
         token: String,
         username: String,
+        #[serde(default)]
+        user_id: Option<i64>,
     }
 
     let resp = http_client()
@@ -139,7 +141,7 @@ pub async fn exchange_oauth_code(
         e.to_string()
     })?;
     metrics::counter!("bff_login_attempts_total", "method" => provider.to_string(), "status" => "success").increment(1);
-    Ok((data.token, data.username))
+    Ok((data.token, data.username, data.user_id))
 }
 
 fn login_unavailable() -> ApiError {
@@ -150,14 +152,29 @@ fn registration_failed() -> ApiError {
     ApiError::new(ErrorCode::Upstream, "Registration failed")
 }
 
+/// The session key of the logged-in account's id in auth (absent from sessions made before it
+/// was stored, and when auth didn't send it).
+pub(crate) const USER_ID_KEY: &str = "user_id";
+
+/// Stores a login (its token, username and auth's user id) in the session.
+pub(crate) async fn store_identity(
+    sess: &tower_sessions::Session,
+    token: &str,
+    username: &str,
+    user_id: Option<i64>,
+) -> Result<(), tower_sessions::session::Error> {
+    sess.insert("opaque_token", token).await?;
+    sess.insert("username", username).await?;
+    if let Some(id) = user_id {
+        sess.insert(USER_ID_KEY, id).await?;
+    }
+    Ok(())
+}
+
 /// Stores a login in the session under a new session ID, then redeems a pending invite.
-async fn store_login(sess: &tower_sessions::Session, token: &str, username: &str) -> Result<(), ApiError> {
+async fn store_login(sess: &tower_sessions::Session, token: &str, username: &str, user_id: Option<i64>) -> Result<(), ApiError> {
     fresh_session_id(sess).await.map_err(|_| ApiError::internal())?;
-    let stored = match sess.insert("opaque_token", token).await {
-        Ok(()) => sess.insert("username", username).await,
-        Err(e) => Err(e),
-    };
-    stored.map_err(|e| {
+    store_identity(sess, token, username, user_id).await.map_err(|e| {
         tracing::error!(error = %e, "storing the login in the session failed");
         ApiError::internal()
     })?;
@@ -166,7 +183,7 @@ async fn store_login(sess: &tower_sessions::Session, token: &str, username: &str
 }
 
 /// Log in with username + password. The username logged in as.
-#[tracing::instrument(name = "bff.login_password", skip_all, fields(username = %username))]
+#[tracing::instrument(name = "bff.login_password", skip_all)]
 pub async fn log_in(sess: &tower_sessions::Session, username: String, password: String) -> Result<String, ApiError> {
     trace::rejectable(async move {
         use session::{auth_url, service_secret};
@@ -180,13 +197,15 @@ pub async fn log_in(sess: &tower_sessions::Session, username: String, password: 
         struct Resp {
             token: String,
             username: String,
+            #[serde(default)]
+            user_id: Option<i64>,
         }
 
         let resp = http_client()
             .post(format!("{}/internal/token/exchange", auth_url()))
             .with_extension(trace::WRONG_TOKEN_OK)
             .header("x-service-token", service_secret())
-            .json(&Req { username: username.clone(), password })
+            .json(&Req { username, password })
             .send()
             .await
             .map_err(|e| {
@@ -201,7 +220,7 @@ pub async fn log_in(sess: &tower_sessions::Session, username: String, password: 
             let error = password_login_error(status, &body);
             let expected = (400..500).contains(&error.status());
             if expected {
-                tracing::warn!(username = %username, "password login failed: invalid credentials");
+                tracing::warn!("password login failed: invalid credentials");
             } else {
                 tracing::error!(status, "password login failed: auth unavailable");
             }
@@ -213,7 +232,7 @@ pub async fn log_in(sess: &tower_sessions::Session, username: String, password: 
             tracing::error!(error = %e, "password login failed: auth's reply is unreadable");
             login_unavailable()
         })?;
-        store_login(sess, &data.token, &data.username).await?;
+        store_login(sess, &data.token, &data.username, data.user_id).await?;
 
         tracing::info!(username = %data.username, "password login succeeded");
         metrics::counter!("bff_login_attempts_total", "method" => "password", "status" => "success").increment(1);
@@ -235,7 +254,7 @@ pub async fn log_out(sess: &tower_sessions::Session) -> Result<(), ApiError> {
 }
 
 /// Register a new account and log in as it. The username logged in as.
-#[tracing::instrument(name = "bff.register_password", skip_all, fields(username = %username))]
+#[tracing::instrument(name = "bff.register_password", skip_all)]
 pub async fn register(
     sess: &tower_sessions::Session,
     username: String,
@@ -255,12 +274,14 @@ pub async fn register(
         struct Resp {
             token: String,
             username: String,
+            #[serde(default)]
+            user_id: Option<i64>,
         }
 
         let resp = http_client()
             .post(format!("{}/internal/register", auth_url()))
             .header("x-service-token", service_secret())
-            .json(&Req { username: username.clone(), email, password })
+            .json(&Req { username, email, password })
             .send()
             .await
             .map_err(|e| {
@@ -270,7 +291,7 @@ pub async fn register(
 
         if resp.status() == reqwest::StatusCode::CONFLICT {
             let body = resp.text().await.unwrap_or_default();
-            tracing::warn!(username = %username, reason = %body, "registration conflict");
+            tracing::warn!(reason = %body, "registration conflict");
             metrics::counter!("bff_register_attempts_total", "status" => "conflict").increment(1);
             return Err(ApiError::new(ErrorCode::Conflict, body));
         }
@@ -285,7 +306,7 @@ pub async fn register(
         }
 
         if !resp.status().is_success() {
-            tracing::error!(username = %username, status = %resp.status(), "registration failed");
+            tracing::error!(status = %resp.status(), "registration failed");
             metrics::counter!("bff_register_attempts_total", "status" => "error").increment(1);
             return Err(registration_failed());
         }
@@ -294,7 +315,7 @@ pub async fn register(
             tracing::error!(error = %e, "registration failed: auth's reply is unreadable");
             registration_failed()
         })?;
-        store_login(sess, &data.token, &data.username).await?;
+        store_login(sess, &data.token, &data.username, data.user_id).await?;
 
         tracing::info!(username = %data.username, "registration succeeded");
         metrics::counter!("bff_register_attempts_total", "status" => "success").increment(1);

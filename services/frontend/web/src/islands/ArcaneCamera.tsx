@@ -14,6 +14,7 @@ import {
   rollText,
   type Detection,
 } from '@/lib/arcane';
+import { island } from '@/lib/island';
 
 type Connection = { kind: 'connecting' } | { kind: 'connected' } | { kind: 'disconnected' } | { kind: 'error'; message: string };
 
@@ -24,7 +25,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * `camera session` span), the answers are drawn over the video, and a settled roll is shown.
  * Leaving the page (or hiding it into the back/forward cache) stops the camera and closes the
  * connection; the server closing it stops the camera, with a Reconnect button. */
-export function ArcaneCamera() {
+export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
   const video = useRef<HTMLVideoElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
   const capture = useRef<HTMLCanvasElement>(null);
@@ -223,7 +224,7 @@ export function ArcaneCamera() {
               : connection.message}
       </p>
       {connection.kind === 'disconnected' && (
-        <Button className="self-center" onClick={() => setRound((n) => n + 1)}>
+        <Button className="self-center" onClick={() => setRound((n) => n + 1)} data-faro-user-action-name="arcane reconnect">
           Reconnect
         </Button>
       )}
@@ -258,4 +259,4 @@ export function ArcaneCamera() {
       <canvas ref={capture} hidden />
     </div>
   );
-}
+});

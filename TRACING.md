@@ -39,18 +39,20 @@ consequences:
 - Grafana computes the critical path from the trace's root, the Gateway span, and stops at the
   server's span; the page load is never on it. To see what the page load waited for, open the
   `page load` span's subtree (the scripts under `/_astro/`, the islands' `/api/…` calls).
-- The page load's own time (time no child covers) is the browser parsing and hydrating. It is
-  labelled by span events: the navigation timing marks after the HTML arrived (`responseEnd`,
-  `domInteractive`, `domContentLoadedEventStart`/`End`, `domComplete`, `loadEventStart`/`End`)
-  and one `longtask` event per task over 50 ms (`longtask.duration_ms`). Long tasks are
-  Chromium-only: in Safari and Firefox the own time stays unlabelled.
+- The page load's own time (time no child covers) is the browser parsing the page and running the
+  islands. It is labelled by span events: the navigation timing marks after the HTML arrived
+  (`responseEnd`, `domInteractive`, `domContentLoadedEventStart`/`End`, `domComplete`,
+  `loadEventStart`/`End`) and one `long-animation-frame` event per frame over 50 ms (`longtask`
+  in Chromium before 123). Both are Chromium-only: in Safari and Firefox the own time stays
+  unlabelled.
 
 A camera session and a roll stream are not one long span: see [Streams](#streams).
 
 The services send spans to Alloy over OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`). Istio sends its spans to
 Tempo directly. The browser sends its spans (and errors, web vitals) through Grafana Faro to
-`https://milesstorm.com/faro/collect`, which the homelab routes to Alloy's `faro.receiver`
-(`monitor/alloy.yaml`, `monitor/manifests/routes.yaml`).
+the site's own `/telemetry/collect`, and the frontend passes them on to Alloy's `faro.receiver`
+inside the cluster (`FARO_COLLECT_URL`; homelab `monitor/alloy.yaml`). See
+[Telemetry endpoint](#telemetry-endpoint).
 
 Sampling: the first traced hop decides and everything after follows the `traceparent` flag. For
 browser traffic that is Faro (session sampling, `sessionTracking.samplingRate`, default all); for
@@ -61,40 +63,100 @@ Lowering one without the other leaves the other's traces at full volume. A clien
 
 ## Browser
 
-`services/frontend/web/assets/trace.js` runs after the Faro bundles: `npm run vendor` (in
-`services/frontend/web`) joins them and trace.js into one classic script, `src/vendor/tracing.js`,
-which the layout loads synchronously in `<head>`, before every module script, so `fetch` and
-`WebSocket` are wrapped before an island can call them. The script:
+The browser's telemetry is one classic script: `services/frontend/web/assets/main.js` imports
+Grafana Faro's modules and `assets/trace.js` (what Faro can't do on its own), and
+`npm run tracing` (in `services/frontend/web`, `scripts/tracing.mjs`) bundles them with esbuild,
+tree-shaken and minified, into `public/_astro/tracing.<hash>.js` with its source map. The layout
+loads it synchronously in `<head>`, before every module script, so `fetch` and `WebSocket` are
+wrapped before an island can call them. `trace.js`:
 
 - starts a span on a click or form submit and makes every fetch it causes a child of it. The span
   is only created when a server call happens, so clicks that stay in the browser make no trace. It
   ends 300 ms after its last fetch span ended (at most 10 s), and never before a child: OTel's
   fetch span ends when the response body is read and reaches the span processor 300 ms later, so
   trace.js counts child spans in an OTel `SpanProcessor` rather than trusting the fetch promise.
-- gives the arcane camera WebSocket a `camera session` span (above), by wrapping `window.WebSocket`.
-- names the span from `data-trace-name`, then `aria-label`, then the button's text (links: their
-  path). Give a button `data-trace-name="…"` when its text isn't a good name or holds user data.
+- starts a Faro user action for each click or submit (Faro runs one at a time; it starts its own
+  on pointerdown for an element with `data-faro-user-action-name`). Faro's action records what
+  the click led to (its `faro.user.action` event, its duration, and the errors and logs during
+  it); it makes no span. The root span carries the action's `faro.action.user.name` and
+  `faro.action.user.parentId`, as Faro's fetch spans do, and the action's event carries the
+  span's `trace_id`.
+- names the span and the action from `data-faro-user-action-name`, else from what the code
+  fixed: a link's templated path, a form's name or id, the element's role or tag (`button`).
+  Never its text or `aria-label`, which can name a person ("Account: Ann"). Give every control
+  worth telling apart a `data-faro-user-action-name="…"` (static text, never user data); the
+  forms, the buttons that change something and the account menu have one.
+  `test/labels.test.tsx` checks that no name holds a username.
+- ends every open span when the page is hidden for a navigation (`pagehide`), marked
+  `browser.ended_by=pagehide`, ends the running user action, and flushes, all before Faro's own
+  `pagehide` and `visibilitychange` handlers send what is queued. Every page change is a page
+  load (no client router), so without this the click that navigates (login, then after-login,
+  then the next page) would lose its root span and its last fetch span.
+- gives the arcane camera WebSocket a `camera session` span (below), by wrapping `window.WebSocket`.
 - links the page load to the server's trace through `<meta name="traceparent">`, which the
   server splices into each page it sends (`trace::page_traceparent`, `crates/bff/src/pages.rs`).
   This needs pages sent per request: no Cloudflare cache rule for pages, or page loads join
   someone else's trace.
 - ends the page-load span once the page has loaded and no server call has run for 1.5 s (at most
   15 s), so the islands' first calls land under it. A click that calls the server ends it.
-- records long tasks (Chromium) as `longtask` events on the open click or page-load span.
+- records long animation frames (Chromium 123+; long tasks in older Chromium) as
+  `long-animation-frame` events (`loaf.duration_ms`, `loaf.blocking_ms`) on the open click or
+  page-load span, and sends up to 20 per page to Faro as `long-animation-frame` measurements
+  (`duration`, `blocking_duration`; context `invoker`, `source`, `function` of the longest script).
+- reports frustration as Faro events, named like the frustration instrumentation Faro hasn't
+  released yet: `faro.frustration.rage_click` (3 clicks within 1 s and 30 px; `clickCount`),
+  `faro.frustration.dead_click` (a button, not a link, after which the page doesn't change for
+  3 s) and `faro.frustration.error_click` (an uncaught error or rejection within 1 s of a
+  click), each with `target`, the element's label.
 - only starts Faro on milesstorm.com (`deployment.environment.name=production`) and
   staging.milesstorm.com (`staging`), so `astro dev` and a local server send nothing.
 
-Faro's fetch instrumentation sends `traceparent` on same-origin requests only. It ignores `/faro/`,
-`/ws/` and `/api/arcane/rolls`. Faro's own uploads send an unsampled `traceparent` (flags `00`):
-the Gateway traces everything else, and would start a trace per upload. Only Faro's errors, web
-vitals, session, view and tracing instrumentations are on; performance, user-action, navigation and
-console are off (volume, and they record URLs whose query strings hold reset and invite codes).
+Faro's instrumentations: errors (uncaught errors and unhandled rejections), console (`warn` and
+`error` only), web vitals with attribution (`trackAttributionSources`), session, view,
+performance (the navigation and every resource, `/_astro/` included: `trackResources`), user
+actions and tracing. Not CSP or navigation: there is no client-side routing. Every URL an item
+carries (page, span and event attributes, measurement context, error frames, messages) loses
+its query string and fragment in `beforeSend`, as reset and invite codes ride in them.
 
-`/faro/collect` is public, so its input is untrusted (homelab repo): the Gateway rejects compressed
-or non-JSON bodies and bodies over 64 KiB (`istio/manifests/faro-guard.yaml`); Alloy caps the rate,
-never downloads source maps, sets `service.name` to `milesstorm-web`, keeps only INTERNAL and CLIENT
-spans, drops attributes that would add service-graph nodes and strips query strings
+Every island is wrapped in `@grafana/faro-react`'s error boundary (`island()` in
+`src/lib/island.tsx`): an island that throws while rendering shows a short message in its place,
+and the error reaches Faro with `context.island` naming it. The boundary reports through the
+page's Faro (`window.faro`), which the tracing script started.
+
+Errors are reported with stacks into the minified files under `/_astro/`. The build writes a
+source map for every one (`vite.build.sourcemap: 'hidden'`, and `tracing.<hash>.js.map`) without
+a `sourceMappingURL` comment; `scripts/sourcemaps.mjs` moves them from `dist/_astro/` to
+`web/sourcemaps/`, which the image keeps (`SOURCE_MAPS`) but never serves (the server refuses to
+start on a build with `.map` files in it). `service.version` (Faro's `app.version`) is the commit,
+from the page's `<meta name="service-version">`.
+
+Faro's fetch instrumentation sends `traceparent` on same-origin requests only. It ignores `/telemetry/`,
+`/ws/` and `/api/arcane/rolls`. Faro's own uploads send an unsampled `traceparent` (flags `00`):
+the Gateway traces everything else, and would start a trace per upload.
+
+### Telemetry endpoint
+
+`POST /telemetry/collect` (`crates/bff/src/telemetry.rs`) is public, so its input is untrusted.
+The frontend:
+
+- refuses an upload over 64 KiB (413: by its declared length, and the read stops at the cap
+  when it has none, as HTTP/2 from Cloudflare may), with a `Content-Encoding` or not JSON (415),
+  from another site (403), the visitor's 61st in a minute (429; see [Rate limits](#rate-limits)),
+  and one that doesn't parse as a Faro payload (400);
+- maps the stack frames of errors back to the source with the build's source maps, for a frame
+  whose file is exactly one of the build's `/_astro/*.js` files on the page's own host (query
+  ignored). Every other frame, and everything else in the upload, goes on as it came. A map is
+  parsed once, on first use (`sourcemap.parse`; concurrent first uses wait for it), and kept; there are only as many as the build has
+  scripts, and no file name from an upload reaches the disk unless the build has a map for it;
+- sends the upload to Alloy (a CLIENT span to `alloy`) and answers 202, Alloy's 429, or 502.
+  Uploads carry an unsampled `traceparent`, so these spans are only recorded when someone sends a
+  sampled one.
+
+`bff_telemetry_uploads_total{status}` counts the outcomes. In the homelab, Alloy caps the rate
+(shared by production and staging), sets `service.name` to `milesstorm-web`, keeps only INTERNAL
+and CLIENT spans, drops attributes that would add service-graph nodes and strips query strings
 (`monitor/alloy.yaml`); Tempo leaves browser spans out of span-metrics (`monitor/tempo.yaml`).
+Alloy downloads no source maps. Staging reaches Alloy through `website-staging/manifests/egress.yaml`.
 
 ### Browser clock
 
@@ -238,6 +300,25 @@ On SIGTERM each service stops accepting, waits for open requests and tracked tas
   warnings (spans dropped, an export failed); they go to stdout only, never through the OTLP log
   bridge, which would feed them back to itself.
 
+## Rate limits
+
+Password login and registration (`crates/bff/src/limits.rs`) answer 429 `rate_limited` before
+auth is asked: 30 failed logins per 10 minutes per visitor and 10 per 15 minutes per username;
+10 registrations per hour per visitor and 5 per username. A visitor is Cloudflare's
+`CF-Connecting-IP` (an IPv6 address by its /56, a subscriber's usual delegation; IPv4-mapped
+addresses as IPv4); requests without it share one visitor, and the header is trusted because only
+Cloudflare reaches the origin (homelab #98). A slot is
+taken before auth is asked, so concurrent attempts can't pass together, and given back when the
+login worked or auth couldn't answer. `/telemetry/collect` takes 60 uploads a minute per visitor.
+The counts live in each replica's memory. A key is held only while it has slots counted, and a
+limit holds at most 100 000 keys, a bound on memory only: when it is full even after a sweep, a
+new key's request passes uncounted (`bff_rate_limit_overflow_total{limit}`, and a warning) rather
+than locking everyone out; the other limit of the pair still holds a flood.
+
+The per-username limit lets anyone lock an account out of password login for up to 15 minutes by
+failing ten logins for it. That is accepted: the lock ends by itself, and GitHub and Google logins
+still work meanwhile. `bff_login_attempts_total{status="rate_limited"}` counts the refusals.
+
 ## Profiles
 
 CPU profiles of frontend, auth and ai-pipeline are collected all the time by an eBPF profiler
@@ -283,26 +364,34 @@ auth and ai_pipeline pin their own copies. Upgrade them together:
 
 ## Upgrading Faro
 
-Bump `@grafana/faro-web-sdk` and `@grafana/faro-web-tracing` together (exact versions in
-`services/frontend/web/package.json`). `trace.js` depends on these Faro surfaces:
+Bump `@grafana/faro-web-sdk`, `@grafana/faro-web-tracing` and `@grafana/faro-react` together
+(exact versions in `services/frontend/web/package.json`), and keep `@opentelemetry/sdk-trace-web`
+on the version Faro depends on (`npm ls @opentelemetry/sdk-trace-web` shows one copy).
+`trace.js` and `main.js` depend on these Faro surfaces:
 
 - `faro.api.getOTEL()` (the standard `@opentelemetry/api` `trace` and `context`), and Faro patching
   `window.fetch` while `initializeFaro` runs, before `trace.js` wraps it;
 - `TracingInstrumentation`'s `spanProcessor` option, with `FaroMetaAttributesSpanProcessor` and
-  `FaroTraceExporter` from the tracing bundle and the live `GrafanaFaroWebSdk.faro` instance
-  (`trace.js` rebuilds Faro's default chain around its own processor. The Faro bundle doesn't
-  export OTel's `BatchSpanProcessor`, so `npm run vendor` bundles it from
-  `@opentelemetry/sdk-trace-web`; keep that package on the version Faro depends on);
-- `FetchTransport`'s `requestOptions.headers` (the unsampled `traceparent` on uploads);
+  `FaroTraceExporter` and the live `faro` instance (`trace.js` rebuilds Faro's default chain
+  around its own processor, with OTel's `BatchSpanProcessor`);
+- `faro.api.startUserAction`, `getActiveUserAction`, the action's `name`, `parentId`,
+  `attributes` (read when the action ends) and `end()`, and `UserActionState.Started`;
+- `FetchTransport`'s `requestOptions.headers` (the unsampled `traceparent` on uploads), and its
+  `pagehide` listener being registered when the transport is constructed;
 - the fetch instrumentation's `requestHook`, reading `http.request.method` and `url.full` from the
-  span to name it;
-- the fetch instrumentation's `ignoreNetworkEvents` (Faro defaults it to `true`; `trace.js` sets
+  span to name it, and `ignoreNetworkEvents` (Faro defaults it to `true`; `trace.js` sets
   `false` so fetch spans carry OTel's DNS/connect/TLS/request/response timing events);
-- the instrumentation class names on the `GrafanaFaroWebSdk` and `GrafanaFaroWebTracing` globals.
+- `FaroErrorBoundary` and `ReactIntegration` (`src/lib/island.tsx`);
+- `@opentelemetry/otlp-transformer`'s `build/src/` paths, which Faro's exporter imports and
+  `scripts/tracing.mjs` swaps for the same files under `build/esm/` (so they can be tree-shaken).
+  The build fails if a path is missing there.
+- if Faro ships its frustration instrumentation, use it and drop `frustration()` from `trace.js`
+  (the event names are the same).
 
-After a bump, run `npm run test:trace`, then check on the site that `/faro/collect` uploads carry a
-`traceparent` ending in `-00`, and in Tempo that a click still roots its trace and fetch spans are
-named like `POST /api/session/login`.
+After a bump, run `npm run test:trace`, `npm test` and `npm run tracing` (check the size it
+prints), then check on the site that `/telemetry/collect` uploads carry a `traceparent` ending in
+`-00`, and in Tempo that a click still roots its trace and fetch spans are named like
+`POST /api/session/login`.
 
 ## Checking traces in Tempo
 
@@ -318,7 +407,7 @@ named like `POST /api/session/login`.
 - **No orphans.** The trace view shows no "root span not yet received". Expected exceptions:
   - Gateway and waypoint spans while Tempo restarts: Istio sends them to Tempo directly, without
     Alloy's retry, so a trace from that minute misses its Envoy spans;
-  - browsers that never send their spans (an ad blocker blocks `/faro/collect`, or the tab closed
+  - browsers that never send their spans (an ad blocker blocks `/telemetry/collect`, or the tab closed
     within Faro's 1 s batch): the request still carries the browser's `traceparent`, so the
     `milesstorm-web` root is missing.
 

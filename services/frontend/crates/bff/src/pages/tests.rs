@@ -142,6 +142,14 @@ fn the_build_must_have_exactly_the_pages() {
     assert!(Built::load(&dist.0.join("nowhere"), PAGES).is_err());
 }
 
+#[test]
+fn a_build_that_would_serve_its_source_maps_is_refused() {
+    let dist = Dist::new("maps");
+    std::fs::write(dist.0.join("_astro/app.Ab12.js.map"), "{}").unwrap();
+    let e = Built::load(&dist.0, PAGES).unwrap_err().to_string();
+    assert!(e.contains("_astro/app.Ab12.js.map"), "{e}");
+}
+
 #[tokio::test]
 async fn the_pages_mount_beside_the_api() {
     let dist = Dist::new("mount");

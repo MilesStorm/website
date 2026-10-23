@@ -31,8 +31,8 @@ test('logging out, Back shows the page logged out', async ({ context, page }) =>
   await logIn(context, 'plain');
   // A page left with a request still open isn't kept. Where the tracing is on (the staging and
   // production hosts; not the stand-ins' localhost), it sends the page load's spans shortly after
-  // the load, to /faro/collect: wait for that answer, then for nothing else in flight.
-  const exported = STAGING ? page.waitForResponse((r) => new URL(r.url()).pathname === '/faro/collect') : null;
+  // the load, to /telemetry/collect: wait for that answer, then for nothing else in flight.
+  const exported = STAGING ? page.waitForResponse((r) => new URL(r.url()).pathname === '/telemetry/collect') : null;
   await page.goto('/account-deleted');
   await expect(page.locator('html')).toHaveAttribute('data-session', 'in');
   await exported;

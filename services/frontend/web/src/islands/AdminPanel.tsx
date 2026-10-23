@@ -60,6 +60,7 @@ import {
 import { attempt, type Outcome } from '@/lib/errors';
 import { isKnownPermission } from '@/lib/gates';
 import { useMenu } from '@/lib/menu';
+import { island } from '@/lib/island';
 
 type RoleRef = Schemas['AdminRoleRef'];
 type Permission = Schemas['AdminPermission'];
@@ -68,7 +69,7 @@ type Permission = Schemas['AdminPermission'];
 export const SEARCH_DELAY_MS = 250;
 
 /** The admin panel: users and their roles, roles and their permissions, invite links. */
-export function AdminPanel() {
+export const AdminPanel = island('AdminPanel', function AdminPanel() {
   // The small lists the pickers need: every role, every permission.
   const [roles, setRoles] = useState<Outcome<RoleRef[]> | null>(null);
   const [permissions, setPermissions] = useState<Outcome<Permission[]> | null>(null);
@@ -111,7 +112,7 @@ export function AdminPanel() {
       </AdminTabs>
     </div>
   );
-}
+});
 
 /** A searched, paged listing: what to show, and the controls' state. */
 function useListing<T>(load: (page: number, search: string) => Promise<Outcome<{ items: T[]; total: number }>>) {
@@ -344,6 +345,7 @@ function Assigned({
           {h.name}
           {unknown(h.name) && <span> (unused)</span>}
           <RemoveButton
+            action={`admin remove ${kind}`}
             label={`Remove ${kind} ${h.name} from ${owner}`}
             title={`Remove ${h.name} from ${owner}?`}
             warning={warn(h)}
@@ -354,7 +356,7 @@ function Assigned({
       {missing.length > 0 && (
         <DropdownMenu {...menu.root}>
           <DropdownMenuTrigger asChild {...menu.trigger}>
-            <Button size="xs" variant="outline" className="border-dashed" aria-label={`Add ${kind} to ${owner}`}>
+            <Button size="xs" variant="outline" className="border-dashed" aria-label={`Add ${kind} to ${owner}`} data-faro-user-action-name={`admin add ${kind}`}>
               <Plus data-icon="inline-start" aria-hidden="true" />
               Add
             </Button>
@@ -375,12 +377,25 @@ function Assigned({
 }
 
 /** A badge's remove button; with a `warning`, it asks first and says why. */
-function RemoveButton({ label, title, warning, remove }: { label: string; title: string; warning: string | null; remove: () => void }) {
+function RemoveButton({
+  action,
+  label,
+  title,
+  warning,
+  remove,
+}: {
+  action: string;
+  label: string;
+  title: string;
+  warning: string | null;
+  remove: () => void;
+}) {
   const button = (
     <button
       type="button"
       className="-mr-1 rounded-full p-0.5 text-muted-foreground outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       aria-label={label}
+      data-faro-user-action-name={action}
       onClick={warning ? undefined : remove}
     >
       <X aria-hidden="true" className="size-3" />
@@ -397,7 +412,7 @@ function RemoveButton({ label, title, warning, remove }: { label: string; title:
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Keep</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={remove}>
+          <AlertDialogAction variant="destructive" onClick={remove} data-faro-user-action-name={`${action} confirmed`}>
             Remove
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -412,7 +427,7 @@ function Pager({ page, total, onPage }: { page: number; total: number; onPage: (
   const last = Math.ceil(total / PAGE_SIZE) - 1;
   return (
     <nav aria-label="Pages" className="flex flex-wrap items-center justify-center gap-1">
-      <Button size="sm" variant="ghost" disabled={page === 0} aria-label="Previous page" onClick={() => onPage(page - 1)}>
+      <Button size="sm" variant="ghost" disabled={page === 0} aria-label="Previous page" onClick={() => onPage(page - 1)} data-faro-user-action-name="admin page previous">
         <ChevronLeft aria-hidden="true" />
       </Button>
       {buttons.map((b, i) =>
@@ -427,13 +442,14 @@ function Pager({ page, total, onPage }: { page: number; total: number; onPage: (
             variant={b === page ? 'default' : 'ghost'}
             aria-current={b === page ? 'page' : undefined}
             aria-label={`Page ${b + 1}`}
+            data-faro-user-action-name="admin page"
             onClick={() => onPage(b)}
           >
             {b + 1}
           </Button>
         ),
       )}
-      <Button size="sm" variant="ghost" disabled={page >= last} aria-label="Next page" onClick={() => onPage(page + 1)}>
+      <Button size="sm" variant="ghost" disabled={page >= last} aria-label="Next page" onClick={() => onPage(page + 1)} data-faro-user-action-name="admin page next">
         <ChevronRight aria-hidden="true" />
       </Button>
     </nav>
@@ -517,6 +533,7 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
   return (
     <Card>
       <form
+        data-faro-user-action-name="admin create invite"
         className="flex flex-col gap-(--card-spacing)"
         onSubmit={(e) => {
           e.preventDefault();
@@ -580,7 +597,7 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
                 {/* In the text colour: maia's input and outline button take the muted one around them. */}
                 <div className="flex gap-2 text-foreground">
                   <Input readOnly aria-label="New invite link" className="font-mono" value={link} />
-                  <Button type="button" variant="outline" onClick={() => void copy()}>
+                  <Button type="button" variant="outline" onClick={() => void copy()} data-faro-user-action-name="admin copy invite link">
                     {copied ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
@@ -623,7 +640,7 @@ function InviteRow({ invite, changed }: { invite: Schemas['AdminInvite']; change
           // Turning a link off can't be undone: it asks first.
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button size="sm" variant="ghost" aria-label={`Turn off ${name}`}>
+              <Button size="sm" variant="ghost" aria-label={`Turn off ${name}`} data-faro-user-action-name="admin turn off invite">
                 Turn off
               </Button>
             </AlertDialogTrigger>
@@ -636,7 +653,7 @@ function InviteRow({ invite, changed }: { invite: Schemas['AdminInvite']; change
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Keep</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" onClick={() => void turnOff()}>
+                <AlertDialogAction variant="destructive" onClick={() => void turnOff()} data-faro-user-action-name="admin turn off invite confirmed">
                   Yes, turn off
                 </AlertDialogAction>
               </AlertDialogFooter>

@@ -93,3 +93,33 @@ describe('the countdown', () => {
     expect(split(86_400 * 2 + 3600 * 3 + 60 * 4 + 5)).toEqual([2, 3, 4, 5]);
   });
 });
+
+describe('an island that throws', () => {
+  function Broken(): never {
+    throw new Error('broken island');
+  }
+
+  it("shows a message in its place and reports to the page's Faro with its name", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pushError = vi.fn();
+    const add = vi.fn((integration: { api: unknown; initialize(): void }) => {
+      integration.api = { pushError };
+      integration.initialize();
+    });
+    vi.stubGlobal('faro', { instrumentations: { add } });
+    const { BROKEN, island } = await import('@/lib/island');
+    const Island = island('Broken', Broken);
+    render(<Island />);
+    expect(await screen.findByText(BROKEN)).toBeTruthy();
+    expect(add).toHaveBeenCalledOnce();
+    expect(pushError).toHaveBeenCalledWith(expect.any(Error), { context: { island: 'Broken' } });
+  });
+
+  it('still shows the message when no Faro is running', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { BROKEN, island } = await import('@/lib/island');
+    const Island = island('Broken', Broken);
+    render(<Island />);
+    expect(await screen.findByText(BROKEN)).toBeTruthy();
+  });
+});

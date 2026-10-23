@@ -60,13 +60,13 @@ def rules(t, leaves=tc.LeafRegistry()):
     return [v.rule for v in tc.check_trace(t, tc.RULES, leaves, collections.defaultdict(list))]
 
 
-HTTP_SRV = {"http.request.method": "POST", "http.route": "/bff/x", "http.response.status_code": 200}
+HTTP_SRV = {"http.request.method": "POST", "http.route": "/api/x", "http.response.status_code": 200}
 HTTP_CLI = {"http.request.method": "POST", "http.response.status_code": 200, "peer.service": "auth"}
 
 
 def good_server_trace():
     return trace(
-        (1, 0, "frontend", "SERVER", "POST /bff/x", 0, 10, dict(HTTP_SRV)),
+        (1, 0, "frontend", "SERVER", "POST /api/x", 0, 10, dict(HTTP_SRV)),
         (2, 1, "frontend", "CLIENT", "POST /internal/x", 1, 9, dict(HTTP_CLI)),
         (3, 2, "auth", "SERVER", "POST /internal/x", 2, 8, dict(HTTP_SRV, **{"http.route": "/internal/x"})),
         (4, 3, "auth", "CLIENT", "sqlx.fetch", 2.5, 7.5, {"db.system.name": "postgresql", "peer.service": "postgres"}),
@@ -110,14 +110,14 @@ class I2(unittest.TestCase):
         self.assertIn("I2", rules(t))
 
     def test_browser_parent_at_ingress_is_exempt_and_counted(self):
-        t = trace((1, 99, "public-istio.istio-ingress", "SERVER", "POST /bff/x", 0, 10,
+        t = trace((1, 99, "public-istio.istio-ingress", "SERVER", "POST /api/x", 0, 10,
                    {"http.method": "POST", "http.status_code": "200", "component": "proxy"}))
         self.assertNotIn("I2", rules(t))
         self.assertNotIn("I1", rules(t))
         self.assertEqual(t.kind, "browser_part_missing")
 
     def test_missing_parent_inside_the_mesh_is_not_exempt(self):
-        t = trace((1, 99, "frontend", "SERVER", "POST /bff/x", 0, 10, dict(HTTP_SRV)))
+        t = trace((1, 99, "frontend", "SERVER", "POST /api/x", 0, 10, dict(HTTP_SRV)))
         self.assertIn("I2", rules(t))
 
 
@@ -142,12 +142,28 @@ class I3(unittest.TestCase):
         self.assertIn("cross-node", tc.check_i3(t, tc.LeafRegistry())[0].detail)
 
     def test_browser_server_uses_clock_error_bound(self):
-        ok = trace((1, 0, "milesstorm-web", "CLIENT", "POST /bff/x", 0, 10, {"browser.clock_offset_error_ms": 5.0}),
-                   (2, 1, "public-istio.istio-ingress", "SERVER", "POST /bff/x", 1, 14))
-        bad = trace((1, 0, "milesstorm-web", "CLIENT", "POST /bff/x", 0, 10, {"browser.clock_offset_error_ms": 2.0}),
-                    (2, 1, "public-istio.istio-ingress", "SERVER", "POST /bff/x", 1, 14))
+        ok = trace((1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 0, 10, {"browser.clock_offset_error_ms": 5.0}),
+                   (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 1, 14))
+        bad = trace((1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 0, 10, {"browser.clock_offset_error_ms": 2.0}),
+                    (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 1, 14))
         self.assertEqual(tc.check_i3(ok, tc.LeafRegistry()), [])
         self.assertIn("browser-server tolerance 2.00", tc.check_i3(bad, tc.LeafRegistry())[0].detail)
+
+    def test_children_of_a_browser_span_cut_short_by_pagehide_may_end_after_it(self):
+        # The login's after-login call: answered, then the page navigated; trace.js ended the
+        # fetch span and the click at pagehide, while the Gateway's span was still closing.
+        cut = {"browser.clock_offset_error_ms": 2.0, "browser.ended_by": "pagehide"}
+        t = trace((1, 0, "milesstorm-web", "INTERNAL", "submit log in", 0, 30, dict(cut, **{"ui.event": "submit"})),
+                  (2, 1, "milesstorm-web", "CLIENT", "POST /api/session/after-login", 5, 30, cut),
+                  (3, 2, "public-istio.istio-ingress", "SERVER", "POST /api/session/after-login", 6, 40))
+        self.assertEqual(tc.check_i3(t, tc.LeafRegistry()), [])
+        # Still never before it, and only a browser span the page cut short.
+        early = trace((1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 10, 30, cut),
+                      (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 2, 40))
+        self.assertIn("starts before", tc.check_i3(early, tc.LeafRegistry())[0].detail)
+        server = trace((1, 0, "frontend", "SERVER", "POST /api/x", 0, 10, {"browser.ended_by": "pagehide"}),
+                       (2, 1, "frontend", "INTERNAL", "work", 1, 15))
+        self.assertEqual(len(tc.check_i3(server, tc.LeafRegistry())), 1)
 
     def test_follows_relation_is_exempt(self):
         t = trace((1, 0, "frontend", "SERVER", "GET /", 0, 10),
@@ -198,8 +214,8 @@ class I3(unittest.TestCase):
 
     def test_an_absurd_clock_error_bound_does_not_excuse_anything(self):
         for bound in (float("nan"), -1.0, 1e6):
-            t = trace((1, 0, "milesstorm-web", "CLIENT", "POST /bff/x", 0, 10, {"browser.clock_offset_error_ms": bound}),
-                      (2, 1, "public-istio.istio-ingress", "SERVER", "POST /bff/x", 1, 50_000))
+            t = trace((1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 0, 10, {"browser.clock_offset_error_ms": bound}),
+                      (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 1, 50_000))
             self.assertEqual(len(tc.check_i3(t, tc.LeafRegistry())), 1, bound)
 
 
@@ -214,11 +230,11 @@ class I4(unittest.TestCase):
         self.assertAlmostEqual(v.ms, 10)
 
     def test_cpu_parent_is_exempt_from_the_own_time_limit_but_not_from_having_children(self):
-        t = trace((1, 0, "frontend", "INTERNAL", "ssr.render", 0, 100), (2, 1, "frontend", "INTERNAL", "child", 5, 15))
-        cpu = [{"service": "frontend", "name": "ssr.render", "reason": "render"}]
+        t = trace((1, 0, "frontend", "INTERNAL", "profile_picture.convert", 0, 100), (2, 1, "frontend", "INTERNAL", "child", 5, 15))
+        cpu = [{"service": "frontend", "name": "profile_picture.convert", "reason": "image decoding"}]
         self.assertEqual(tc.check_i4(t, tc.LeafRegistry([leaf("child", "frontend")], cpu=cpu)), [])
         self.assertEqual(len(tc.check_i4(t, tc.LeafRegistry([leaf("child", "frontend")]))), 1)
-        alone = trace((1, 0, "frontend", "INTERNAL", "ssr.render", 0, 100))
+        alone = trace((1, 0, "frontend", "INTERNAL", "profile_picture.convert", 0, 100))
         self.assertEqual(len(tc.check_i4(alone, tc.LeafRegistry(cpu=cpu))), 1)
 
     def test_own_time_within_limit_passes(self):
@@ -232,7 +248,7 @@ class I4(unittest.TestCase):
 
     def test_browser_click_and_page_load_are_exempt(self):
         t = trace((1, 0, "milesstorm-web", "INTERNAL", "click /ark", 0, 500, {"ui.event": "click"}),
-                  (2, 1, "milesstorm-web", "CLIENT", "POST /bff/x", 400, 450))
+                  (2, 1, "milesstorm-web", "CLIENT", "POST /api/x", 400, 450))
         self.assertEqual(tc.check_i4(t, tc.LeafRegistry()), [])
 
     def test_follows_children_do_not_cover_parent_time(self):
@@ -265,17 +281,17 @@ class I4(unittest.TestCase):
             tc.LeafRegistry([{"service": "auth", "name": "*", "reason": "everything"}])
 
     def test_childless_server_span_is_all_own_time(self):
-        slow = trace((1, 0, "frontend", "SERVER", "POST /bff/x", 0, 300, dict(HTTP_SRV)))
+        slow = trace((1, 0, "frontend", "SERVER", "POST /api/x", 0, 300, dict(HTTP_SRV)))
         self.assertIn("childless SERVER", tc.check_i4(slow, tc.LeafRegistry())[0].detail)
-        fast = trace((1, 0, "frontend", "SERVER", "GET /assets/a.css", 0, 1.5, dict(HTTP_SRV)))
+        fast = trace((1, 0, "frontend", "SERVER", "GET /_astro/a.css", 0, 1.5, dict(HTTP_SRV)))
         self.assertEqual(tc.check_i4(fast, tc.LeafRegistry()), [])
         envoy = trace((1, 0, "public-istio.istio-ingress", "SERVER", "GET /", 0, 300, {"component": "proxy"}))
         self.assertEqual(tc.check_i4(envoy, tc.LeafRegistry()), [])
 
     def test_page_or_asset_scope(self):
         t = trace((1, 0, "frontend", "SERVER", "GET /", 0, 10, {"http.request.method": "GET", "url.path": "/"}),
-                  (2, 1, "frontend", "INTERNAL", "ssr", 0, 10))
-        api = trace((1, 0, "frontend", "SERVER", "POST /bff/x", 0, 10, dict(HTTP_SRV, **{"url.path": "/bff/x"})),
+                  (2, 1, "frontend", "CLIENT", "session.load", 0, 10))
+        api = trace((1, 0, "frontend", "SERVER", "POST /api/x", 0, 10, dict(HTTP_SRV, **{"url.path": "/api/x"})),
                     (2, 1, "frontend", "INTERNAL", "work", 0, 10))
         self.assertTrue(t.page_or_asset(t.spans[1]))
         self.assertFalse(api.page_or_asset(api.spans[1]))
@@ -382,8 +398,8 @@ class I8(unittest.TestCase):
 class Gates(unittest.TestCase):
     def setUp(self):
         self.browser_bad = trace(
-            (1, 0, "milesstorm-web", "CLIENT", "POST /bff/x", 0, 10),
-            (2, 1, "public-istio.istio-ingress", "SERVER", "POST /bff/x", 1, 50))
+            (1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 0, 10),
+            (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 1, 50))
         self.server_ok = good_server_trace()
         self.traces = [self.browser_bad, self.server_ok]
         self.viol = [v for t in self.traces for v in tc.check_trace(t, tc.RULES, tc.LeafRegistry(),
@@ -406,14 +422,14 @@ class Gates(unittest.TestCase):
     def test_a_browser_request_with_no_server_side_fails_p1(self):
         # Propagation broke: the fetch span has no SERVER child, so I3 has nothing to compare.
         t = trace((1, 0, "milesstorm-web", "INTERNAL", "click Go", 0, 20, {"ui.event": "click"}),
-                  (2, 1, "milesstorm-web", "CLIENT", "POST /bff/x", 1, 10, {"url.full": "https://milesstorm.com/bff/x"}))
+                  (2, 1, "milesstorm-web", "CLIENT", "POST /api/x", 1, 10, {"url.full": "https://milesstorm.com/bff/x"}))
         viol = tc.check_trace(t, tc.RULES, tc.LeafRegistry(), collections.defaultdict(list))
         i3, i5 = tc.evaluate_gates("P1", [t], viol, None, 0)
         self.assertTrue(i3["pass"])
         self.assertEqual((i5["failing"], i5["pass"]), (1, False))
 
     def test_a_call_to_a_traced_service_needs_its_server_span(self):
-        t = trace((1, 0, "frontend", "SERVER", "POST /bff/x", 0, 10, dict(HTTP_SRV)),
+        t = trace((1, 0, "frontend", "SERVER", "POST /api/x", 0, 10, dict(HTTP_SRV)),
                   (2, 1, "frontend", "CLIENT", "POST /internal/x", 1, 9, dict(HTTP_CLI)))
         self.assertIn("I5", rules(t))
         ark = trace((1, 0, "auth", "SERVER", "POST /x", 0, 10, dict(HTTP_SRV)),
@@ -435,8 +451,8 @@ class Gates(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             import json
             with open(os.path.join(d, "t.json"), "w") as f:
-                json.dump(doc((1, 0, "milesstorm-web", "CLIENT", "POST /bff/x", 0, 10),
-                              (2, 1, "public-istio.istio-ingress", "SERVER", "POST /bff/x", 1, 50)), f)
+                json.dump(doc((1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 0, 10),
+                              (2, 1, "public-istio.istio-ingress", "SERVER", "POST /api/x", 1, 50)), f)
             with open(os.devnull, "w") as null:
                 stdout, sys.stdout = sys.stdout, null
                 try:
@@ -457,8 +473,8 @@ class Output(unittest.TestCase):
         t = trace((1, 0, "milesstorm-web", "INTERNAL", "click", 0, 1, {}, {"deployment.environment.name": "staging"}))
         self.assertEqual(t.env, "staging")
         # The servers decide, whichever batch comes first.
-        browser = (1, 0, "milesstorm-web", "CLIENT", "POST /bff/x", 0, 9, {}, {"deployment.environment.name": "production"})
-        server = (2, 1, "frontend", "SERVER", "POST /bff/x", 1, 8, {}, {"deployment.environment.name": "staging"})
+        browser = (1, 0, "milesstorm-web", "CLIENT", "POST /api/x", 0, 9, {}, {"deployment.environment.name": "production"})
+        server = (2, 1, "frontend", "SERVER", "POST /api/x", 1, 8, {}, {"deployment.environment.name": "staging"})
         self.assertEqual(trace(browser, server).env, "staging")
         self.assertEqual(trace(server, browser).env, "staging")
 

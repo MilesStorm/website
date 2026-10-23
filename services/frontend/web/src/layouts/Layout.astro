@@ -4,10 +4,10 @@
 // spliced data is), then the `bff-inject` marker the server replaces with the trace context and
 // the viewer, then the theme (before anything paints) and the guard for islands whose script a
 // deploy removed (before any island loads), then the tracing script (classic and
-// synchronous, so fetch is wrapped before any module runs), then the CSS and the modules, which
-// Astro puts at the end of <head>.
+// synchronous, so fetch is wrapped before any module runs; built by `npm run tracing`), then the
+// CSS and the modules, which Astro puts at the end of <head>.
 import '@/styles/global.css';
-import tracingUrl from '@/vendor/tracing.js?url';
+import tracing from '@/vendor/tracing.json';
 import faviconUrl from '@/assets/favicon.ico?url';
 import Navbar from '@/components/Navbar.astro';
 import { CookieConsent } from '@/islands/CookieConsent';
@@ -82,7 +82,7 @@ const { title, description = 'Tools for game nights with friends.', noReferrer =
         });
       })();
     </script>
-    <script is:inline src={tracingUrl}></script>
+    <script is:inline src={tracing.src}></script>
     <style is:inline set:html={GATE_CSS}></style>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />

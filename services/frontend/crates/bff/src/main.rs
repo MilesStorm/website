@@ -10,9 +10,11 @@ mod emails;
 mod enshrouded;
 mod invites;
 mod json_api;
+mod limits;
 mod pages;
 mod rolls;
 mod sharing;
+mod telemetry;
 mod trace;
 #[cfg(test)]
 mod trace_tests;
@@ -327,6 +329,7 @@ async fn router(
         .route("/oauth/callback/{provider}", get(oauth_callback))
         .route("/ws/arcane", arcane_ws_route())
         .merge(json_api::router())
+        .merge(telemetry::router(std::sync::Arc::new(telemetry::Telemetry::from_env()?)))
         .route(
             "/metrics",
             get(move || async move { metric_handle.render() }),
@@ -725,16 +728,12 @@ async fn oauth_callback(
     }
 
     match crate::auth::exchange_oauth_code(&provider, &code).await {
-        Ok((token, username)) => {
+        Ok((token, username, user_id)) => {
             if crate::auth::fresh_session_id(&session).await.is_err() {
                 return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
-            if let Err(e) = session.insert("opaque_token", &token).await {
-                tracing::error!(error = %e, %provider, "oauth_callback: failed to write opaque_token");
-                return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
-            }
-            if let Err(e) = session.insert("username", username).await {
-                tracing::error!(error = %e, %provider, "oauth_callback: failed to write username");
+            if let Err(e) = crate::auth::store_identity(&session, &token, &username, user_id).await {
+                tracing::error!(error = %e, %provider, "oauth_callback: failed to store the login in the session");
                 return Redirect::to(&api_types::OAuthError::SessionFailed.login_page()).into_response();
             }
             // Came from an invite link: back to it (the invite was just redeemed).

@@ -15,7 +15,7 @@ COPY web/ ./
 RUN cp src/api/schema.d.ts /tmp/schema.d.ts && \
     npm run api:types && \
     cmp src/api/schema.d.ts /tmp/schema.d.ts && \
-    npm run vendor && \
+    npm run tracing && \
     npx astro check && \
     npm run build
 
@@ -64,15 +64,18 @@ RUN useradd -m -d /home/appuser appuser
 WORKDIR /app
 # BuildKit skips a stage nothing copies from: this makes `verify` run.
 COPY --from=verify /verified /app/.verified
-# The server binary and the Astro pages it serves.
+# The server binary, the Astro pages it serves, and the build's source maps, which it uses to
+# map browser errors and never serves (crates/bff/src/telemetry.rs).
 COPY --from=bff /app/server ./server
 COPY --from=web /app/web/dist ./web
+COPY --from=web /app/web/sourcemaps ./sourcemaps
 
 USER appuser
 
 ENV IP=0.0.0.0
 ENV PORT=80
 ENV WEB_DIST=/app/web
+ENV SOURCE_MAPS=/app/sourcemaps
 
 EXPOSE 80
 CMD ["/app/server"]
