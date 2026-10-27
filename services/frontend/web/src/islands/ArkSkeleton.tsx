@@ -48,6 +48,8 @@ export function PlayersCard({
     <StatCard
       label="Players online"
       grow
+      // One figure: a card of its own measure, not stretched across the container.
+      className="max-w-md"
       heading
       value={loading ? <Skeleton className={`${FIGURE_PLACE_GROW} w-16`} /> : value}
       footer={<div aria-live={live ? 'polite' : undefined}>{loading ? <NotePlace className="w-40" /> : note}</div>}
@@ -55,13 +57,10 @@ export function PlayersCard({
   );
 }
 
-/** The page's column: the heading and the count in a measure of their own (there is one figure
- * to show, so it isn't stretched across the container), left-aligned with the navbar's logo. */
-export const ARK_STACK = `${PAGE_STACK} max-w-3xl`;
 
 export function ArkSkeleton() {
   return (
-    <div role="status" aria-label="Loading the player count" aria-busy="true" className={ARK_STACK}>
+    <div role="status" aria-label="Loading the player count" aria-busy="true" className={PAGE_STACK}>
       <ArkHeader
         badge={<StatusPlace />}
         buttons={ARK_BUTTONS.map(([cmd, label]) => (

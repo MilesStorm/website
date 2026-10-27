@@ -65,9 +65,12 @@ export const CAMERA_COLUMN = 'flex min-w-0 flex-col gap-4';
  * for it but not for the columns (`md` up to `lg`). */
 export const SIDE_CARDS = 'grid gap-4 md:grid-cols-2 lg:grid-cols-1';
 
-/** The camera's frame: 16:9, and tall enough on a phone for the longest message it holds (the
- * camera refused: an icon, three or four lines and a button). */
-export const CAMERA_FRAME = 'relative aspect-video min-h-72 w-full overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10 sm:min-h-0';
+/** The camera's frame: 16:9 until the camera has a shape (`--camera-ratio`), which it takes below
+ * lg, up to three quarters of the screen's height; from lg 16:9 in its column. Tall enough on a
+ * phone for the longest message it holds (the camera refused: an icon, three or four lines and a
+ * button). */
+export const CAMERA_FRAME =
+  'relative aspect-[var(--camera-ratio,16/9)] max-h-[75svh] min-h-72 w-full overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10 sm:min-h-0 lg:aspect-video lg:max-h-none';
 
 export function ArcaneSkeleton() {
   return (

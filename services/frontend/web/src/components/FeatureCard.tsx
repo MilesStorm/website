@@ -84,13 +84,13 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
   );
 }
 
-/** A card's place while the viewer's permissions load: the card itself, its words in pulses (the
- * words are there, in the colour of the pulse, so every line wraps as it will and the card has
- * its height at every width), without a link or a footer. */
-export function FeatureCardPlaceholder({ feature }: { feature: Feature }) {
+/** A card's place while it loads: the card itself, its words in pulses (the words are there, in the
+ * colour of the pulse, so every line wraps as it will and the card has its height at every width),
+ * without a link; a locked card's with its border and its footer's line. */
+export function FeatureCardPlaceholder({ feature, state }: { feature: Feature; state: CardState }) {
   const pulse = 'animate-pulse rounded-md bg-muted text-transparent select-none box-decoration-clone';
   return (
-    <Card className="h-full" aria-hidden="true">
+    <Card className={cn('h-full', state === 'locked' && 'border border-dashed ring-0')} aria-hidden="true">
       <CardHeader>
         <CardTitle>
           <span className={pulse}>{feature.title}</span>
@@ -102,6 +102,13 @@ export function FeatureCardPlaceholder({ feature }: { feature: Feature }) {
           <span className={cn(ICON_BADGE, 'animate-pulse')} />
         </CardAction>
       </CardHeader>
+      {state !== 'open' && (
+        <CardFooter className="mt-auto">
+          <p className="text-xs text-muted-foreground">
+            <span className={pulse}>{NOTE[state]}</span>
+          </p>
+        </CardFooter>
+      )}
     </Card>
   );
 }

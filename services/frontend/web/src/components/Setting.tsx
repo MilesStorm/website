@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 export const SECTIONS = 'flex max-w-5xl flex-col gap-8 lg:gap-0 lg:divide-y lg:*:py-8 lg:*:first:pt-0 lg:*:last:pb-0';
 
 /** The rows of one card, with a rule between them. */
-export function SettingList({ className, ...props }: React.ComponentProps<'div'>) {
+function SettingList({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       className={cn('@container divide-y [&>*]:py-4 [&>:first-child]:pt-0 [&>:last-child]:pb-0', className)}

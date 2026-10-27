@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
  * card a third of a phone's width: a seven-digit build still fits at 360px). */
 const FIGURE = 'text-lg @[112px]/card:text-xl @[160px]/card:text-2xl @[250px]/card:text-3xl';
 /** The figure's place while it loads: its line's height. */
-export const FIGURE_PLACE = 'h-7 @[160px]/card:h-8 @[250px]/card:h-9';
+const FIGURE_PLACE = 'h-7 @[160px]/card:h-8 @[250px]/card:h-9';
 /** The same for a card that `grow`s: a step larger once the card has the room (a desktop's
  * wide tiles; the phone's and the dashboard's cards stay as they were). */
 const FIGURE_GROW = `${FIGURE} @[340px]/card:text-4xl @[480px]/card:text-5xl`;
@@ -58,7 +58,7 @@ export function StatCard({
   );
   return (
     <Card
-      className={cn('@container/card', compact && '[--card-spacing:--spacing(3)] sm:[--card-spacing:--spacing(6)]', className)}
+      className={cn('@container/card', compact && '[--card-spacing:--spacing(3)]', className)}
     >
       <CardHeader>
         <CardDescription>{heading ? <h2>{text}</h2> : text}</CardDescription>

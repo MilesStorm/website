@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ButtonPlace } from '@/components/Placeholders';
 import { PageHeader } from '@/components/PageHeader';
-import { PAGE_STACK } from '@/lib/layout';
+import { COLUMN_GAP_LG, PAGE_STACK } from '@/lib/layout';
 import { FIGURE_PLACE_GROW, Meter, NotePlace, StatCard, StatNote, StatusPlace } from '@/components/ServerCards';
 
 // The Enshrouded panel's frame, shared by the panel (islands/EnshroudedPanel.tsx) and its
@@ -27,7 +27,7 @@ export function EnshroudedHeader({ badge, buttons }: { badge?: ReactNode; button
 /** The figures: players of the slots, uptime and the running build. Their gap from `lg` is the
  * grid's under them (who's on over two of these columns, the commands over the third). */
 export function Figures({ children }: { children: ReactNode }) {
-  return <div className="grid grid-cols-3 gap-2 sm:gap-4 lg:gap-8">{children}</div>;
+  return <div className={`grid grid-cols-3 gap-2 sm:gap-4 ${COLUMN_GAP_LG}`}>{children}</div>;
 }
 
 export function EnshroudedSkeleton() {

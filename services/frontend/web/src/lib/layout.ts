@@ -10,8 +10,12 @@ export const CONTAINER = 'mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8';
 /** A page's vertical rhythm: the space above and below its content. */
 export const PAGE_PADDING = 'py-8 sm:py-10 lg:py-12';
 
+/** The gap between columns from `lg`, the same as between sections: a row of tiles lines up with
+ * the grid of cards under it. */
+export const COLUMN_GAP_LG = 'lg:gap-8';
+
 /** The gap between a page's sections (its header, then each block of content). */
-export const PAGE_GAP = 'gap-6 lg:gap-8';
+export const PAGE_GAP = `gap-6 ${COLUMN_GAP_LG}`;
 
 /** A page's content column: what Page.astro puts in <main>, and what an island that fills the
  * page returns as its outermost element so its sections keep the same gap. */

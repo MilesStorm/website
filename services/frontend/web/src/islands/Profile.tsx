@@ -298,7 +298,7 @@ function EmailSetting({ account }: { account: Account }) {
 /** An address with a break opportunity after its @ and each dot, so a long one wraps between
  * its parts instead of in the middle of one. */
 function breakable(address: string) {
-  return address.split(/(?<=[@.])/).map((part, i) => (
+  return (address.match(/[^@.]+[@.]?|[@.]/g) ?? [address]).map((part, i) => (
     <Fragment key={i}>
       {i > 0 && <wbr />}
       {part}

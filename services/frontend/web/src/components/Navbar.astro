@@ -32,8 +32,11 @@ const current = (href: Href) => (href === here ? 'page' : undefined);
 
 <!-- Translucent and blurred, like ui.shadcn.com's header, and fading out over its last 20px (the mask
      takes its blur with it): the storm behind the hero and the page scrolling under the header
-     pass behind it with no edge where they meet it. Plain background where the browser can't blur. -->
-<header class="sticky top-0 z-40 w-full bg-background supports-[backdrop-filter]:bg-background/60 supports-[backdrop-filter]:backdrop-blur-md supports-[backdrop-filter]:[mask-image:linear-gradient(to_bottom,#000_calc(100%-20px),transparent)]">
+     pass behind it with no edge where they meet it. Plain background where the browser can't blur.
+     The background is a layer of its own: a mask on the header would also hide the phone menu,
+     which hangs below it. -->
+<header class="sticky top-0 z-40 isolate w-full">
+  <div aria-hidden="true" class="absolute inset-0 -z-10 bg-background supports-[backdrop-filter]:bg-background/60 supports-[backdrop-filter]:backdrop-blur-md supports-[backdrop-filter]:[mask-image:linear-gradient(to_bottom,#000_calc(100%-20px),transparent)]"></div>
   <nav aria-label="Main" class:list={[CONTAINER, 'flex h-16 items-center gap-2']}>
     <a href="/" class="mr-4 flex items-center gap-2 font-semibold">
       <Logo class="size-6" />

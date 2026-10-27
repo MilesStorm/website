@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Bug, CameraOff, LoaderCircle, Unplug } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -99,6 +99,8 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
   const [timings, setTimings] = useState('');
   // Bumped by Reconnect: a new session, camera and connection.
   const [round, setRound] = useState(0);
+  // The camera's shape, once it has one (`w / h`): the frame takes it below lg (CAMERA_FRAME).
+  const [ratio, setRatio] = useState<string | null>(null);
 
   useEffect(() => {
     let left = false;
@@ -151,6 +153,7 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
       const h = Math.max(1, v.videoHeight);
       cap.width = overlay.current!.width = w;
       cap.height = overlay.current!.height = h;
+      setRatio(`${w} / ${h}`);
 
       const ws = new globalThis.WebSocket(wsUrl('/ws/arcane'));
       socket = ws;
@@ -244,9 +247,10 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
   return (
     <div className={ARCANE_GRID}>
       <div className={CAMERA_COLUMN}>
-        <div className={CAMERA_FRAME}>
+        <div className={CAMERA_FRAME} style={ratio ? ({ '--camera-ratio': ratio } as CSSProperties) : undefined}>
           {/* Whatever shape the camera has, it is fitted inside the frame (the overlay with it,
-              so the boxes stay on the dice); the frame itself never changes size. */}
+              so the boxes stay on the dice). Below lg the frame takes the camera's shape (a phone
+              held upright films 9:16); from lg it stays 16:9 in its column. */}
           <video
             ref={video}
             className="absolute inset-0 size-full object-contain"

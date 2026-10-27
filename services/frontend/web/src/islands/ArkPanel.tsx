@@ -6,7 +6,8 @@ import { FormAlert } from '@/components/FormAlert';
 import { StatNote, StatusBadge } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
-import { ARK_BUTTONS, ARK_STACK, ArkHeader, PlayersCard } from '@/islands/ArkSkeleton';
+import { ARK_BUTTONS, ArkHeader, PlayersCard } from '@/islands/ArkSkeleton';
+import { PAGE_STACK } from '@/lib/layout';
 import { island } from '@/lib/island';
 
 type Command = Schemas['ArkCommand'];
@@ -71,7 +72,7 @@ export const ArkPanel = island('ArkPanel', function ArkPanel() {
   const shown = n === undefined ? null : players(n);
   const online = n !== undefined && n !== null;
   return (
-    <div className={ARK_STACK}>
+    <div className={PAGE_STACK}>
       <ArkHeader
         badge={shown && <StatusBadge tone={online ? 'online' : 'off'} label={online ? 'Online' : shown.value} />}
         buttons={ARK_BUTTONS.map(([cmd, label], i) => (
