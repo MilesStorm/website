@@ -1,12 +1,80 @@
 ---
-// The storm behind the start page's hero: a soft glow over the heading and a faint rain of dots,
-// fading out towards the edges and the cards below. Neutral: the theme's own foreground.
+// The storm behind the start page's hero: a soft glow over the heading and a rain of dots, fading
+// out towards the edges and the cards below. Neutral: the theme's own foreground. Stronger by
+// default for plain sRGB screens, where faint greys sink into the black; quieter on wide-gamut
+// ones. With motion on (the profile's choice, else the system's), a canvas takes over the dots
+// (rain, strikes, the pointer parting them); without it, the CSS dots stay as a still frame.
 ---
 
-<div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[36rem] overflow-hidden">
-  <div class="absolute top-24 left-1/2 h-64 w-[40rem] max-w-full -translate-x-1/2 rounded-full bg-foreground/[0.07] blur-3xl"></div>
+<div aria-hidden="true" class="storm pointer-events-none absolute inset-x-0 top-0 -z-10 h-[36rem] overflow-hidden">
   <div
-    class="absolute inset-0 opacity-70 [background-image:radial-gradient(color-mix(in_oklab,var(--foreground)_16%,transparent)_1px,transparent_1px)] [background-size:18px_18px] [mask-image:radial-gradient(ellipse_50%_55%_at_50%_35%,black,transparent_85%)]"
+    class="storm-glow absolute top-24 left-1/2 h-64 w-[40rem] max-w-full -translate-x-1/2 rounded-full blur-3xl"
   >
   </div>
+  <div
+    class="storm-flash absolute top-24 left-1/2 h-64 w-[40rem] max-w-full -translate-x-1/2 rounded-full opacity-0 blur-3xl"
+  >
+  </div>
+  <div class="storm-dots absolute inset-0"></div>
+  <canvas class="storm-canvas absolute inset-0 hidden size-full"></canvas>
 </div>
+
+<style>
+  .storm {
+    --storm-dot: 20%;
+    --storm-dot-r: 1.3px;
+    --storm-glow: 14%;
+  }
+  @media (color-gamut: p3) {
+    .storm {
+      --storm-dot: 12%;
+      --storm-dot-r: 1px;
+      --storm-glow: 8.5%;
+    }
+  }
+  .storm-glow {
+    background: color-mix(in oklab, var(--foreground) var(--storm-glow), transparent);
+  }
+  .storm-flash {
+    background: color-mix(in oklab, var(--foreground) 22%, transparent);
+    will-change: opacity;
+  }
+  .storm-dots {
+    background-image: radial-gradient(
+      color-mix(in oklab, var(--foreground) var(--storm-dot), transparent) var(--storm-dot-r),
+      transparent var(--storm-dot-r)
+    );
+    background-size: 18px 18px;
+    mask-image: radial-gradient(ellipse 50% 55% at 50% 35%, black, transparent 85%);
+  }
+  .storm[data-live] .storm-dots {
+    display: none;
+  }
+  .storm[data-live] .storm-canvas {
+    display: block;
+  }
+  /* Motion: the choice on <html> (the profile's Motion card), else the system's. */
+  @media (prefers-reduced-motion: no-preference) {
+    :global(:root:not([data-motion='reduced'])) .storm-glow {
+      animation: storm-breathe 5.2s ease-in-out infinite alternate;
+    }
+  }
+  :global(:root[data-motion='full']) .storm-glow {
+    animation: storm-breathe 5.2s ease-in-out infinite alternate;
+  }
+  @keyframes storm-breathe {
+    from {
+      opacity: 0.78;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+</style>
+
+<script>
+  import { startStorm } from '@/lib/storm';
+
+  const root = document.querySelector<HTMLElement>('.storm');
+  if (root) startStorm(root);
+</script>

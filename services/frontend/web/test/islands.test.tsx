@@ -39,6 +39,20 @@ describe('the theme toggle', () => {
   });
 });
 
+describe('the motion toggle', () => {
+  it('saves the choice and marks the page', async () => {
+    const { MotionToggle } = await import('@/islands/MotionToggle');
+    render(<MotionToggle />);
+    await userEvent.click(screen.getByRole('button', { name: 'Motion: System' }));
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'Reduced' }));
+    expect(localStorage.getItem('ms.motion')).toBe('reduced');
+    expect(document.documentElement.getAttribute('data-motion')).toBe('reduced');
+    await userEvent.click(screen.getByRole('button', { name: 'Motion: Reduced' }));
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'System' }));
+    expect(document.documentElement.hasAttribute('data-motion')).toBe(false);
+  });
+});
+
 describe('the cookie notice', () => {
   it('stays away once accepted', async () => {
     // jsdom has no ResizeObserver; the notice's room is the next test's.

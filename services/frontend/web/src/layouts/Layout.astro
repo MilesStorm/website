@@ -12,7 +12,7 @@ import faviconUrl from '@/assets/favicon.ico?url';
 import Navbar from '@/components/Navbar.astro';
 import { CookieConsent } from '@/islands/CookieConsent';
 import { GATE_CSS } from '@/lib/gates';
-import { OLD_KEYS, THEME_KEY } from '@/lib/theme';
+import { MOTION_KEY, OLD_KEYS, THEME_KEY } from '@/lib/theme';
 
 interface Props {
   title: string;
@@ -29,26 +29,35 @@ const { title, description = 'Tools for game nights with friends.', noReferrer =
   <head>
     <meta charset="utf-8" />
     <meta name="bff-inject" />
-    <script is:inline define:vars={{ themeKey: THEME_KEY, oldKeys: OLD_KEYS }}>
-      // Dark unless the saved theme, or the system's when there is none, is light. The first
-      // visit also drops the Dioxus app's saved theme and cookie choice (a one-time reset).
+    <script is:inline define:vars={{ themeKey: THEME_KEY, motionKey: MOTION_KEY, oldKeys: OLD_KEYS }}>
+      // Dark unless the saved theme, or the system's when there is none, is light; `data-motion`
+      // for a saved motion choice. The first visit also drops the Dioxus app's saved theme and
+      // cookie choice (a one-time reset).
       var saved = null;
+      var motion = null;
       try {
         if (localStorage.getItem(themeKey) === null) {
           oldKeys.forEach(function (k) { localStorage.removeItem(k); });
           localStorage.setItem(themeKey, 'system');
         }
         saved = localStorage.getItem(themeKey);
+        motion = localStorage.getItem(motionKey);
       } catch (e) {}
       var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
       function apply() {
         var dark = saved === 'dark' || (saved !== 'light' && (!media || media.matches));
         document.documentElement.classList.toggle('dark', dark);
       }
+      function applyMotion() {
+        if (motion === 'reduced' || motion === 'full') document.documentElement.setAttribute('data-motion', motion);
+        else document.documentElement.removeAttribute('data-motion');
+      }
       apply();
+      applyMotion();
       if (media && media.addEventListener) media.addEventListener('change', apply);
       window.addEventListener('storage', function (e) {
         if (e.key === themeKey) { saved = e.newValue; apply(); }
+        if (e.key === motionKey) { motion = e.newValue; applyMotion(); }
       });
     </script>
     <script is:inline>
