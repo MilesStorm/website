@@ -1,6 +1,7 @@
 // The start page's storm in motion: drops of light falling down the dot grid, a branching strike
 // every so often, and the pointer parting the dots around it. Draws the same grid and fade as the
 // CSS still frame in Storm.astro, which it replaces only while motion is allowed and it is on screen.
+import { motionOn } from '@/lib/theme';
 
 const GRID = 18;
 const FALLOFF = 170;
@@ -29,7 +30,6 @@ export function startStorm(root: HTMLElement) {
   const ctx = canvas?.getContext('2d');
   if (!canvas || !flash || !ctx) return;
 
-  const motion = matchMedia('(prefers-reduced-motion: no-preference)');
   let width = 0;
   let height = 0;
   let dots: Dot[] = [];
@@ -221,7 +221,7 @@ export function startStorm(root: HTMLElement) {
   }
 
   function run() {
-    const live = motion.matches && visible && !document.hidden;
+    const live = motionOn() && visible && !document.hidden;
     root.toggleAttribute('data-live', live);
     if (live && !frame) {
       readStyle();
@@ -259,11 +259,12 @@ export function startStorm(root: HTMLElement) {
   new ResizeObserver(() => {
     if (frame) layout();
   }).observe(canvas);
-  // The theme script toggles `.dark` on <html>.
-  new MutationObserver(readStyle).observe(document.documentElement, {
-    attributeFilter: ['class'],
-  });
+  // The theme script toggles `.dark` on <html>, and sets `data-motion` for a motion choice.
+  new MutationObserver(() => {
+    readStyle();
+    run();
+  }).observe(document.documentElement, { attributeFilter: ['class', 'data-motion'] });
   matchMedia('(color-gamut: p3)').addEventListener('change', readStyle);
-  motion.addEventListener('change', run);
+  matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', run);
   document.addEventListener('visibilitychange', run);
 }

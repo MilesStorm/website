@@ -4,6 +4,7 @@ import Page from '@/components/Page.astro';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardAction, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ModeToggle } from '@/islands/ModeToggle';
+import { MotionToggle } from '@/islands/MotionToggle';
 import { Profile } from '@/islands/Profile';
 import { ProfileSkeleton } from '@/islands/ProfileSkeleton';
 ---
@@ -18,6 +19,13 @@ import { ProfileSkeleton } from '@/islands/ProfileSkeleton';
         <CardTitle><h2>Site theme</h2></CardTitle>
         <CardDescription>Saved in this browser.</CardDescription>
         <CardAction><ModeToggle client:load /></CardAction>
+      </CardHeader>
+    </Card>
+    <Card>
+      <CardHeader>
+        <CardTitle><h2>Motion</h2></CardTitle>
+        <CardDescription>The start page's storm and the theme switch. Saved in this browser.</CardDescription>
+        <CardAction><MotionToggle client:load /></CardAction>
       </CardHeader>
     </Card>
     <Card>

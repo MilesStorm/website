@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -9,13 +9,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useMenu } from '@/lib/menu';
-import { THEME_KEY, getTheme, setTheme, type Theme } from '@/lib/theme';
+import { THEME_KEY, getTheme, switchTheme, type Theme } from '@/lib/theme';
 import { island } from '@/lib/island';
 
 /** Light, dark or the system's theme (shadcn's Astro mode toggle). */
 export const ModeToggle = island('ModeToggle', function ModeToggle() {
   const [theme, set] = useState<Theme>('system');
   const menu = useMenu();
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     set(getTheme());
     // Chosen in another tab: the page follows (the layout's script), and so does the menu.
@@ -27,13 +28,13 @@ export const ModeToggle = island('ModeToggle', function ModeToggle() {
   }, []);
   const choose = (value: string) => {
     const next = value as Theme;
-    setTheme(next);
+    switchTheme(next, button.current);
     set(next);
   };
   return (
     <DropdownMenu {...menu.root}>
       <DropdownMenuTrigger asChild {...menu.trigger}>
-        <Button variant="ghost" size="icon" aria-label="Theme" data-faro-user-action-name="theme">
+        <Button ref={button} variant="ghost" size="icon" aria-label="Theme" data-faro-user-action-name="theme">
           <Sun className="scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" />
           <Moon className="absolute scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" />
         </Button>

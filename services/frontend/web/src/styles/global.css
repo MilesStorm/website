@@ -139,3 +139,10 @@
     scroll-padding-bottom: var(--consent-h, 0);
     }
 }
+/* A theme switch (lib/theme.ts, switchTheme): the new page grows over the old in a circle from the
+   toggle, so neither snapshot fades. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}

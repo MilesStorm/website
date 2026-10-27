@@ -2,8 +2,8 @@
 // The storm behind the start page's hero: a soft glow over the heading and a rain of dots, fading
 // out towards the edges and the cards below. Neutral: the theme's own foreground. Stronger by
 // default for plain sRGB screens, where faint greys sink into the black; quieter on wide-gamut
-// ones. With motion allowed, a canvas takes over the dots (rain, strikes, the pointer parting
-// them); without it, the CSS dots stay as a still frame.
+// ones. With motion on (the profile's choice, else the system's), a canvas takes over the dots
+// (rain, strikes, the pointer parting them); without it, the CSS dots stay as a still frame.
 ---
 
 <div aria-hidden="true" class="storm pointer-events-none absolute inset-x-0 top-0 -z-10 h-[36rem] overflow-hidden">
@@ -53,10 +53,14 @@
   .storm[data-live] .storm-canvas {
     display: block;
   }
+  /* Motion: the choice on <html> (the profile's Motion card), else the system's. */
   @media (prefers-reduced-motion: no-preference) {
-    .storm-glow {
+    :global(:root:not([data-motion='reduced'])) .storm-glow {
       animation: storm-breathe 5.2s ease-in-out infinite alternate;
     }
+  }
+  :global(:root[data-motion='full']) .storm-glow {
+    animation: storm-breathe 5.2s ease-in-out infinite alternate;
   }
   @keyframes storm-breathe {
     from {
