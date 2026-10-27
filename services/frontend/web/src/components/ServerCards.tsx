@@ -12,20 +12,27 @@ import { cn } from '@/lib/utils';
 // placeholder.
 
 /** The figure's size: by the card's own width, as in shadcn's dashboard (and small enough for a
- * card a third of a phone's width). */
-const FIGURE = 'text-xl @[160px]/card:text-2xl @[250px]/card:text-3xl';
+ * card a third of a phone's width: a seven-digit build still fits at 360px). */
+const FIGURE = 'text-lg @[112px]/card:text-xl @[160px]/card:text-2xl @[250px]/card:text-3xl';
 /** The figure's place while it loads: its line's height. */
 export const FIGURE_PLACE = 'h-7 @[160px]/card:h-8 @[250px]/card:h-9';
+/** The same for a card that `grow`s: a step larger once the card has the room (a desktop's
+ * wide tiles; the phone's and the dashboard's cards stay as they were). */
+const FIGURE_GROW = `${FIGURE} @[340px]/card:text-4xl @[480px]/card:text-5xl`;
+export const FIGURE_PLACE_GROW = `${FIGURE_PLACE} @[340px]/card:h-10 @[480px]/card:h-12`;
 
 /** A figure at a glance. `shortLabel`: what a phone's narrow card
  * says instead (the label stays its name). `heading`: the label names the section (an h2). `live`: the figure is
- * read out when it changes. `compact`: less padding on a phone, for cards side by side. */
+ * read out when it changes. `compact`: less padding on a phone, for cards side by side. `grow`: the
+ * figure steps up to 4xl in a card 340px wide, 5xl at 480px. `className`: for the card. */
 export function StatCard({
   label,
   shortLabel,
   heading = false,
   live = false,
   compact = false,
+  grow = false,
+  className,
   value,
   footer,
 }: {
@@ -34,6 +41,8 @@ export function StatCard({
   heading?: boolean;
   live?: boolean;
   compact?: boolean;
+  grow?: boolean;
+  className?: string;
   value: ReactNode;
   footer?: ReactNode;
 }) {
@@ -48,11 +57,13 @@ export function StatCard({
     label
   );
   return (
-    <Card className={cn('@container/card', compact && '[--card-spacing:--spacing(3)] sm:[--card-spacing:--spacing(6)]')}>
+    <Card
+      className={cn('@container/card', compact && '[--card-spacing:--spacing(3)] sm:[--card-spacing:--spacing(6)]', className)}
+    >
       <CardHeader>
         <CardDescription>{heading ? <h2>{text}</h2> : text}</CardDescription>
         <CardTitle
-          className={`${FIGURE} truncate font-semibold tabular-nums`}
+          className={`${grow ? FIGURE_GROW : FIGURE} truncate font-semibold tabular-nums`}
           aria-live={live ? 'polite' : undefined}
           // Cut short in a narrow card: the whole figure on hover.
           title={typeof value === 'string' ? value : undefined}

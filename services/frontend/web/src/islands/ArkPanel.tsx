@@ -6,7 +6,7 @@ import { FormAlert } from '@/components/FormAlert';
 import { StatNote, StatusBadge } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
-import { ARK_BUTTONS, ArkHeader, PlayersCard } from '@/islands/ArkSkeleton';
+import { ARK_BUTTONS, ARK_STACK, ArkHeader, PlayersCard } from '@/islands/ArkSkeleton';
 import { island } from '@/lib/island';
 
 type Command = Schemas['ArkCommand'];
@@ -71,11 +71,19 @@ export const ArkPanel = island('ArkPanel', function ArkPanel() {
   const shown = n === undefined ? null : players(n);
   const online = n !== undefined && n !== null;
   return (
-    <div className="flex flex-col gap-6">
+    <div className={ARK_STACK}>
       <ArkHeader
         badge={shown && <StatusBadge tone={online ? 'online' : 'off'} label={online ? 'Online' : shown.value} />}
         buttons={ARK_BUTTONS.map(([cmd, label], i) => (
-          <Button key={cmd} variant={i === 0 ? 'default' : 'outline'} disabled={running !== null} onClick={() => void run(cmd)} data-faro-user-action-name={`ark ${cmd}`}>
+          <Button
+            key={cmd}
+            variant={i === 0 ? 'default' : 'outline'}
+            disabled={running !== null}
+            onClick={() => void run(cmd)}
+            // Stop has no confirmation: its consequence is read out with the button.
+            aria-description={cmd === 'stop' ? 'Shuts the game server down and disconnects its players.' : undefined}
+            data-faro-user-action-name={`ark ${cmd}`}
+          >
             {running === cmd ? `${label}…` : label}
           </Button>
         ))}

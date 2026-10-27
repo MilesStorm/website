@@ -7,8 +7,16 @@ const NOTE: Record<Exclude<CardState, 'open'>, string> = {
   preview: 'For invited accounts.',
 };
 
-/** The start page's rows of cards: as many columns as fit, so no row has a hole whatever the count. */
-export const CARD_GRID = 'grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-4';
+/** The start page's cards: a column on a phone, two from `sm`, three from `lg`. A card is as tall
+ * as its text, and the cards of a row are as tall as the tallest. */
+export const CARD_GRID = 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3';
+
+/** The logged-out page's two previews: two cards of at most 28rem each, in the middle under the
+ * hero (not stretched across the whole container on a wide screen). */
+export const PREVIEW_GRID = 'mx-auto grid w-full max-w-4xl gap-4 sm:grid-cols-2';
+
+/** What a card's icon sits in. */
+const ICON_BADGE = 'grid size-9 place-items-center rounded-full bg-muted text-foreground';
 
 /** A part of the site, like the demo cards on ui.shadcn.com's front page: a link when it's open
  * to the viewer (over the whole card, which answers the pointer and the keyboard), a description
@@ -21,7 +29,7 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
   return (
     <Card
       className={cn(
-        'relative h-full min-h-40',
+        'relative h-full',
         open &&
           'transition-colors hover:bg-muted/50 hover:ring-foreground/20 has-[a:focus-visible]:ring-3 has-[a:focus-visible]:ring-ring/50',
         state === 'locked' && 'border border-dashed ring-0',
@@ -35,7 +43,8 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
         <CardAction>
           <span
             className={cn(
-              'grid size-9 place-items-center rounded-full bg-muted text-foreground transition-colors',
+              ICON_BADGE,
+              'transition-colors',
               open &&
                 'group-hover/card:bg-primary group-hover/card:text-primary-foreground group-has-[a:focus-visible]/card:bg-primary group-has-[a:focus-visible]/card:text-primary-foreground',
             )}
@@ -71,6 +80,28 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
           className="absolute inset-0 outline-none"
         />
       )}
+    </Card>
+  );
+}
+
+/** A card's place while the viewer's permissions load: the card itself, its words in pulses (the
+ * words are there, in the colour of the pulse, so every line wraps as it will and the card has
+ * its height at every width), without a link or a footer. */
+export function FeatureCardPlaceholder({ feature }: { feature: Feature }) {
+  const pulse = 'animate-pulse rounded-md bg-muted text-transparent select-none box-decoration-clone';
+  return (
+    <Card className="h-full" aria-hidden="true">
+      <CardHeader>
+        <CardTitle>
+          <span className={pulse}>{feature.title}</span>
+        </CardTitle>
+        <CardDescription>
+          <span className={pulse}>{feature.text}</span>
+        </CardDescription>
+        <CardAction>
+          <span className={cn(ICON_BADGE, 'animate-pulse')} />
+        </CardAction>
+      </CardHeader>
     </Card>
   );
 }

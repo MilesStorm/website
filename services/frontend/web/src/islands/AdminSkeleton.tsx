@@ -24,13 +24,22 @@ export const TABS = [
  * a user's name, address and roles' badges; a role's name and permissions' badges; an invite's
  * note, role badge, uses, date and status badge, and no pulse for its button. */
 export const USERS_HEAD = ['Username', 'Email', 'Roles'];
+export const USERS_COLS = ['lg:w-[22%]', 'lg:w-[32%]', ''];
 export const USER_CELLS = ['h-5 w-24', 'h-5 w-40', 'h-6 w-44 rounded-4xl'];
 export const ROLES_HEAD = ['Role', 'Permissions'];
+export const ROLES_COLS = ['lg:w-[22%]', ''];
 export const ROLE_CELLS = ['h-5 w-24', 'h-6 w-72 rounded-4xl'];
 /** The usual answer: a handful of roles, far fewer than a page. */
 export const ROLE_ROWS = 5;
 export const INVITES_HEAD = ['Note', 'Role', 'Used', 'Until (UTC)', 'Status'];
+export const INVITES_COLS = ['', 'lg:w-[12%]', 'lg:w-[9%]', 'lg:w-[13%]', 'lg:w-[12%]', 'lg:w-[12%]'];
 export const INVITE_CELLS = ['h-5 w-28', 'h-5 w-20 rounded-4xl', 'h-5 w-10', 'h-5 w-20', 'h-5 w-16 rounded-4xl', ''];
+
+/** Below `lg` the table sizes its columns to what is in them; from `lg` the widths are fixed (the
+ * `*_COLS`, as shares of the card; the column without one takes the rest), so the columns stay put
+ * from page to page and search to search, and a long address is cut short (its whole text on
+ * hover) instead of pushing the roles aside. */
+export const CUT = 'lg:truncate';
 
 /** On a phone a row is no table row but a stack of its cells (the heads are left to assistive
  * technology): one cell under the other for a user and a role; for an invite, the note on a
@@ -39,7 +48,7 @@ export const STACKED = 'max-sm:grid max-sm:gap-1 max-sm:px-5 max-sm:py-3';
 export const STACKED_WRAP =
   'max-sm:flex max-sm:flex-wrap max-sm:items-center max-sm:gap-x-3 max-sm:gap-y-1 max-sm:px-5 max-sm:py-3 max-sm:[&>td:first-child]:basis-full';
 /** The cell with the badges takes the room left. */
-export const FILL_CELL = 'w-full min-w-56 whitespace-normal max-sm:min-w-0';
+export const FILL_CELL = 'w-full min-w-56 whitespace-normal max-sm:min-w-0 lg:min-w-0';
 
 /** The tabs, with `children` as the open tab's contents. */
 export function AdminTabs({ children, inert, ...props }: React.ComponentProps<typeof Tabs> & { inert?: boolean }) {
@@ -61,7 +70,7 @@ export function AdminTabs({ children, inert, ...props }: React.ComponentProps<ty
 /** A listing's search box, with the magnifier inside it. */
 export function SearchField(props: React.ComponentProps<typeof Input>) {
   return (
-    <div className="relative w-full sm:max-w-xs">
+    <div className="relative w-full sm:max-w-sm">
       <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input type="search" className="pl-9" {...props} />
     </div>
@@ -70,26 +79,36 @@ export function SearchField(props: React.ComponentProps<typeof Input>) {
 
 /** A table in a card: the column heads on a muted band, the rows under them. With `actions`, a
  * last column of buttons, named for assistive technology only. */
-export function TableCard({ head, actions = false, children }: { head: string[]; actions?: boolean; children: React.ReactNode }) {
+export function TableCard({
+  head,
+  cols,
+  actions = false,
+  children,
+}: {
+  head: string[];
+  cols: string[];
+  actions?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <Card className="gap-0 py-0">
       {/* Explicit roles: a phone's stacked rows aren't table layout, and some browsers then drop the table. */}
       <Table
         role="table"
         className={cn(
-          'sm:[&_td:first-child]:pl-5 sm:[&_td:last-child]:pr-5 [&_th:first-child]:pl-5 [&_th:last-child]:pr-5',
+          'lg:table-fixed sm:[&_td:first-child]:pl-5 sm:[&_td:last-child]:pr-5 [&_th:first-child]:pl-5 [&_th:last-child]:pr-5',
           'max-sm:block max-sm:[&_tbody]:block max-sm:[&_td]:p-0',
         )}
       >
         <TableHeader role="rowgroup" className="bg-muted/50 max-sm:sr-only">
           <TableRow role="row" className="hover:bg-transparent">
-            {head.map((h) => (
-              <TableHead key={h} role="columnheader">
+            {head.map((h, i) => (
+              <TableHead key={h} role="columnheader" className={cols[i]}>
                 {h}
               </TableHead>
             ))}
             {actions && (
-              <TableHead role="columnheader">
+              <TableHead role="columnheader" className={cols[head.length]}>
                 <span className="sr-only">Actions</span>
               </TableHead>
             )}
@@ -152,6 +171,9 @@ export const INVITE_FORM = {
   make: 'Make link',
 };
 
+/** The form's fields: two across, and from `lg` all four in a row. */
+export const INVITE_FIELDS = 'grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-end';
+
 /** The invites tab's place until the roles (its form's choices) are in: the form card with its
  * own text and a pulse for each field and the button, then the list's. */
 export function InvitesSkeleton() {
@@ -164,7 +186,7 @@ export function InvitesSkeleton() {
           </CardTitle>
           <CardDescription>{INVITE_FORM.intro}</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        <CardContent className={INVITE_FIELDS}>
           {[INVITE_FORM.role, INVITE_FORM.note, INVITE_FORM.days, INVITE_FORM.uses].map((label) => (
             <Field key={label}>
               <FieldLabel>{label}</FieldLabel>
@@ -181,7 +203,7 @@ export function InvitesSkeleton() {
           </span>
         </CardFooter>
       </Card>
-      <TableCard head={INVITES_HEAD} actions>
+      <TableCard head={INVITES_HEAD} cols={INVITES_COLS} actions>
         <PlaceholderRows cells={INVITE_CELLS} rows={3} stacked={STACKED_WRAP} />
       </TableCard>
     </div>
@@ -190,11 +212,11 @@ export function InvitesSkeleton() {
 
 /** A listing's place while the panel loads: `rows` rows (the usual answer), with a pulse where each row's
  * details go. */
-export function ListingSkeleton({ head, cells, rows }: { head: string[]; cells: string[]; rows: number }) {
+export function ListingSkeleton({ head, cols, cells, rows }: { head: string[]; cols: string[]; cells: string[]; rows: number }) {
   return (
     <div className="flex flex-col gap-4">
-      <Skeleton className="h-9 w-full rounded-4xl sm:max-w-xs" />
-      <TableCard head={head}>
+      <Skeleton className="h-9 w-full rounded-4xl sm:max-w-sm" />
+      <TableCard head={head} cols={cols}>
         <PlaceholderRows cells={cells} rows={rows} fill />
       </TableCard>
       <ListingFooter>
@@ -210,7 +232,7 @@ export function AdminSkeleton() {
     <div role="status" aria-label="Loading" aria-busy="true">
       <AdminTabs defaultValue="users" inert>
         <TabsContent value="users">
-          <ListingSkeleton head={USERS_HEAD} cells={USER_CELLS} rows={PAGE_SIZE} />
+          <ListingSkeleton head={USERS_HEAD} cols={USERS_COLS} cells={USER_CELLS} rows={PAGE_SIZE} />
         </TabsContent>
       </AdminTabs>
     </div>

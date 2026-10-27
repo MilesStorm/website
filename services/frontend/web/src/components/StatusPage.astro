@@ -13,23 +13,21 @@ interface Props {
 const { code, title } = Astro.props;
 ---
 
-<main class="relative isolate">
-  <div class="relative mx-auto max-w-5xl">
+<main class="relative isolate overflow-x-clip">
+  <section class="relative mx-auto flex max-w-xl flex-col items-center gap-2 px-4 pt-12 pb-16 text-center md:pt-20 lg:pt-24">
     <Storm client:idle />
-    <section class="mx-auto flex max-w-xl flex-col items-center gap-2 px-4 pt-12 pb-16 text-center md:pt-20 lg:pt-24">
-      <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5 tabular-nums')}>
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>
-        </svg>
-        {code}
-      </p>
-      <h1 class="text-3xl font-semibold tracking-tight text-balance md:text-4xl">{title}</h1>
-      <div class="flex flex-col gap-1 text-balance text-muted-foreground">
-        <slot />
-      </div>
-      <div class="flex flex-wrap items-center justify-center gap-2 pt-4">
-        <slot name="actions" />
-      </div>
-    </section>
-  </div>
+    <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5 tabular-nums')}>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>
+      </svg>
+      {code}
+    </p>
+    <h1 class="text-3xl font-semibold tracking-tight text-balance md:text-4xl">{title}</h1>
+    <div class="flex flex-col gap-1 text-balance text-muted-foreground">
+      <slot />
+    </div>
+    <div class="flex flex-wrap items-center justify-center gap-2 pt-4">
+      <slot name="actions" />
+    </div>
+  </section>
 </main>

@@ -1,9 +1,11 @@
-import { CARD_GRID } from '@/components/FeatureCard';
+import { CARD_GRID, FeatureCardPlaceholder } from '@/components/FeatureCard';
+import { FEATURES } from '@/lib/features';
 import { Storm } from './Storm';
 import { Skeleton } from '@/components/ui/skeleton';
 
 /** The logged-in start page's shape while it loads: the hero's own lines with a pulse for the
- * picture and the name, so nothing moves when it arrives; the cards' places below. */
+ * picture and the name, so nothing moves when it arrives; the cards' places below: every part of
+ * the site, as it reads for someone who may open them all, in pulses (FeatureCardPlaceholder). */
 export function HomeSkeleton() {
   return (
     <div className="flex flex-col gap-4" role="status" aria-label="Loading" aria-busy="true">
@@ -19,9 +21,9 @@ export function HomeSkeleton() {
         </div>
       </section>
       <div className={CARD_GRID}>
-        <Skeleton className="h-40 rounded-2xl" />
-        <Skeleton className="h-40 rounded-2xl" />
-        <Skeleton className="h-40 rounded-2xl" />
+        {FEATURES.map((feature) => (
+          <FeatureCardPlaceholder key={feature.to} feature={feature} />
+        ))}
       </div>
     </div>
   );

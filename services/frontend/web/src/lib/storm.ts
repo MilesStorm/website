@@ -4,6 +4,39 @@
 // screen. Everything fades with the dot's own mask, so nothing is bright at the edges.
 import { motionOn } from '@/lib/theme';
 
+/** The mask's plateau: full strength out to this share of the ellipse's radii... */
+const PLATEAU = 0.55;
+/** ...then an eased fade to nothing at this share. */
+const REACH = 0.95;
+const STEPS = 8;
+
+/** The mask as stops, [share of the radii, opacity]: a plateau, then a smoothstep fade in `STEPS`
+ * pieces. The CSS mask (`maskImage`) is drawn from these and the canvas (`maskAt`) interpolates
+ * the same ones, so the still frame and the live storm are the same picture. */
+const MASK: [number, number][] = [[0, 1], [PLATEAU, 1]];
+for (let i = 1; i <= STEPS; i++) {
+  const t = 1 - i / STEPS;
+  MASK.push([PLATEAU + ((REACH - PLATEAU) * i) / STEPS, t * t * (3 - 2 * t)]);
+}
+
+/** The CSS mask for the still frame's dots (`mask-image`). */
+export const maskImage = `radial-gradient(closest-side, ${MASK.map(
+  ([at, a]) => `rgb(0 0 0 / ${a.toFixed(4)}) ${(at * 100).toFixed(2)}%`,
+).join(', ')})`;
+
+/** The mask's opacity at `r`, the distance from the centre in radii (the ellipse's: 1 at its edge). */
+function mask(r: number) {
+  if (r >= REACH) return 0;
+  for (let i = 1; i < MASK.length; i++) {
+    if (r <= MASK[i][0]) {
+      const [x0, a0] = MASK[i - 1];
+      const [x1, a1] = MASK[i];
+      return a0 + ((a1 - a0) * (r - x0)) / (x1 - x0);
+    }
+  }
+  return 0;
+}
+
 const GRID = 18;
 const FALLOFF = 170;
 const BUCKETS = 24;
@@ -11,7 +44,7 @@ const BUCKETS = 24;
 interface Dot {
   x: number;
   y: number;
-  /** The CSS mask's opacity here: 1 at the ellipse's centre, 0 at 85% of its radii. */
+  /** The CSS mask's opacity here: 1 out to the plateau, 0 from the reach. */
   m: number;
 }
 
@@ -63,9 +96,9 @@ export function startStorm(root: HTMLElement): () => void {
     strength = parseFloat(style.getPropertyValue('--storm-lit'));
   }
 
-  // The CSS mask: an ellipse filling the box, opaque at its centre, clear at 85% of its radii.
+  // The CSS mask: an ellipse filling the box (`closest-side`), from the same stops.
   function maskAt(x: number, y: number) {
-    return Math.max(0, 1 - Math.hypot((x - width / 2) / (width / 2), (y - height / 2) / (height / 2)) / 0.85);
+    return mask(Math.hypot((x - width / 2) / (width / 2), (y - height / 2) / (height / 2)));
   }
 
   function layout() {

@@ -1,12 +1,13 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ButtonPlace } from '@/components/Placeholders';
-import { Setting, SettingList } from '@/components/Setting';
+import { SECTIONS, Section, Setting } from '@/components/Setting';
 import {
   ACCOUNT_INTRO,
   APPEARANCE_INTRO,
+  DANGER_INTRO,
   DELETE_INTRO,
   LOGOUT_INTRO,
+  SESSION_INTRO,
   MOTION_INTRO,
   NAME_HINT,
   PICTURE_HINT,
@@ -16,6 +17,7 @@ import {
   SHARING_FACTS_INTRO,
   SHARING_FACTS_TITLE,
   SHARING_INTRO,
+  SHARING_SECTION_INTRO,
   SHARING_SWITCH,
   SHARING_TITLE,
   THEME_INTRO,
@@ -42,26 +44,17 @@ export const DELETE_OPEN_LABEL = (
 /** The roll-sharing card's place (also while its own setting loads). */
 export function SharingSkeleton() {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>{SHARING_TITLE}</h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <SettingList>
-          <Setting title={SHARING_SWITCH} description={SHARING_INTRO}>
-            <span aria-hidden="true" className="inline-flex h-[18.4px] w-[32px] animate-pulse rounded-full bg-muted" />
-          </Setting>
-          <Setting title={SHARING_FACTS_TITLE} description={SHARING_FACTS_INTRO}>
-            <ButtonPlace label="Show" />
-          </Setting>
-          <Setting title={SHARING_DELETE_TITLE} description={SHARING_DELETE_INTRO}>
-            <ButtonPlace label={SHARING_DELETE_LABEL} />
-          </Setting>
-        </SettingList>
-      </CardContent>
-    </Card>
+    <Section title={SHARING_TITLE} description={SHARING_SECTION_INTRO}>
+      <Setting title={SHARING_SWITCH} description={SHARING_INTRO}>
+        <span aria-hidden="true" className="inline-flex h-[18.4px] w-[32px] animate-pulse rounded-full bg-muted" />
+      </Setting>
+      <Setting title={SHARING_FACTS_TITLE} description={SHARING_FACTS_INTRO}>
+        <ButtonPlace label="Show" />
+      </Setting>
+      <Setting title={SHARING_DELETE_TITLE} description={SHARING_DELETE_INTRO}>
+        <ButtonPlace label={SHARING_DELETE_LABEL} />
+      </Setting>
+    </Section>
   );
 }
 
@@ -79,88 +72,65 @@ export function SharingFacts() {
   );
 }
 
-/** The Appearance card's place: its text, and a pulse as big as each segmented control (a build-time
- * fallback can't know the saved choice). */
+/** The Appearance section's place: its text, and a pulse as big as each segmented control (a
+ * build-time fallback can't know the saved choice). */
 function AppearancePlace() {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Appearance</h2>
-        </CardTitle>
-        <CardDescription>{APPEARANCE_INTRO}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <SettingList>
-          <Setting wide title="Theme" description={THEME_INTRO}>
-            <Skeleton className="h-[34px] w-full rounded-4xl sm:w-[272px]" />
-          </Setting>
-          <Setting wide title="Motion" description={MOTION_INTRO}>
-            <Skeleton className="h-[34px] w-full rounded-4xl sm:w-[216px]" />
-          </Setting>
-        </SettingList>
-      </CardContent>
-    </Card>
+    <Section title="Appearance" description={APPEARANCE_INTRO}>
+      <Setting wide title="Theme" description={THEME_INTRO}>
+        <Skeleton className="h-[34px] w-full rounded-4xl @lg:w-[272px]" />
+      </Setting>
+      <Setting wide title="Motion" description={MOTION_INTRO}>
+        <Skeleton className="h-[34px] w-full rounded-4xl @lg:w-[216px]" />
+      </Setting>
+    </Section>
   );
 }
 
 export function ProfileSkeleton() {
   return (
-    <div role="status" aria-label="Loading your account" aria-busy="true" className="flex flex-col gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2>Account</h2>
-          </CardTitle>
-          <CardDescription>{ACCOUNT_INTRO}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <SettingList>
-            <Setting
-              title="Profile picture"
-              description={PICTURE_HINT}
-              lead={<Skeleton className="size-12 shrink-0 rounded-full" />}
-            >
-              <ButtonPlace label="Change" />
-            </Setting>
-            <Setting wide title="Display name" description={NAME_HINT}>
-              <div className="flex w-full gap-2 sm:w-auto">
-                <Skeleton className="h-9 min-w-0 flex-1 rounded-4xl sm:w-52 sm:flex-none" />
-                <ButtonPlace label="Save" size="default" />
-              </div>
-            </Setting>
-            <Setting title="Username" description={USERNAME_HINT}>
-              <Skeleton className="h-5 w-10" />
-            </Setting>
-            <Setting title="Email" description={<Skeleton className="h-5 w-56" />}>
-              <Skeleton className="h-5 w-20" />
-            </Setting>
-          </SettingList>
-        </CardContent>
-      </Card>
+    <div role="status" aria-label="Loading your account" aria-busy="true" className={SECTIONS}>
+      <Section title="Account" description={ACCOUNT_INTRO}>
+        <Setting
+          title="Profile picture"
+          description={PICTURE_HINT}
+          lead={<Skeleton className="size-12 shrink-0 rounded-full" />}
+        >
+          <ButtonPlace label="Change" />
+        </Setting>
+        <Setting wide title="Display name" description={NAME_HINT}>
+          <div className="flex w-full gap-2 @lg:w-auto">
+            <Skeleton className="h-9 min-w-0 flex-1 rounded-4xl @lg:w-52 @lg:flex-none" />
+            <ButtonPlace label="Save" size="default" />
+          </div>
+        </Setting>
+        <Setting title="Username" description={USERNAME_HINT}>
+          <Skeleton className="h-5 w-10" />
+        </Setting>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">Email</span>
+            <Skeleton className="h-5 w-20" />
+          </div>
+          <Skeleton className="h-5 w-56 max-w-full" />
+        </div>
+      </Section>
       <AppearancePlace />
-      {/* The usual answer: the sharing store is set up. Without it the card is left out, and if its
-          setting can't be read it is a one-line alert (Profile's SharingCard). */}
+      {/* The usual answer: the sharing store is set up. Without it the section is left out, and if
+          its setting can't be read it is a one-line alert (Profile's SharingCard). */}
       <div data-requires="arcane">
         <SharingSkeleton />
       </div>
-      <Card className="border-destructive/40">
-        <CardHeader>
-          <CardTitle>
-            <h2>Session and account</h2>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <SettingList>
-            <Setting title="Log out" description={LOGOUT_INTRO}>
-              <ButtonPlace label="Log out" />
-            </Setting>
-            <Setting title="Delete account" description={DELETE_INTRO}>
-              <ButtonPlace label={DELETE_OPEN_LABEL} />
-            </Setting>
-          </SettingList>
-        </CardContent>
-      </Card>
+      <Section title="Session" description={SESSION_INTRO}>
+        <Setting title="Log out" description={LOGOUT_INTRO}>
+          <ButtonPlace label="Log out" />
+        </Setting>
+      </Section>
+      <Section danger title="Danger zone" description={DANGER_INTRO}>
+        <Setting title="Delete account" description={DELETE_INTRO}>
+          <ButtonPlace label={DELETE_OPEN_LABEL} />
+        </Setting>
+      </Section>
     </div>
   );
 }
