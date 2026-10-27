@@ -39,22 +39,6 @@ export const FEATURES: Feature[] = [
     advertised: false,
     icon: 'M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M6.3 17.7l2.8-2.8M14.9 9.1l2.8-2.8M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z',
   },
-  {
-    title: 'Your profile',
-    text: 'Your display name, profile picture and site theme.',
-    to: '/profile',
-    permission: null,
-    advertised: true,
-    icon: 'M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM12 14a7 7 0 0 0-7 7h14a7 7 0 0 0-7-7z',
-  },
-  {
-    title: 'Admin',
-    text: 'Roles and permissions for every account.',
-    to: '/admin',
-    permission: 'manage_permissions',
-    advertised: false,
-    icon: 'M12 3l7 4v5c0 4.5-3 8-7 9-4-1-7-4.5-7-9V7z',
-  },
 ];
 
 /** Stands in for the unadvertised features on the logged-out page. */

@@ -9,9 +9,9 @@ test('with the cookie notice open, the last control of the profile can be reache
   await logIn(context, 'plain');
   await page.goto('/profile');
   await expect(page.getByRole('region', { name: 'Cookies' })).toBeVisible();
-  // The theme card ends the page. A click fails if the notice is over the button.
-  const theme = page.getByRole('main').getByRole('button', { name: 'Theme' });
-  await theme.scrollIntoViewIfNeeded();
-  await theme.click();
-  await expect(page.getByRole('menuitemradio', { name: 'Dark' })).toBeVisible();
+  // The delete-account button ends the page. A click fails if the notice is over the button.
+  const remove = page.getByRole('button', { name: 'Delete my account…' });
+  await remove.scrollIntoViewIfNeeded();
+  await remove.click();
+  await expect(page.getByRole('button', { name: 'Email me the link' }).or(page.getByRole('button', { name: 'Delete permanently' }))).toBeVisible();
 });

@@ -1,0 +1,90 @@
+/* The storm behind a hero (components/Storm.tsx): a soft glow and a grid of dots, fading out
+   towards the hero's edges, so the cards below stay clear of them. Neutral: the theme's own
+   foreground. Stronger by default for plain sRGB screens, where faint greys sink into the black;
+   quieter on wide-gamut ones, and quieter again on light, where dark dots on white read heavier. */
+.storm {
+  --storm-dot: 20%;
+  --storm-dot-r: 1.3px;
+  --storm-glow: 14%;
+  --storm-flash: 22%;
+  --storm-lit: 0.75;
+}
+@media (color-gamut: p3) {
+  .storm {
+    --storm-dot: 12%;
+    --storm-dot-r: 1px;
+    --storm-glow: 8.5%;
+  }
+}
+:root:not(.dark) .storm {
+  --storm-dot: 9%;
+  --storm-dot-r: 1px;
+  --storm-glow: 4.5%;
+  --storm-flash: 9%;
+  --storm-lit: 0.4;
+}
+@media (color-gamut: p3) {
+  :root:not(.dark) .storm {
+    --storm-dot: 7%;
+    --storm-glow: 3.5%;
+  }
+}
+
+/* The glow and the flash share a falloff eased in steps, so no edge shows. */
+.storm-glow {
+  --strength: var(--storm-glow);
+}
+.storm-flash {
+  --strength: var(--storm-flash);
+}
+.storm-glow,
+.storm-flash {
+  background: radial-gradient(
+    closest-side,
+    color-mix(in oklab, var(--foreground) var(--strength), transparent),
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.74), transparent) 19%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.5), transparent) 34%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.29), transparent) 47%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.15), transparent) 58%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.06), transparent) 70%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.015), transparent) 84%,
+    transparent
+  );
+}
+.storm-flash {
+  will-change: opacity;
+}
+
+/* The same ellipse and fade the canvas draws (lib/storm.ts). */
+.storm-dots {
+  background-image: radial-gradient(
+    color-mix(in oklab, var(--foreground) var(--storm-dot), transparent) var(--storm-dot-r),
+    transparent var(--storm-dot-r)
+  );
+  background-size: 18px 18px;
+  mask-image: radial-gradient(closest-side, black, transparent 85%);
+}
+.storm[data-live] .storm-dots {
+  display: none;
+}
+.storm[data-live] .storm-canvas {
+  display: block;
+}
+
+/* Motion: the choice on <html> (the profile's Motion card), else the system's. */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion='reduced']) .storm-glow {
+    animation: storm-breathe 5.2s ease-in-out infinite alternate;
+  }
+}
+:root[data-motion='full'] .storm-glow {
+  animation: storm-breathe 5.2s ease-in-out infinite alternate;
+}
+@keyframes storm-breathe {
+  from {
+    opacity: 0.78;
+  }
+  to {
+    opacity: 1;
+  }
+}

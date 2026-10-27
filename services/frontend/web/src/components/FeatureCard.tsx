@@ -1,5 +1,3 @@
-import { ArrowRight } from 'lucide-react';
-import { buttonVariants } from '@/components/ui/button';
 import { Card, CardAction, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import type { CardState, Feature } from '@/lib/features';
 import { cn } from '@/lib/utils';
@@ -9,8 +7,12 @@ const NOTE: Record<Exclude<CardState, 'open'>, string> = {
   preview: 'For invited accounts.',
 };
 
+/** The start page's rows of cards: as many columns as fit, so no row has a hole whatever the count. */
+export const CARD_GRID = 'grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-4';
+
 /** A part of the site, like the demo cards on ui.shadcn.com's front page: a link when it's open
- * to the viewer (over the whole card), a description otherwise. */
+ * to the viewer (over the whole card, which answers the pointer and the keyboard), a description
+ * otherwise. */
 export function FeatureCard({ feature, state }: { feature: Feature; state: CardState }) {
   const open = state === 'open';
   // From the link, not useId: Astro renders each card on its own, so useId's would repeat. Only
@@ -19,9 +21,9 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
   return (
     <Card
       className={cn(
-        'relative h-full',
+        'relative h-full min-h-40',
         open &&
-          'transition-shadow hover:ring-foreground/20 has-[a:focus-visible]:ring-3 has-[a:focus-visible]:ring-ring/50',
+          'transition-colors hover:bg-muted/50 hover:ring-foreground/20 has-[a:focus-visible]:ring-3 has-[a:focus-visible]:ring-ring/50',
         state === 'locked' && 'border border-dashed ring-0',
       )}
     >
@@ -31,7 +33,13 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
         </CardTitle>
         <CardDescription id={id && `${id}-text`}>{feature.text}</CardDescription>
         <CardAction>
-          <span className="grid size-9 place-items-center rounded-full bg-muted text-foreground">
+          <span
+            className={cn(
+              'grid size-9 place-items-center rounded-full bg-muted text-foreground transition-colors',
+              open &&
+                'group-hover/card:bg-primary group-hover/card:text-primary-foreground group-has-[a:focus-visible]/card:bg-primary group-has-[a:focus-visible]/card:text-primary-foreground',
+            )}
+          >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 24 24"
@@ -48,23 +56,11 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
           </span>
         </CardAction>
       </CardHeader>
-      <CardFooter className="mt-auto">
-        {open ? (
-          // Only looks like the link's button: the link (below) covers the card.
-          <span
-            aria-hidden="true"
-            className={cn(
-              buttonVariants({ variant: 'secondary', size: 'sm' }),
-              'w-full group-hover/card:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]',
-            )}
-          >
-            Open
-            <ArrowRight />
-          </span>
-        ) : (
+      {!open && (
+        <CardFooter className="mt-auto">
           <p className="text-xs text-muted-foreground">{NOTE[state]}</p>
-        )}
-      </CardFooter>
+        </CardFooter>
+      )}
       {id && (
         // Over the whole card, named by its title and described by its text. Not wrapped around
         // the title: the header is a container, so a stretched link would cover only the header.

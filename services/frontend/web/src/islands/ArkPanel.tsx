@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Badge } from '@/components/ui/badge';
+import { CircleCheck } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { FormAlert } from '@/components/FormAlert';
-import { ServerControls, StatNote } from '@/components/ServerCards';
+import { StatNote, StatusBadge } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
-import { ARK_BUTTONS, PlayersCard } from '@/islands/ArkSkeleton';
+import { ARK_BUTTONS, ArkHeader, PlayersCard } from '@/islands/ArkSkeleton';
 import { island } from '@/lib/island';
 
 type Command = Schemas['ArkCommand'];
@@ -71,28 +72,33 @@ export const ArkPanel = island('ArkPanel', function ArkPanel() {
   const online = n !== undefined && n !== null;
   return (
     <div className="flex flex-col gap-6">
-      <PlayersCard
-        loading={count === null}
-        live
-        // Offline (the badge says so) or not known: a dash.
-        value={online ? shown!.value : <span aria-hidden="true">—</span>}
-        action={shown && <Badge variant={online ? 'default' : 'outline'}>{online ? 'Online' : shown.value}</Badge>}
-        note={shown ? <StatNote>{shown.note}</StatNote> : <FormAlert message={count?.ok ? null : count?.message} />}
-      />
-      <ServerControls
+      <ArkHeader
+        badge={shown && <StatusBadge tone={online ? 'online' : 'off'} label={online ? 'Online' : shown.value} />}
         buttons={ARK_BUTTONS.map(([cmd, label], i) => (
           <Button key={cmd} variant={i === 0 ? 'default' : 'outline'} disabled={running !== null} onClick={() => void run(cmd)} data-faro-user-action-name={`ark ${cmd}`}>
             {running === cmd ? `${label}…` : label}
           </Button>
         ))}
-      >
+      />
+      {/* What came of the last command, read out as it comes (the region is there from the start). */}
+      <div aria-live="polite" className="empty:hidden">
         {said &&
           (said.outcome.ok ? (
-            <p className="text-sm">{OUTCOMES[said.outcome.data.outcome]}</p>
+            <Alert role="status">
+              <CircleCheck aria-hidden="true" />
+              <AlertDescription>{OUTCOMES[said.outcome.data.outcome]}</AlertDescription>
+            </Alert>
           ) : (
             <FormAlert message={said.outcome.message} />
           ))}
-      </ServerControls>
+      </div>
+      <PlayersCard
+        loading={count === null}
+        live
+        // Offline (the badge says so) or not known: a dash.
+        value={online ? shown!.value : <span aria-hidden="true">—</span>}
+        note={shown ? <StatNote>{shown.note}</StatNote> : <FormAlert message={count?.ok ? null : count?.message} />}
+      />
     </div>
   );
 });

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Bug, CameraOff, LoaderCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -15,8 +16,58 @@ import {
   type Detection,
 } from '@/lib/arcane';
 import { island } from '@/lib/island';
+import { cn } from '@/lib/utils';
 
-type Connection = { kind: 'connecting' } | { kind: 'connected' } | { kind: 'disconnected' } | { kind: 'error'; message: string };
+/** Why the camera didn't start: the browser (or the person) refused it, there is none, something
+ * else has it, the browser can't open one here, or anything else. */
+type Problem = 'denied' | 'missing' | 'busy' | 'unsupported' | 'failed';
+
+type Connection = { kind: 'connecting' } | { kind: 'connected' } | { kind: 'disconnected' } | { kind: 'error'; problem: Problem };
+
+const PROBLEMS: Record<Problem, { title: string; text: string; retry: string | null }> = {
+  denied: {
+    title: 'Camera access is off',
+    text: 'The reader needs it to see your dice. Allow it when asked, or if it was blocked, set Camera to Allow in the site settings from the address bar.',
+    retry: 'Allow camera',
+  },
+  missing: {
+    title: 'No camera found',
+    text: 'Plug one in, or open this page on a device that has one.',
+    retry: 'Try again',
+  },
+  busy: {
+    title: 'The camera is busy',
+    text: 'Another app or tab may be using it. Close that, then try again.',
+    retry: 'Try again',
+  },
+  unsupported: {
+    title: "This browser can't use a camera here",
+    text: 'Open the page in a current browser, over a secure connection.',
+    retry: null,
+  },
+  failed: {
+    title: "The camera didn't start",
+    text: 'Something went wrong while opening it.',
+    retry: 'Try again',
+  },
+};
+
+/** What a refused `getUserMedia` means. */
+const problemOf = (e: unknown): Problem => {
+  switch (e instanceof DOMException ? e.name : '') {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'denied';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'missing';
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'busy';
+    default:
+      return 'failed';
+  }
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -76,15 +127,15 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
       const ov = overlay.current?.getContext('2d');
       const cap = capture.current;
       const capCtx = cap?.getContext('2d');
-      if (!v || !ov || !cap || !capCtx) return set({ kind: 'error', message: 'camera unavailable' });
-      if (!navigator.mediaDevices?.getUserMedia) return set({ kind: 'error', message: 'camera unavailable' });
+      if (!v || !ov || !cap || !capCtx) return set({ kind: 'error', problem: 'failed' });
+      if (!navigator.mediaDevices?.getUserMedia) return set({ kind: 'error', problem: 'unsupported' });
       // The back camera on a phone (the one pointing at the dice tray); `ideal`, so a device
       // with one camera still uses it.
       let s: MediaStream;
       try {
         s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
-      } catch {
-        return set({ kind: 'error', message: 'camera permission denied' });
+      } catch (e) {
+        return set({ kind: 'error', problem: problemOf(e) });
       }
       // Left while the browser was still asking: this stream is nobody's.
       if (left) return s.getTracks().forEach((t) => t.stop());
@@ -177,20 +228,22 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
     };
   }, [round]);
 
+  const live = connection.kind === 'connected';
   const status =
-    connection.kind === 'connecting' ? (
-      <Badge variant="secondary">connecting</Badge>
-    ) : connection.kind === 'connected' ? (
+    connection.kind === 'connected' ? (
       <Badge>{frameMs}ms</Badge>
     ) : connection.kind === 'disconnected' ? (
       <Badge variant="destructive">disconnected</Badge>
-    ) : (
-      <Badge variant="destructive">{connection.message}</Badge>
-    );
+    ) : null;
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="relative overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10">
+      <div
+        className={cn(
+          'relative overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10',
+          connection.kind === 'error' && 'min-h-72',
+        )}
+      >
         {/* 16:9, as the placeholder, until the camera says its own shape. */}
         <video
           ref={video}
@@ -202,16 +255,28 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
           onLoadedMetadata={() => setSized(true)}
         />
         <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true" />
-        <div className="absolute top-3 left-3">{status}</div>
-        <Button
-          size="sm"
-          variant="secondary"
-          className="absolute top-3 right-3"
-          aria-pressed={debug}
-          onClick={() => setDebug((d) => !d)}
-        >
-          {debug ? '✕ debug' : 'debug'}
-        </Button>
+        {connection.kind === 'connecting' && (
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground" aria-hidden="true">
+            <LoaderCircle className="size-4 motion-safe:animate-spin" />
+            Starting the camera…
+          </div>
+        )}
+        {connection.kind === 'error' && (
+          <CameraProblem problem={connection.problem} retry={() => setRound((n) => n + 1)} />
+        )}
+        {status && <div className="absolute top-3 left-3">{status}</div>}
+        {live && (
+          <Button
+            size="icon-sm"
+            variant={debug ? 'default' : 'secondary'}
+            className="absolute top-3 right-3"
+            aria-label="Debug"
+            aria-pressed={debug}
+            onClick={() => setDebug((d) => !d)}
+          >
+            <Bug aria-hidden="true" />
+          </Button>
+        )}
       </div>
       {/* Read out when the connection changes, not with every frame's time. */}
       <p className="sr-only" role="status" aria-label="Connection">
@@ -221,14 +286,14 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
             ? 'Connected'
             : connection.kind === 'disconnected'
               ? 'Disconnected'
-              : connection.message}
+              : PROBLEMS[connection.problem].title}
       </p>
       {connection.kind === 'disconnected' && (
         <Button className="self-center" onClick={() => setRound((n) => n + 1)} data-faro-user-action-name="arcane reconnect">
           Reconnect
         </Button>
       )}
-      {debug && (
+      {debug && live && (
         <Card size="sm">
           <CardContent className="flex flex-col gap-2 font-mono text-xs">
             <div className="flex flex-wrap items-center gap-4">
@@ -260,3 +325,25 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
     </div>
   );
 });
+
+/** The camera's place when it didn't start: what happened, what to do, and the button that asks
+ * again (a click is a gesture, so the browser may ask the person again). */
+function CameraProblem({ problem, retry }: { problem: Problem; retry: () => void }) {
+  const { title, text, retry: action } = PROBLEMS[problem];
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-center">
+      <div className="flex size-12 items-center justify-center rounded-full bg-background ring-1 ring-foreground/10">
+        <CameraOff className="size-5 text-muted-foreground" aria-hidden="true" />
+      </div>
+      <div className="flex max-w-sm flex-col gap-1">
+        <h2 className="text-base font-medium">{title}</h2>
+        <p className="text-sm text-muted-foreground">{text}</p>
+      </div>
+      {action && (
+        <Button onClick={retry} data-faro-user-action-name="arcane allow camera">
+          {action}
+        </Button>
+      )}
+    </div>
+  );
+}

@@ -126,7 +126,7 @@ describe('the camera page', () => {
     const { tracks, getUserMedia } = browserWith();
     const { ArcaneCamera } = await import('@/islands/ArcaneCamera');
     const { unmount } = render(<ArcaneCamera />);
-    expect(screen.getByText('connecting')).toBeTruthy();
+    expect(announced()).toBe('Connecting');
     const socket = await connected();
     expect(getUserMedia).toHaveBeenCalledWith({ video: { facingMode: { ideal: 'environment' } } });
     expect(socket.url).toBe('wss://milesstorm.test/ws/arcane');
@@ -140,7 +140,7 @@ describe('the camera page', () => {
     act(() => socket.answer(fixture('roll_unread')));
     expect(await screen.findByText('16 + ?')).toBeTruthy();
 
-    await userEvent.click(screen.getByRole('button', { name: 'debug' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Debug' }));
     expect(screen.getByText(/det\[0\] dice=16/)).toBeTruthy();
     act(() => socket.answer(fixture('error')));
     expect(await screen.findByText("server: the frame isn't a JPEG or PNG image")).toBeTruthy();
@@ -182,10 +182,11 @@ describe('the camera page', () => {
 
   it('says when the camera is refused', async () => {
     vi.stubGlobal('location', at('https://milesstorm.test/arcane').location);
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => Promise.reject(new Error('NotAllowedError'))) } });
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => Promise.reject(new DOMException('', 'NotAllowedError'))) } });
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as CanvasRenderingContext2D);
     const { ArcaneCamera } = await import('@/islands/ArcaneCamera');
     render(<ArcaneCamera />);
-    await waitFor(() => expect(announced()).toBe('camera permission denied'));
+    await waitFor(() => expect(announced()).toBe('Camera access is off'));
+    expect(screen.getByRole('button', { name: 'Allow camera' })).toBeTruthy();
   });
 });

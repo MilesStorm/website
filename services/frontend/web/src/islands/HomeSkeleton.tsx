@@ -1,3 +1,5 @@
+import { CARD_GRID } from '@/components/FeatureCard';
+import { Storm } from './Storm';
 import { Skeleton } from '@/components/ui/skeleton';
 
 /** The logged-in start page's shape while it loads: the hero's own lines with a pulse for the
@@ -6,6 +8,7 @@ export function HomeSkeleton() {
   return (
     <div className="flex flex-col gap-4" role="status" aria-label="Loading" aria-busy="true">
       <section className={HERO_SECTION}>
+        <Storm />
         <Skeleton className="mb-2 h-6 w-32 rounded-4xl" />
         <div className={HERO_NAME}>
           <Skeleton className="size-12 shrink-0 rounded-full md:size-14" />
@@ -15,16 +18,17 @@ export function HomeSkeleton() {
           </div>
         </div>
       </section>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Skeleton className="h-44 rounded-2xl" />
-        <Skeleton className="h-44 rounded-2xl" />
+      <div className={CARD_GRID}>
+        <Skeleton className="h-40 rounded-2xl" />
+        <Skeleton className="h-40 rounded-2xl" />
+        <Skeleton className="h-40 rounded-2xl" />
       </div>
     </div>
   );
 }
 
-/** The hero (HomeCards), and its place here. */
-export const HERO_SECTION = 'flex flex-col items-center gap-2 pt-12 pb-12 text-center md:pt-20 lg:pt-24';
+/** The hero (HomeCards, and the logged-out page's), and its place here: its spacing leaves the storm room to fade out. */
+export const HERO_SECTION = 'relative flex flex-col items-center gap-2 pt-12 pb-16 text-center md:pt-20 md:pb-20 lg:pt-24';
 
 /** The hero's line with the picture and the name, and its place here. */
 export const HERO_NAME =
