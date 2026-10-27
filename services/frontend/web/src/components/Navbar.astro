@@ -19,9 +19,11 @@ const LINKS: { href: Href; label: string; requires: KnownPermission }[] = [
   { href: '/admin', label: 'Admin', requires: 'manage_permissions' },
 ];
 // shadcn's site header (ui.shadcn.com): plain background, no rule under it, ghost links. Like
-// the site's, the current page's link looks the same as the rest: `aria-current` marks it for
-// assistive technology only.
-const link = buttonVariants({ variant: 'ghost', size: 'sm' });
+// the site's, the links are muted and the current page's (`aria-current`) is in the foreground.
+const link = cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'text-muted-foreground aria-[current=page]:text-foreground');
+// The menu below it is a popover like the user menu's: rounded items, the current one marked.
+const item =
+  'flex rounded-xl px-3 py-2 text-sm text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground aria-[current=page]:bg-muted aria-[current=page]:font-medium aria-[current=page]:text-foreground';
 // Built as files (`build.format: 'file'`): /login.html is /login, /index.html is /.
 const here = Astro.url.pathname.replace(/(\/index)?\.html$/, '') || '/';
 const current = (href: Href) => (href === here ? 'page' : undefined);
@@ -57,23 +59,23 @@ const current = (href: Href) => (href === here ? 'page' : undefined);
           <span slot="fallback" class="block size-9" aria-hidden="true"></span>
         </UserMenu>
       </Gate>
-      <details class="relative md:hidden">
+      <details class="group relative md:hidden">
         <summary class={buttonVariants({ variant: 'ghost', size: 'icon' }) + ' list-none [&::-webkit-details-marker]:hidden'} aria-label="Menu">
           <Menu aria-hidden="true" />
         </summary>
-        <ul class="absolute right-0 mt-2 flex w-48 flex-col gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          <li><a href="/" class={link + ' w-full justify-start'} aria-current={current('/')}>Home</a></li>
+        <ul class="absolute right-0 mt-2 flex w-48 origin-top-right flex-col rounded-2xl bg-popover p-1 text-popover-foreground shadow-2xl ring-1 ring-foreground/5 duration-100 group-open:animate-in group-open:fade-in-0 group-open:zoom-in-95 dark:ring-foreground/10">
+          <li><a href="/" class={item} aria-current={current('/')}>Home</a></li>
           {
             LINKS.map((l) => (
               <Gate as="li" requires={l.requires}>
-                <a href={l.href} class={link + ' w-full justify-start'} aria-current={current(l.href)}>
+                <a href={l.href} class={item} aria-current={current(l.href)}>
                   {l.label}
                 </a>
               </Gate>
             ))
           }
-          <Gate as="li" session="in"><a href="/profile" class={link + ' w-full justify-start'} aria-current={current('/profile')}>Profile</a></Gate>
-          <Gate as="li" session="out" class="sm:hidden"><a href="/login" class={link + ' w-full justify-start'}>Log in</a></Gate>
+          <Gate as="li" session="in"><a href="/profile" class={item} aria-current={current('/profile')}>Profile</a></Gate>
+          <Gate as="li" session="out" class="sm:hidden"><a href="/login" class={item}>Log in</a></Gate>
         </ul>
       </details>
     </div>

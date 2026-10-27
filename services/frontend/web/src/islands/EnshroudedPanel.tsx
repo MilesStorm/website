@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CircleCheck, Info, LoaderCircle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { FormAlert } from '@/components/FormAlert';
-import { Meter, ServerControls, StatCard, StatNote } from '@/components/ServerCards';
+import { Meter, StatCard, StatNote, StatusBadge } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt } from '@/lib/errors';
 import { CONFIRM, SENT, STATES, actionText, ago, busy, duration, playersOnline, type Command } from '@/lib/enshrouded';
-import { ENSHROUDED_BUTTONS, EnshroudedHeader, EnshroudedSkeleton, Figures, UPTIME_NOTE } from '@/islands/EnshroudedSkeleton';
+import { ENSHROUDED_BUTTONS, EnshroudedHeader, EnshroudedSkeleton, Figures, UPTIME_NOTE, UPTIME_NOTE_SHORT } from '@/islands/EnshroudedSkeleton';
 import { island } from '@/lib/island';
 
 type Status = Schemas['EnshroudedStatus'];
@@ -83,34 +82,37 @@ export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPane
       <FormAlert message={failed} />
       <div data-overview className="flex flex-col gap-6">
         <EnshroudedHeader
-          badge={
-            <Badge variant={state.badge}>
-              {state.moving && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-              {state.label}
-            </Badge>
-          }
+          badge={<StatusBadge tone={state.tone} label={state.label} moving={state.moving} />}
+          buttons={<ControlButtons status={s} now={now} command={command} ask={(cmd) => setCommand({ kind: 'confirming', cmd })} />}
+        />
+        <Feedback
+          status={s}
+          now={now}
+          command={command}
+          confirm={(cmd) => void send(cmd)}
+          cancel={() => setCommand({ kind: 'idle' })}
         />
         <Figures>
           <PlayersFigure status={s} />
           <StatCard
+            compact
             label="Uptime"
             value={s.uptime_secs !== null ? duration(s.uptime_secs) : <span aria-hidden="true">—</span>}
-            footer={<StatNote>{s.uptime_secs !== null ? UPTIME_NOTE : 'Not running.'}</StatNote>}
+            footer={
+              s.uptime_secs !== null ? (
+                <StatNote short={UPTIME_NOTE_SHORT}>{UPTIME_NOTE}</StatNote>
+              ) : (
+                <StatNote>Not running.</StatNote>
+              )
+            }
           />
           <StatCard
+            compact
             label="Build"
             value={s.version ?? <span aria-hidden="true">—</span>}
-            footer={<StatNote>{buildNote(s)}</StatNote>}
+            footer={<BuildNote status={s} now={now} />}
           />
         </Figures>
-        <Controls
-          status={s}
-          now={now}
-          command={command}
-          ask={(cmd) => setCommand({ kind: 'confirming', cmd })}
-          confirm={(cmd) => void send(cmd)}
-          cancel={() => setCommand({ kind: 'idle' })}
-        />
       </div>
       <UpdateNotice status={s} now={now} />
       <Sessions status={s} />
@@ -124,7 +126,9 @@ function PlayersFigure({ status }: { status: Status }) {
   const p = status.players;
   return (
     <StatCard
+      compact
       label="Players online"
+      shortLabel="Players"
       heading
       value={
         p === null ? (
@@ -142,18 +146,23 @@ function PlayersFigure({ status }: { status: Status }) {
       footer={
         <>
           <Meter value={p?.online ?? 0} max={p?.max ?? 1} />
-          <StatNote>{p === null ? "The server doesn't say." : `${p.max - p.online} of ${p.max} slots free`}</StatNote>
+          {p === null ? (
+            <StatNote short="Unknown">The server doesn't say.</StatNote>
+          ) : (
+            <StatNote short={`${p.max - p.online} free`}>{`${p.max - p.online} of ${p.max} slots free`}</StatNote>
+          )}
         </>
       }
     />
   );
 }
 
-/** Whether the running build is Steam's latest. */
-function buildNote(status: Status): string {
-  if (status.update_queued && status.state === 'Online') return 'Update queued';
-  if (status.latest_build_at === null) return 'Latest build unknown';
-  return status.update_pending ? 'Newer build on Steam' : 'Up to date';
+/** Whether the running build is Steam's latest, and when that came out. */
+function BuildNote({ status, now }: { status: Status; now: number }) {
+  if (status.update_queued && status.state === 'Online') return <StatNote>Update queued</StatNote>;
+  if (status.latest_build_at === null) return <StatNote short="Unknown">Latest build unknown</StatNote>;
+  if (status.update_pending) return <StatNote short="Newer on Steam">Newer build on Steam</StatNote>;
+  return <StatNote short="Up to date">{`Up to date · from ${ago(now, status.latest_build_at)}`}</StatNote>;
 }
 
 /** A newer build on Steam than the running server, or one queued for when it is empty. */
@@ -170,14 +179,7 @@ function UpdateNotice({ status, now }: { status: Status; now: number }) {
       </Alert>
     );
   }
-  if (status.latest_build_at === null) return null;
-  if (!status.update_pending) {
-    return (
-      <p className="px-1 text-sm text-muted-foreground">
-        Up to date: Steam's latest build is from {ago(now, status.latest_build_at)}.
-      </p>
-    );
-  }
+  if (status.latest_build_at === null || !status.update_pending) return null;
   return (
     <Alert>
       <Info aria-hidden="true" />
@@ -215,55 +217,70 @@ function Sessions({ status }: { status: Status }) {
   );
 }
 
-function Controls({
+/** Restart and Force update: off while they can't be used (the notes under the heading say why). */
+function ControlButtons({
   status,
   now,
   command,
   ask,
+}: {
+  status: Status;
+  now: number;
+  command: CommandUi;
+  ask: (cmd: Command) => void;
+}) {
+  const disabled = !status.can_control || busy(status.state) || waitFor(status, now) !== null || command.kind === 'sending';
+  const sendingAny = (...cmds: Command[]) => command.kind === 'sending' && cmds.includes(command.cmd);
+
+  return (
+    <>
+      <Button disabled={disabled} onClick={() => ask('restart')} data-faro-user-action-name="enshrouded restart">
+        {sendingAny('restart') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
+        {ENSHROUDED_BUTTONS.restart}
+      </Button>
+      <Button variant="outline" disabled={disabled} onClick={() => ask('update')} data-faro-user-action-name="enshrouded update">
+        {sendingAny('update', 'update_now') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
+        {ENSHROUDED_BUTTONS.update}
+      </Button>
+    </>
+  );
+}
+
+/** Seconds until the next command is allowed, or null. */
+function waitFor(status: Status, now: number): number | null {
+  return status.next_command_at !== null && status.next_command_at > now ? status.next_command_at - now : null;
+}
+
+/** Under the heading, when there is anything to say: what the state means, why the buttons wait,
+ * and the confirmation of a command or what came of it (read out as it comes). */
+function Feedback({
+  status,
+  now,
+  command,
   confirm,
   cancel,
 }: {
   status: Status;
   now: number;
   command: CommandUi;
-  ask: (cmd: Command) => void;
   confirm: (cmd: Command) => void;
   cancel: () => void;
 }) {
-  const working = busy(status.state);
-  const wait = status.next_command_at !== null && status.next_command_at > now ? status.next_command_at - now : null;
-  const sending = command.kind === 'sending';
-  const disabled = !status.can_control || working || wait !== null || sending;
-  const online = status.players?.online ?? 0;
-  const sendingAny = (...cmds: Command[]) => command.kind === 'sending' && cmds.includes(command.cmd);
-
+  const hint = STATES[status.state].hint;
+  const wait = waitFor(status, now);
+  const note = !status.can_control
+    ? "The website can't reach the server's controls right now."
+    : wait !== null
+      ? `Someone just sent a command: the buttons come back in ${wait} s.`
+      : busy(status.state)
+        ? 'Wait for the current restart or update to finish.'
+        : null;
   return (
-    <ServerControls
-      description={STATES[status.state].hint || undefined}
-      buttons={
-        <>
-          <Button disabled={disabled} onClick={() => ask('restart')} data-faro-user-action-name="enshrouded restart">
-            {sendingAny('restart') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-            {ENSHROUDED_BUTTONS.restart}
-          </Button>
-          <Button variant="outline" disabled={disabled} onClick={() => ask('update')} data-faro-user-action-name="enshrouded update">
-            {sendingAny('update', 'update_now') && <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />}
-            {ENSHROUDED_BUTTONS.update}
-          </Button>
-        </>
-      }
-      note={
-        !status.can_control ? (
-          <p className="text-sm text-muted-foreground">The website can't reach the server's controls right now.</p>
-        ) : wait !== null ? (
-          <p className="text-sm text-muted-foreground">Someone just sent a command: the buttons come back in {wait} s.</p>
-        ) : working ? (
-          <p className="text-sm text-muted-foreground">Wait for the current restart or update to finish.</p>
-        ) : null
-      }
-    >
-      <Answer command={command} online={online} confirm={confirm} cancel={cancel} />
-    </ServerControls>
+    <div aria-live="polite" className="flex flex-col gap-4 empty:hidden">
+      {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
+      {note && <p className="text-sm text-muted-foreground">{note}</p>}
+      <Answer command={command} online={status.players?.online ?? 0} confirm={confirm} cancel={cancel} />
+    </div>
   );
 }
 

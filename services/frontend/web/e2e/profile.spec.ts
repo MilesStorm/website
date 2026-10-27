@@ -10,21 +10,25 @@ const PNG = Buffer.from(
   'base64',
 );
 
-test('the profile shows the account, and its theme card works', async ({ context, page }) => {
+test('the profile shows the account, and its appearance card works', async ({ context, page }) => {
   await logIn(context, 'plain');
   await page.goto('/profile');
   await expect(page.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Email' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Delete account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Appearance' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Session and account' })).toBeVisible();
   await expectAccessible(page);
-  await page.getByRole('main').getByRole('button', { name: 'Theme' }).click();
-  await page.getByRole('menuitemradio', { name: 'Light' }).click();
+  const theme = page.getByRole('radiogroup', { name: 'Theme' });
+  await theme.getByRole('radio', { name: 'Light' }).click();
   await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+  await expect(theme.getByRole('radio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true');
+  await page.reload();
+  await expect(theme.getByRole('radio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true');
 });
 
 test('the Ark panel shows who is online', async ({ context, page }) => {
   await logIn(context, 'all');
   await page.goto('/ark');
+  await expect(page.getByRole('heading', { name: 'Ark server' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Players online' })).toBeVisible();
   await expect(page.getByText(/Server is active|Server running, no players|The game server is not running\./)).toBeVisible();
   await expectAccessible(page);

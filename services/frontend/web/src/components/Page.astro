@@ -1,14 +1,14 @@
 ---
-// A page's frame: the content's width (narrow, default or wide; the navbar is full width) and
+// A page's frame: the content's width (default or wide; the navbar is full width) and
 // the page's heading in shadcn's typography, with a muted line under it. Without a title the
 // island draws its own heading (one that carries live data, such as Enshrouded's status).
 interface Props {
   title?: string;
   description?: string;
-  width?: 'narrow' | 'default' | 'wide';
+  width?: 'default' | 'wide';
 }
 const { title, description, width = 'default' } = Astro.props;
-const WIDTHS = { narrow: 'max-w-xl', default: 'max-w-3xl', wide: 'max-w-5xl' };
+const WIDTHS = { default: 'max-w-3xl', wide: 'max-w-5xl' };
 ---
 
 <main class:list={['mx-auto flex w-full flex-col gap-6 px-4 py-8 md:px-6 md:py-10', WIDTHS[width]]}>

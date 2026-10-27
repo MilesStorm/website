@@ -26,14 +26,14 @@ export const NO_PASSWORD: Note = {
 
 // The profile (islands/Profile.tsx).
 export const ACCOUNT_INTRO = 'How you appear on this site.';
+export const APPEARANCE_INTRO = 'Saved in this browser.';
+export const THEME_INTRO = 'Light, dark, or whatever your device uses.';
+export const MOTION_INTRO = "The start page's storm and the theme switch.";
 export const PICTURE_HINT = 'JPEG, PNG, WebP or GIF, up to 5 MB.';
-/** Around the username, in bold. */
-export const NAME_HINT = {
-  before: 'Shown on the site instead of your username. Leave it empty to use your username,',
-  after: ", which you log in with and which can't be changed.",
-};
+export const NAME_HINT = 'Shown on the site instead of your username. Leave it empty to use your username.';
+export const USERNAME_HINT = "You log in with it. It can't be changed.";
 export const SHARING_TITLE = 'Help improve dice recognition';
-export const SHARING_INTRO = 'Share pictures of your rolls so the dice reader gets better at reading them.';
+export const SHARING_INTRO = 'Helps the dice reader get better at reading them.';
 export const SHARING_FACTS: [string, string][] = [
   ["What's saved", 'The camera picture and what the model read.'],
   ['Which rolls', 'Rolls the model was unsure about, and about 1 in 20 others.'],
@@ -41,10 +41,14 @@ export const SHARING_FACTS: [string, string][] = [
 ];
 export const SHARING_NOTE =
   "Turning this off stops new saves. Rolls you flag as wrong in the browser extension are saved either way; your latest roll's picture is kept for 10 minutes so it can be flagged.";
-export const SHARING_DELETE = 'Delete my shared pictures';
+export const SHARING_SWITCH = 'Share pictures of my rolls';
+export const SHARING_FACTS_TITLE = "What's shared";
+export const SHARING_FACTS_INTRO = 'What is saved, which rolls, and who sees them.';
+export const SHARING_DELETE_TITLE = 'Shared pictures';
+export const SHARING_DELETE_INTRO = "Removes every roll picture you've shared or flagged, and turns sharing off.";
+export const LOGOUT_INTRO = 'Ends your session in this browser.';
 export const DELETE_INTRO =
   "Removes your account and profile picture. Any data you chose to share will also be removed. This can't be undone.";
-export const DELETE_OPEN = 'Delete my account…';
 
 /** Opening a deletion link (islands/DeleteAccount.tsx): around the account's username, in bold. */
 export const DELETE_LINK = {

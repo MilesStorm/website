@@ -31,7 +31,7 @@ if (!STAGING) {
         return data.some((v, i) => i % 4 === 3 && v > 0);
       });
       expect(drawn).toBe(true);
-      await page.getByRole('button', { name: 'debug' }).click();
+      await page.getByRole('button', { name: 'Debug' }).click();
       await expect(page.getByText(/det\[0\] dice=16/)).toBeVisible();
       await expectAccessible(page);
     }
@@ -82,7 +82,7 @@ if (!STAGING) {
     const sockets: string[] = [];
     page.on('websocket', (ws) => sockets.push(ws.url()));
     await page.goto('/arcane');
-    await expect(page.getByRole('status', { name: 'Connection' })).toHaveText('camera permission denied');
+    await expect(page.getByRole('status', { name: 'Connection' })).toHaveText('Camera access is off');
     expect(sockets).toEqual([]);
     await context.close();
   });

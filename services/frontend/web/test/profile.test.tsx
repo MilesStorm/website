@@ -78,6 +78,32 @@ describe('the profile', () => {
     expect(sent).toEqual([{ type: 'application/octet-stream', size: 10 }]);
     expect(screen.getByAltText('Your profile picture').getAttribute('src')).toBe('/api/account/picture?u=ann&v=7');
     expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Change' })).toBeTruthy();
+  });
+
+  it('keeps the appearance and Log out when the account will not load', async () => {
+    splice(ann);
+    open('/profile', { 'GET /api/account': () => json({ error: 'down' }, 500) });
+    const { Profile } = await import('@/islands/Profile');
+    render(<Profile />);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete my account…' })).toBeNull();
+  });
+
+  it('logs out from the page', async () => {
+    splice(ann);
+    const { assigned, calls } = open('/profile', {
+      'GET /api/account': () => json(account),
+      'GET /api/account/sharing': () => json({ available: false, share: false }),
+      'DELETE /api/session': () => new Response(null, { status: 204 }),
+    });
+    const { Profile } = await import('@/islands/Profile');
+    render(<Profile />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Log out' }));
+    await waitFor(() => expect(assigned).toEqual(['/']));
+    expect(calls.at(-1)?.route).toBe('DELETE /api/session');
   });
 
   it('sends a confirmation email for an unconfirmed address', async () => {
@@ -118,6 +144,10 @@ describe('the profile', () => {
     await userEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
     expect(calls.find((c) => c.route === 'PUT /api/account/sharing')?.body).toEqual({ share: true });
+    // What is shared sits behind a disclosure.
+    expect(screen.queryByText('Who sees them')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Show' }));
+    expect(await screen.findByText('Who sees them')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Delete my shared pictures' }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete everything' }));
     expect(await screen.findByText('Deleted 3 rolls.')).toBeTruthy();

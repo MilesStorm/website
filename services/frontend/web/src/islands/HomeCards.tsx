@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { readBootstrap, type Viewer } from '@/api/session';
-import { FeatureCard } from '@/components/FeatureCard';
+import { CARD_GRID, FeatureCard } from '@/components/FeatureCard';
+import { Storm } from './Storm';
 import { badgeVariants } from '@/components/ui/badge';
 import { homeCards } from '@/lib/features';
 import { cn } from '@/lib/utils';
@@ -19,6 +20,7 @@ export const HomeCards = island('HomeCards', function HomeCards() {
   return (
     <div className="flex flex-col gap-4">
       <section className={HERO_SECTION}>
+        <Storm />
         <p className={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M13 2 4 14h7l-1 8 9-12h-7z" />
@@ -36,7 +38,7 @@ export const HomeCards = island('HomeCards', function HomeCards() {
           <h1 className="min-w-0 break-words text-primary xl:tracking-tighter">{viewer.shown_name}</h1>
         </div>
       </section>
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <section className={CARD_GRID}>
         {homeCards(viewer.permissions).map(({ feature, state }) => (
           <FeatureCard key={feature.title} feature={feature} state={state} />
         ))}

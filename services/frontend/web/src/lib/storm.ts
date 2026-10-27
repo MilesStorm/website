@@ -1,6 +1,7 @@
 // The start page's storm in motion: drops of light falling down the dot grid, a branching strike
 // every so often, and the pointer parting the dots around it. Draws the same grid and fade as the
-// CSS still frame in Storm.astro, which it replaces only while motion is allowed and it is on screen.
+// CSS still frame (styles/storm.css), which it replaces only while motion is allowed and it is on
+// screen. Everything fades with the dot's own mask, so nothing is bright at the edges.
 import { motionOn } from '@/lib/theme';
 
 const GRID = 18;
@@ -24,11 +25,12 @@ interface Drop {
 /** x1, y1, x2, y2, line width */
 type Segment = [number, number, number, number, number];
 
-export function startStorm(root: HTMLElement) {
+/** Starts it on `root`; the result stops it. */
+export function startStorm(root: HTMLElement): () => void {
   const canvas = root.querySelector('canvas');
   const flash = root.querySelector<HTMLElement>('.storm-flash');
   const ctx = canvas?.getContext('2d');
-  if (!canvas || !flash || !ctx) return;
+  if (!canvas || !flash || !ctx) return () => {};
 
   let width = 0;
   let height = 0;
@@ -45,6 +47,7 @@ export function startStorm(root: HTMLElement) {
   let color = '';
   let dotAlpha = 0;
   let dotRadius = 1;
+  let strength = 0;
   const pointer = { x: 0, y: 0, on: false };
   const eased = { x: 0, y: 0 };
   let frame = 0;
@@ -57,6 +60,12 @@ export function startStorm(root: HTMLElement) {
     color = style.getPropertyValue('--foreground').trim();
     dotAlpha = parseFloat(style.getPropertyValue('--storm-dot')) / 100;
     dotRadius = parseFloat(style.getPropertyValue('--storm-dot-r'));
+    strength = parseFloat(style.getPropertyValue('--storm-lit'));
+  }
+
+  // The CSS mask: an ellipse filling the box, opaque at its centre, clear at 85% of its radii.
+  function maskAt(x: number, y: number) {
+    return Math.max(0, 1 - Math.hypot((x - width / 2) / (width / 2), (y - height / 2) / (height / 2)) / 0.85);
   }
 
   function layout() {
@@ -68,14 +77,11 @@ export function startStorm(root: HTMLElement) {
     ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
     dots = [];
     cols = [];
-    const cx = width / 2;
-    const cy = height * 0.35;
     for (let x = GRID / 2; x < width; x += GRID) {
       const col: number[] = [];
       for (let y = GRID / 2; y < height; y += GRID) {
-        const d = Math.hypot((x - cx) / (width * 0.5), (y - cy) / (height * 0.55));
         col.push(dots.length);
-        dots.push({ x, y, m: Math.max(0, 1 - d / 0.85) });
+        dots.push({ x, y, m: maskAt(x, y) });
       }
       cols.push(col);
     }
@@ -121,13 +127,27 @@ export function startStorm(root: HTMLElement) {
 
   function strike(now: number) {
     bolt = [];
-    const x0 = width / 2 + (Math.random() - 0.5) * width * 0.6;
-    branch(x0, -10, x0 + (Math.random() - 0.5) * 220, height * (0.5 + Math.random() * 0.3), 160, 1.6);
+    const x0 = width / 2 + (Math.random() - 0.5) * width * 0.4;
+    branch(
+      x0,
+      height * 0.05,
+      x0 + (Math.random() - 0.5) * height * 0.5,
+      height * (0.55 + Math.random() * 0.3),
+      height * 0.4,
+      1.6,
+    );
     const trunk = bolt.length;
     for (let b = 2 + Math.floor(Math.random() * 3); b > 0; b--) {
       const [, , x, y] = bolt[Math.floor(trunk * (0.2 + Math.random() * 0.5))];
       const side = Math.random() < 0.5 ? -1 : 1;
-      branch(x, y, x + side * (60 + Math.random() * 120), y + 70 + Math.random() * 130, 60, 0.8);
+      branch(
+        x,
+        y,
+        x + side * height * (0.15 + Math.random() * 0.3),
+        y + height * (0.18 + Math.random() * 0.3),
+        height * 0.15,
+        0.8,
+      );
     }
     for (let k = 0; k < dots.length; k++) {
       let nearest = Infinity;
@@ -182,7 +202,7 @@ export function startStorm(root: HTMLElement) {
     const buckets: number[][] = Array.from({ length: BUCKETS }, () => []);
     for (let k = 0; k < dots.length; k++) {
       const m = dots[k].m;
-      const a = Math.min(1, m * dotAlpha + Math.max(m, 0.12) ** 0.6 * Math.min(glow[k], 1.4) * 0.75);
+      const a = Math.min(1, m * (dotAlpha + Math.min(glow[k], 1.4) * strength));
       if (a >= 0.004) buckets[Math.min(BUCKETS - 1, Math.floor(a * BUCKETS))].push(k);
     }
     ctx!.fillStyle = color;
@@ -207,7 +227,7 @@ export function startStorm(root: HTMLElement) {
       ctx!.shadowColor = color;
       ctx!.shadowBlur = 14;
       for (const [x1, y1, x2, y2, w] of bolt) {
-        ctx!.globalAlpha = light * (w > 1 ? 0.85 : 0.45);
+        ctx!.globalAlpha = light * (w > 1 ? 1.1 : 0.6) * strength * maskAt((x1 + x2) / 2, (y1 + y2) / 2);
         ctx!.lineWidth = w;
         ctx!.beginPath();
         ctx!.moveTo(x1, y1);
@@ -237,34 +257,50 @@ export function startStorm(root: HTMLElement) {
   }
 
   // Behind the page's content with pointer-events off, so it listens on the window.
-  window.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'touch') return;
-    const rect = canvas.getBoundingClientRect();
-    pointer.x = e.clientX - rect.left;
-    pointer.y = e.clientY - rect.top;
-    if (!pointer.on) {
-      eased.x = pointer.x;
-      eased.y = pointer.y;
-    }
-    pointer.on = pointer.x >= 0 && pointer.y >= 0 && pointer.x <= rect.width && pointer.y <= rect.height;
-  });
-  document.documentElement.addEventListener('pointerleave', () => {
-    pointer.on = false;
-  });
+  const off = new AbortController();
+  const { signal } = off;
+  window.addEventListener(
+    'pointermove',
+    (e) => {
+      if (e.pointerType === 'touch') return;
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = e.clientX - rect.left;
+      pointer.y = e.clientY - rect.top;
+      if (!pointer.on) {
+        eased.x = pointer.x;
+        eased.y = pointer.y;
+      }
+      pointer.on = pointer.x >= 0 && pointer.y >= 0 && pointer.x <= rect.width && pointer.y <= rect.height;
+    },
+    { signal },
+  );
+  document.documentElement.addEventListener('pointerleave', () => (pointer.on = false), { signal });
 
-  new IntersectionObserver(([entry]) => {
+  const seen = new IntersectionObserver(([entry]) => {
     visible = entry.isIntersecting;
     run();
-  }).observe(root);
-  new ResizeObserver(() => {
+  });
+  seen.observe(root);
+  const sized = new ResizeObserver(() => {
     if (frame) layout();
-  }).observe(canvas);
+  });
+  sized.observe(canvas);
   // The theme script toggles `.dark` on <html>, and sets `data-motion` for a motion choice.
-  new MutationObserver(() => {
+  const themed = new MutationObserver(() => {
     readStyle();
     run();
-  }).observe(document.documentElement, { attributeFilter: ['class', 'data-motion'] });
-  matchMedia('(color-gamut: p3)').addEventListener('change', readStyle);
-  matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', run);
-  document.addEventListener('visibilitychange', run);
+  });
+  themed.observe(document.documentElement, { attributeFilter: ['class', 'data-motion'] });
+  matchMedia('(color-gamut: p3)').addEventListener('change', readStyle, { signal });
+  matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', run, { signal });
+  document.addEventListener('visibilitychange', run, { signal });
+
+  return () => {
+    off.abort();
+    seen.disconnect();
+    sized.disconnect();
+    themed.disconnect();
+    cancelAnimationFrame(frame);
+    root.removeAttribute('data-live');
+  };
 }

@@ -1,10 +1,6 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 import Page from '@/components/Page.astro';
-import { buttonVariants } from '@/components/ui/button';
-import { Card, CardAction, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ModeToggle } from '@/islands/ModeToggle';
-import { MotionToggle } from '@/islands/MotionToggle';
 import { Profile } from '@/islands/Profile';
 import { ProfileSkeleton } from '@/islands/ProfileSkeleton';
 ---
@@ -14,35 +10,5 @@ import { ProfileSkeleton } from '@/islands/ProfileSkeleton';
     <Profile client:only="react">
       <ProfileSkeleton slot="fallback" />
     </Profile>
-    <Card>
-      <CardHeader>
-        <CardTitle><h2>Site theme</h2></CardTitle>
-        <CardDescription>Saved in this browser.</CardDescription>
-        <CardAction><ModeToggle client:load /></CardAction>
-      </CardHeader>
-    </Card>
-    <Card>
-      <CardHeader>
-        <CardTitle><h2>Motion</h2></CardTitle>
-        <CardDescription>The start page's storm and the theme switch. Saved in this browser.</CardDescription>
-        <CardAction><MotionToggle client:load /></CardAction>
-      </CardHeader>
-    </Card>
-    <Card>
-      <CardHeader>
-        <CardTitle><h2>Log out</h2></CardTitle>
-        <CardDescription>Ends your session in this browser.</CardDescription>
-        <CardAction>
-          <button type="button" data-log-out class={buttonVariants({ variant: 'outline', size: 'sm' })}>Log out</button>
-        </CardAction>
-      </CardHeader>
-    </Card>
   </Page>
 </Layout>
-
-<script>
-  import { logOut } from '@/api/session';
-
-  // The user menu has it too; this one needs no menu.
-  document.querySelector('[data-log-out]')?.addEventListener('click', () => void logOut());
-</script>

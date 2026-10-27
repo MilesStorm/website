@@ -31,6 +31,7 @@ import { FormAlert } from '@/components/FormAlert';
 import {
   AdminTabs,
   EmptyCard,
+  FILL_CELL,
   INVITES_HEAD,
   INVITE_CELLS,
   INVITE_FORM,
@@ -42,6 +43,8 @@ import {
   ROLE_CELLS,
   ROLE_ROWS,
   SearchField,
+  STACKED,
+  STACKED_WRAP,
   TableCard,
   USERS_HEAD,
   USER_CELLS,
@@ -148,6 +151,14 @@ function useListing<T>(load: (page: number, search: string) => Promise<Outcome<{
   };
 }
 
+/** A user without an address: a dash in the table, words in the phone's stack (the heads are gone). */
+const NO_EMAIL = (
+  <>
+    <span className="max-sm:hidden">—</span>
+    <span className="sm:hidden">No email</span>
+  </>
+);
+
 const loadUsers = (page: number, search: string) =>
   attempt(client.GET('/api/admin/users', { params: { query: { page, limit: PAGE_SIZE, search } } }));
 const loadRoles = (page: number, search: string) =>
@@ -172,10 +183,10 @@ function UsersTab({ allRoles, me }: { allRoles: RoleRef[]; me: string | null }) 
       cells={USER_CELLS}
       rows={PAGE_SIZE}
       row={(user) => (
-        <TableRow key={user.id}>
-          <TableCell className="font-medium">{user.username}</TableCell>
-          <TableCell className="text-muted-foreground">{user.email ?? '—'}</TableCell>
-          <TableCell className="w-full min-w-56 whitespace-normal">
+        <TableRow role="row" key={user.id} className={STACKED}>
+          <TableCell role="cell" className="font-medium">{user.username}</TableCell>
+          <TableCell role="cell" className="text-muted-foreground">{user.email ?? NO_EMAIL}</TableCell>
+          <TableCell role="cell" className={FILL_CELL}>
             <Assigned
               owner={user.username}
               kind="role"
@@ -218,9 +229,9 @@ function RolesTab({ allPermissions }: { allPermissions: Permission[] }) {
       cells={ROLE_CELLS}
       rows={ROLE_ROWS}
       row={(role) => (
-        <TableRow key={role.id}>
-          <TableCell className="font-medium">{role.name}</TableCell>
-          <TableCell className="w-full min-w-56 whitespace-normal">
+        <TableRow role="row" key={role.id} className={STACKED}>
+          <TableCell role="cell" className="font-medium">{role.name}</TableCell>
+          <TableCell role="cell" className={FILL_CELL}>
             <Assigned
               owner={role.name}
               kind="permission"
@@ -482,7 +493,7 @@ function InvitesTab({ allRoles }: { allRoles: RoleRef[] }) {
       ) : (
         <TableCard head={INVITES_HEAD} actions>
           {invites === null ? (
-            <PlaceholderRows cells={INVITE_CELLS} rows={3} />
+            <PlaceholderRows cells={INVITE_CELLS} rows={3} stacked={STACKED_WRAP} />
           ) : (
             invites.data.map((invite) => <InviteRow key={invite.id} invite={invite} changed={reload} />)
           )}
@@ -621,21 +632,21 @@ function InviteRow({ invite, changed }: { invite: Schemas['AdminInvite']; change
     else setError(`Not turned off: ${done.message}`);
   };
   return (
-    <TableRow>
-      <TableCell>
+    <TableRow role="row" className={STACKED_WRAP}>
+      <TableCell role="cell">
         <div className="font-medium">{invite.note ?? '—'}</div>
         {invite.created_by && <div className="text-xs text-muted-foreground">by {invite.created_by}</div>}
         {invite.joined.length > 0 && <div className="text-xs text-muted-foreground">joined: {invite.joined.join(', ')}</div>}
       </TableCell>
-      <TableCell>
+      <TableCell role="cell">
         <Badge variant="secondary">{invite.role}</Badge>
       </TableCell>
-      <TableCell className="tabular-nums">{inviteUses(invite)}</TableCell>
-      <TableCell className="tabular-nums">{utcDate(invite.expires_at)}</TableCell>
-      <TableCell>
+      <TableCell role="cell" className="tabular-nums">{inviteUses(invite)}</TableCell>
+      <TableCell role="cell" className="tabular-nums">{utcDate(invite.expires_at)}</TableCell>
+      <TableCell role="cell">
         <Badge variant={STATUS_BADGE[status]}>{status}</Badge>
       </TableCell>
-      <TableCell className="text-right">
+      <TableCell role="cell" className="text-right max-sm:ml-auto">
         {invite.live && (
           // Turning a link off can't be undone: it asks first.
           <AlertDialog>

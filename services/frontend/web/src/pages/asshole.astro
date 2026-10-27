@@ -1,7 +1,7 @@
 ---
 import { Hourglass } from 'lucide-react';
 import Layout from '@/layouts/Layout.astro';
-import Storm from '@/components/Storm.astro';
+import { Storm } from '@/islands/Storm';
 import { badgeVariants } from '@/components/ui/badge';
 import { Countdown, CountdownSkeleton } from '@/islands/Countdown';
 import { cn } from '@/lib/utils';
@@ -9,20 +9,24 @@ import { cn } from '@/lib/utils';
 
 <Layout title="MilesStorm: countdown">
   <main class="relative isolate">
-    <Storm />
-    <section class="mx-auto flex max-w-3xl flex-col items-center gap-2 px-4 pt-12 pb-16 text-center md:pt-20 lg:pt-24">
-      <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
-        <Hourglass aria-hidden="true" />
-        Countdown
-      </p>
-      <h1 class="max-w-2xl text-4xl leading-tight font-semibold tracking-tight text-balance md:text-5xl lg:leading-[1.1]">
-        Time until Miles stops being an asshole
-      </h1>
-      <div class="flex w-full justify-center pt-8">
-        <Countdown client:only="react">
-          <CountdownSkeleton slot="fallback" />
-        </Countdown>
-      </div>
-    </section>
+    <div class="relative mx-auto max-w-5xl">
+      <Storm client:idle />
+      <section class="mx-auto flex max-w-3xl flex-col items-center gap-2 px-4 pt-12 pb-16 text-center md:pt-20 lg:pt-24">
+        <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
+          <Hourglass aria-hidden="true" />
+          Countdown
+        </p>
+        <h1
+          class="max-w-2xl text-4xl leading-tight font-semibold tracking-tight text-balance md:text-5xl lg:leading-[1.1]"
+        >
+          Time until Miles stops being an asshole
+        </h1>
+        <div class="flex w-full justify-center pt-8">
+          <Countdown client:only="react">
+            <CountdownSkeleton slot="fallback" />
+          </Countdown>
+        </div>
+      </section>
+    </div>
   </main>
 </Layout>
