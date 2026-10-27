@@ -2,30 +2,31 @@
 // The states and commands are keyed by the Rust enums (through the schema), so one added there
 // fails `astro check` until it is worded here.
 import type { Schemas } from '@/api/client';
+import type { Tone } from '@/components/ServerCards';
 
 export type State = Schemas['EnshroudedState'];
 export type Command = Schemas['EnshroudedCommand'];
 
-/** How a state looks (badge), its name, an explanation, and whether it is under way. */
+/** How a state looks (the badge's tone), its name, an explanation, and whether it is under way. */
 export const STATES: Record<
   State,
-  { badge: 'default' | 'secondary' | 'outline' | 'destructive'; label: string; hint: string; moving: boolean }
+  { tone: Tone; label: string; hint: string; moving: boolean }
 > = {
-  Online: { badge: 'default', label: 'Online', hint: '', moving: false },
-  Starting: { badge: 'secondary', label: 'Starting', hint: 'Loading the world. Players can join in a minute or two.', moving: true },
-  Restarting: { badge: 'secondary', label: 'Restarting', hint: 'Saving the world and starting again.', moving: true },
+  Online: { tone: 'online', label: 'Online', hint: '', moving: false },
+  Starting: { tone: 'pending', label: 'Starting', hint: 'Loading the world. Players can join in a minute or two.', moving: true },
+  Restarting: { tone: 'pending', label: 'Restarting', hint: 'Saving the world and starting again.', moving: true },
   Updating: {
-    badge: 'secondary',
+    tone: 'pending',
     label: 'Updating',
     hint: "Downloading the latest build from Steam. The server starts by itself when it's done; this can take several minutes.",
     moving: true,
   },
-  Stopping: { badge: 'secondary', label: 'Stopping', hint: 'Saving the world.', moving: true },
+  Stopping: { tone: 'pending', label: 'Stopping', hint: 'Saving the world.', moving: true },
   // Stopped is a normal state, not a failure.
-  Stopped: { badge: 'outline', label: 'Stopped', hint: 'Restart starts it again.', moving: false },
-  Crashed: { badge: 'destructive', label: 'Crashed', hint: 'The server kept failing to start. Try Restart or Force update.', moving: false },
+  Stopped: { tone: 'off', label: 'Stopped', hint: 'Restart starts it again.', moving: false },
+  Crashed: { tone: 'bad', label: 'Crashed', hint: 'The server kept failing to start. Try Restart or Force update.', moving: false },
   Unreachable: {
-    badge: 'destructive',
+    tone: 'bad',
     label: 'Unreachable',
     hint: "Neither the game nor its control port answers. The server's pod may be starting or moving.",
     moving: false,
@@ -37,14 +38,14 @@ export function busy(state: State): boolean {
   return state === 'Restarting' || state === 'Updating' || state === 'Stopping';
 }
 
-/** `secs` as "45 s", "12 min", "3 h 5 min" or "2 d 4 h". */
+/** `secs` as "45 s", "12 min", "3 h 5 min" or "2 d 4 h"; a unit that is zero is left out ("2 d"). */
 export function duration(secs: number): string {
   const s = Math.max(0, Math.floor(secs));
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d} d ${h} h`;
-  if (h > 0) return `${h} h ${m} min`;
+  if (d > 0) return h > 0 ? `${d} d ${h} h` : `${d} d`;
+  if (h > 0) return m > 0 ? `${h} h ${m} min` : `${h} h`;
   if (m > 0) return `${m} min`;
   return `${s} s`;
 }

@@ -12,16 +12,16 @@ test('the panel shows the server, in light and dark', async ({ context, page }) 
     else await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
     await expect(page.getByRole('heading', { name: 'Chronicle' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Players online' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Server controls' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Restart' })).toBeVisible();
     await expectAccessible(page);
   }
 });
 
 if (!STAGING) {
   // The stand-ins' usual answer (online, nobody waiting on a command), and with Steam's latest
-  // build unknown; on a wide window, on one where the figures' cards are at their narrowest side
-  // by side, and on one just narrower, where they stack.
-  for (const width of [1280, 768, 700]) {
+  // build unknown; on a wide window, at the breakpoint where the cards drop to their short labels
+  // and notes, and on a phone.
+  for (const width of [1280, 640, 390]) {
     test.describe(`at ${width}px`, () => {
       test.use({ viewport: { width, height: 900 } });
       for (const fresh of [false, 'nobuild']) {

@@ -1,21 +1,21 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 import Gate from '@/components/Gate.astro';
-import Storm from '@/components/Storm.astro';
-import { FeatureCard } from '@/components/FeatureCard';
+import { Storm } from '@/islands/Storm';
+import { CARD_GRID, FeatureCard } from '@/components/FeatureCard';
 import { badgeVariants } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { HomeCards } from '@/islands/HomeCards';
-import { HomeSkeleton } from '@/islands/HomeSkeleton';
+import { HERO_SECTION, HomeSkeleton } from '@/islands/HomeSkeleton';
 import { previewCards } from '@/lib/features';
 import { cn } from '@/lib/utils';
 ---
 
 <Layout title="MilesStorm">
   <main class="relative isolate">
-    <Storm />
     <Gate session="out" class="mx-auto flex max-w-5xl flex-col gap-4 px-4 pb-16 md:px-6">
-      <section class="flex flex-col items-center gap-2 pt-12 pb-12 text-center md:pt-20 lg:pt-24">
+      <section class={HERO_SECTION}>
+        <Storm client:idle />
         <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M13 2 4 14h7l-1 8 9-12h-7z"></path>
@@ -36,7 +36,7 @@ import { cn } from '@/lib/utils';
         </div>
         <p class="pt-2 text-sm text-muted-foreground">Early access: features are unlocked for invited accounts.</p>
       </section>
-      <section class="grid gap-4 sm:grid-cols-2">
+      <section class={CARD_GRID}>
         {previewCards().map((feature) => <FeatureCard feature={feature} state="preview" />)}
       </section>
     </Gate>

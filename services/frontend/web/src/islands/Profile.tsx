@@ -1,28 +1,36 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { CircleCheck } from 'lucide-react';
+import { ChevronDown, CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { AppearanceCard } from '@/components/Appearance';
 import { FormAlert } from '@/components/FormAlert';
+import { Setting, SettingList } from '@/components/Setting';
 import { bffUrl, client, type Schemas } from '@/api/client';
-import { readBootstrap, viewerChanged, type Viewer } from '@/api/session';
+import { logOut, readBootstrap, viewerChanged, type Viewer } from '@/api/session';
 import { attempt, type Outcome } from '@/lib/errors';
 import {
   ACCOUNT_INTRO,
   DELETE_INTRO,
-  DELETE_OPEN,
+  LOGOUT_INTRO,
   NAME_HINT,
   PICTURE_HINT,
-  SHARING_DELETE,
+  SHARING_DELETE_INTRO,
+  SHARING_DELETE_TITLE,
+  SHARING_FACTS_INTRO,
+  SHARING_FACTS_TITLE,
   SHARING_INTRO,
   SHARING_NOTE,
+  SHARING_SWITCH,
   SHARING_TITLE,
+  USERNAME_HINT,
 } from '@/lib/copy';
-import { ProfileSkeleton, SharingFacts, SharingSkeleton } from './ProfileSkeleton';
+import { DELETE_OPEN_LABEL, ProfileSkeleton, SHARING_DELETE_LABEL, SharingFacts, SharingSkeleton } from './ProfileSkeleton';
 import defaultPicture from '@/assets/default-profile.png';
 import { island } from '@/lib/island';
 
@@ -32,6 +40,8 @@ type Account = Schemas['AccountInfo'];
 export const PICTURE_MAX_BYTES = 5 * 1024 * 1024;
 export const NAME_MAX = 40;
 const PICTURE_TYPES = 'image/jpeg,image/png,image/webp,image/gif';
+/** The outline button of an action that deletes: red text and edge, a red wash on hover. */
+const DANGER_OUTLINE = 'border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive';
 
 /** What a section says after an action: done, or why not. */
 type Note = { ok: boolean; text: string } | null;
@@ -47,8 +57,8 @@ function NoteLine({ note }: { note: Note }) {
   );
 }
 
-/** The logged-in user's profile: name and picture, email, sharing roll pictures (with the
- * `arcane` permission), deleting the account. The theme is the page's own card. */
+/** The logged-in user's profile: name and picture, email, how the site looks, sharing roll pictures
+ * (with the `arcane` permission), logging out and deleting the account. */
 export const Profile = island('Profile', function Profile() {
   const [account, setAccount] = useState<Outcome<Account> | null>(null);
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -67,14 +77,22 @@ export const Profile = island('Profile', function Profile() {
   };
 
   if (!account) return <ProfileSkeleton />;
-  if (!account.ok) return <FormAlert message={account.message} />;
+  if (!account.ok) {
+    return (
+      <div className="flex flex-col gap-6">
+        <FormAlert message={account.message} />
+        <AppearanceCard />
+        <SessionCard />
+      </div>
+    );
+  }
   const canShare = viewer?.permissions.includes('arcane') ?? false;
   return (
     <div className="flex flex-col gap-6">
       <AccountCard account={account.data} update={update} />
-      <EmailCard account={account.data} />
+      <AppearanceCard />
       {canShare && <SharingCard />}
-      <DeleteCard account={account.data} />
+      <SessionCard account={account.data} />
     </div>
   );
 });
@@ -135,64 +153,74 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
         </CardTitle>
         <CardDescription>{ACCOUNT_INTRO}</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-8 sm:grid-cols-[auto_1fr]">
-        <div className="flex flex-col items-center gap-3 sm:items-start">
-          <img
-            src={account.picture_url ? bffUrl(account.picture_url) : defaultPicture.src}
-            alt="Your profile picture"
-            width={96}
-            height={96}
-            className="size-24 rounded-full object-cover ring-2 ring-border"
-          />
-          {account.pictures_available ? (
-            <>
-              <div className="flex gap-2">
-                <Button size="sm" disabled={busy} onClick={() => file.current?.click()} data-faro-user-action-name="profile upload picture">
-                  Upload
+      <CardContent>
+        <SettingList>
+          <Setting
+            title="Profile picture"
+            description={account.pictures_available ? PICTURE_HINT : "Pictures can't be changed right now."}
+            lead={
+              <img
+                src={account.picture_url ? bffUrl(account.picture_url) : defaultPicture.src}
+                alt="Your profile picture"
+                width={48}
+                height={48}
+                className="size-12 shrink-0 rounded-full object-cover ring-2 ring-border"
+              />
+            }
+            note={pictureNote && <NoteLine note={pictureNote} />}
+          >
+            {account.pictures_available && (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => file.current?.click()}
+                  data-faro-user-action-name="profile upload picture"
+                >
+                  Change
                 </Button>
                 {account.picture_version !== null && (
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => void remove()} data-faro-user-action-name="profile remove picture">
                     Remove
                   </Button>
                 )}
-              </div>
-              <input
-                ref={file}
-                type="file"
-                accept={PICTURE_TYPES}
-                className="sr-only"
-                tabIndex={-1}
-                aria-label="Profile picture file"
-                onChange={(e) => {
-                  const picture = e.target.files?.[0];
-                  // Cleared, so choosing the same file again uploads it again.
-                  e.target.value = '';
-                  if (picture) void upload(picture);
-                }}
-              />
-              <p className="text-xs text-muted-foreground">{PICTURE_HINT}</p>
-            </>
-          ) : (
-            <p className="max-w-40 text-center text-xs text-muted-foreground sm:text-left">
-              Pictures can't be changed right now.
-            </p>
-          )}
-          <NoteLine note={pictureNote} />
-        </div>
-        <form
-          data-faro-user-action-name="profile save name"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void saveName();
-          }}
-          className="flex flex-col gap-3"
-        >
-          <Field>
-            <FieldLabel htmlFor={nameId}>Display name</FieldLabel>
-            <div className="flex flex-wrap gap-2">
+                <input
+                  ref={file}
+                  type="file"
+                  accept={PICTURE_TYPES}
+                  className="sr-only"
+                  tabIndex={-1}
+                  aria-label="Profile picture file"
+                  onChange={(e) => {
+                    const picture = e.target.files?.[0];
+                    // Cleared, so choosing the same file again uploads it again.
+                    e.target.value = '';
+                    if (picture) void upload(picture);
+                  }}
+                />
+              </>
+            )}
+          </Setting>
+          <Setting
+            wide
+            title="Display name"
+            htmlFor={nameId}
+            description={NAME_HINT}
+            descriptionId={`${nameId}-description`}
+            note={nameNote && <NoteLine note={nameNote} />}
+          >
+            <form
+              data-faro-user-action-name="profile save name"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void saveName();
+              }}
+              className="flex w-full gap-2 sm:w-auto"
+            >
               <Input
                 id={nameId}
-                className="max-w-xs"
+                className="min-w-0 flex-1 sm:w-52 sm:flex-none"
                 placeholder={account.username}
                 maxLength={NAME_MAX}
                 value={name}
@@ -203,23 +231,22 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
                   setNameNote(null);
                 }}
               />
-              <Button type="submit" disabled={busy || unchanged}>
+              <Button type="submit" variant={unchanged ? 'outline' : 'default'} disabled={busy || unchanged}>
                 Save
               </Button>
-            </div>
-            <FieldDescription id={`${nameId}-description`}>
-              {NAME_HINT.before} <span className="font-semibold">{account.username}</span>
-              {NAME_HINT.after}
-            </FieldDescription>
-          </Field>
-          <NoteLine note={nameNote} />
-        </form>
+            </form>
+          </Setting>
+          <Setting title="Username" description={USERNAME_HINT}>
+            <span className="text-sm font-medium">{account.username}</span>
+          </Setting>
+          <EmailSetting account={account} />
+        </SettingList>
       </CardContent>
     </Card>
   );
 }
 
-function EmailCard({ account }: { account: Account }) {
+function EmailSetting({ account }: { account: Account }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<Note>(null);
   const unconfirmed = account.email !== null && !account.email_verified;
@@ -236,36 +263,27 @@ function EmailCard({ account }: { account: Account }) {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Email</h2>
-        </CardTitle>
-        {account.email === null ? (
-          <CardDescription>Your account has no email address: you log in with GitHub.</CardDescription>
+    <Setting
+      title="Email"
+      description={
+        account.email === null ? (
+          'Your account has no email address: you log in with GitHub.'
         ) : (
-          <CardDescription className="flex flex-wrap items-center gap-2">
-            <span className="break-all text-foreground">{account.email}</span>
-            {account.email_verified ? <Badge>Confirmed</Badge> : <Badge variant="outline">Not confirmed</Badge>}
-          </CardDescription>
-        )}
-        {unconfirmed && (
-          <CardAction>
-            <Button size="sm" disabled={busy} onClick={() => void send()} data-faro-user-action-name="profile send confirmation">
-              Send confirmation email
-            </Button>
-          </CardAction>
-        )}
-      </CardHeader>
-      {(unconfirmed || note) && (
-        <CardContent className="flex flex-col gap-3">
-          {unconfirmed && (
-            <p className="text-sm text-muted-foreground">Confirm it so we can help you if you forget your password.</p>
-          )}
-          <NoteLine note={note} />
-        </CardContent>
+          <>
+            <span className="block break-all text-foreground">{account.email}</span>
+            {unconfirmed && <span className="block">Confirm it so we can help you if you forget your password.</span>}
+          </>
+        )
+      }
+      note={note && <NoteLine note={note} />}
+    >
+      {account.email !== null && (account.email_verified ? <Badge>Confirmed</Badge> : <Badge variant="outline">Not confirmed</Badge>)}
+      {unconfirmed && (
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => void send()} data-faro-user-action-name="profile send confirmation">
+          Send confirmation email
+        </Button>
       )}
-    </Card>
+    </Setting>
   );
 }
 
@@ -273,7 +291,9 @@ function SharingCard() {
   const [state, setState] = useState<Outcome<Schemas['SharingState']> | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [facts, setFacts] = useState(false);
   const [note, setNote] = useState<Note>(null);
+  const switchId = useId();
   useEffect(() => {
     void attempt(client.GET('/api/account/sharing')).then(setState);
   }, []);
@@ -317,47 +337,77 @@ function SharingCard() {
         <CardTitle>
           <h2>{SHARING_TITLE}</h2>
         </CardTitle>
-        <CardDescription>{SHARING_INTRO}</CardDescription>
-        <CardAction>
-          <Switch
-            checked={state.data.share}
-            disabled={busy}
-            aria-label="Share pictures of my rolls"
-            onCheckedChange={(share) => void choose(share)}
-          />
-        </CardAction>
       </CardHeader>
       <CardContent>
-        <SharingFacts />
+        <SettingList>
+          <Setting title={SHARING_SWITCH} htmlFor={switchId} description={SHARING_INTRO}>
+            <Switch id={switchId} checked={state.data.share} disabled={busy} onCheckedChange={(share) => void choose(share)} />
+          </Setting>
+          <Collapsible open={facts} onOpenChange={setFacts}>
+            <Setting title={SHARING_FACTS_TITLE} description={SHARING_FACTS_INTRO}>
+              <CollapsibleTrigger asChild>
+                <Button size="sm" variant="ghost">
+                  {facts ? 'Hide' : 'Show'} <ChevronDown className={facts ? 'rotate-180' : ''} />
+                </Button>
+              </CollapsibleTrigger>
+            </Setting>
+            <CollapsibleContent className="flex flex-col gap-3 pt-4">
+              <SharingFacts />
+              <p className="text-xs text-muted-foreground">{SHARING_NOTE}</p>
+            </CollapsibleContent>
+          </Collapsible>
+          <Setting
+            title={SHARING_DELETE_TITLE}
+            description={
+              confirming ? "Delete every roll picture you've shared or flagged? This also turns sharing off." : SHARING_DELETE_INTRO
+            }
+            note={note && <NoteLine note={note} />}
+          >
+            {confirming ? (
+              <>
+                <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+                  Cancel
+                </Button>
+                <Button size="sm" variant="destructive" disabled={busy} onClick={() => void removeAll()} data-faro-user-action-name="profile delete data">
+                  Delete everything
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" variant="outline" className={DANGER_OUTLINE} onClick={() => setConfirming(true)}>
+                {SHARING_DELETE_LABEL}
+              </Button>
+            )}
+          </Setting>
+        </SettingList>
       </CardContent>
-      <CardFooter className="flex flex-col items-stretch gap-3">
-        {confirming ? (
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm">Delete every roll picture you've shared or flagged? This also turns sharing off.</p>
-            <div className="flex gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
-                Cancel
-              </Button>
-              <Button size="sm" variant="destructive" disabled={busy} onClick={() => void removeAll()} data-faro-user-action-name="profile delete data">
-                Delete everything
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="max-w-lg text-xs text-muted-foreground">{SHARING_NOTE}</p>
-            <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>
-              {SHARING_DELETE}
-            </Button>
-          </div>
-        )}
-        <NoteLine note={note} />
-      </CardFooter>
     </Card>
   );
 }
 
-function DeleteCard({ account }: { account: Account }) {
+/** Log out, and (when the account is known) deleting it. */
+function SessionCard({ account }: { account?: Account }) {
+  return (
+    <Card className="border-destructive/40">
+      <CardHeader>
+        <CardTitle>
+          <h2>Session and account</h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <SettingList>
+          <Setting title="Log out" description={LOGOUT_INTRO}>
+            <Button size="sm" variant="outline" onClick={() => void logOut()} data-faro-user-action-name="profile log out">
+              Log out
+            </Button>
+          </Setting>
+          {account && <DeleteSetting account={account} />}
+        </SettingList>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DeleteSetting({ account }: { account: Account }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [typed, setTyped] = useState('');
@@ -387,71 +437,68 @@ function DeleteCard({ account }: { account: Account }) {
   };
 
   return (
-    <Card className="border-destructive/40">
-      <CardHeader>
-        <CardTitle>
-          <h2>Delete account</h2>
-        </CardTitle>
-        <CardDescription>{DELETE_INTRO}</CardDescription>
-        {!open && (
-          <CardAction>
-            <Button size="sm" variant="destructive" onClick={() => setOpen(true)}>
-              {DELETE_OPEN}
-            </Button>
-          </CardAction>
-        )}
-      </CardHeader>
-      {open && (
-        <CardContent className="flex flex-col gap-3">
-          {byEmail ? (
-            <>
-              <p className="text-sm">
-                We'll email you a link to confirm. Nothing is deleted until you open it and confirm once more.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="ghost" onClick={close}>
-                  Cancel
-                </Button>
-                <Button size="sm" variant="destructive" disabled={busy} onClick={() => void sendLink()} data-faro-user-action-name="profile email delete link">
-                  Email me the link
-                </Button>
-              </div>
-            </>
-          ) : (
-            <form
-              data-faro-user-action-name="profile delete account"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void deleteNow();
-              }}
-              className="flex flex-col gap-3"
-            >
-              <Field>
-                <FieldLabel htmlFor={confirmId}>
-                  {unconfirmed && "Your email isn't confirmed, so there's no link to wait for. "}Type your username,{' '}
-                  {account.username}, to confirm.
-                </FieldLabel>
-                <Input
-                  id={confirmId}
-                  className="max-w-xs"
-                  autoComplete="off"
-                  value={typed}
-                  onChange={(e) => setTyped(e.target.value)}
-                />
-              </Field>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="ghost" onClick={close}>
-                  Cancel
-                </Button>
-                <Button type="submit" size="sm" variant="destructive" disabled={busy || typed.trim() !== account.username}>
-                  Delete permanently
-                </Button>
-              </div>
-            </form>
-          )}
-          <NoteLine note={note} />
-        </CardContent>
+    <Setting
+      title="Delete account"
+      description={DELETE_INTRO}
+      note={
+        open && (
+          <>
+            {byEmail ? (
+              <>
+                <p className="text-sm">
+                  We'll email you a link to confirm. Nothing is deleted until you open it and confirm once more.
+                </p>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button size="sm" variant="ghost" onClick={close}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" variant="destructive" disabled={busy} onClick={() => void sendLink()} data-faro-user-action-name="profile email delete link">
+                    Email me the link
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <form
+                data-faro-user-action-name="profile delete account"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void deleteNow();
+                }}
+                className="flex flex-col gap-3"
+              >
+                <Field>
+                  <FieldLabel htmlFor={confirmId}>
+                    {unconfirmed && "Your email isn't confirmed, so there's no link to wait for. "}Type your username,{' '}
+                    {account.username}, to confirm.
+                  </FieldLabel>
+                  <Input
+                    id={confirmId}
+                    className="max-w-xs"
+                    autoComplete="off"
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                  />
+                </Field>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button type="button" size="sm" variant="ghost" onClick={close}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" size="sm" variant="destructive" disabled={busy || typed.trim() !== account.username}>
+                    Delete permanently
+                  </Button>
+                </div>
+              </form>
+            )}
+            <NoteLine note={note} />
+          </>
+        )
+      }
+    >
+      {!open && (
+        <Button size="sm" variant="destructive" onClick={() => setOpen(true)}>
+          {DELETE_OPEN_LABEL}
+        </Button>
       )}
-    </Card>
+    </Setting>
   );
 }

@@ -6,7 +6,6 @@ describe('the start page cards', () => {
     const cards = homeCards(['llama']).map((c) => [c.feature.to, c.state]);
     expect(cards).toEqual([
       ['/ark', 'open'],
-      ['/profile', 'open'],
       ['/arcane', 'locked'],
     ]);
   });
@@ -14,7 +13,7 @@ describe('the start page cards', () => {
   it('show everything to someone with every permission', () => {
     const cards = homeCards(['arcane', 'llama', 'enshrouded', 'manage_permissions']);
     expect(cards.every((c) => c.state === 'open')).toBe(true);
-    expect(cards).toHaveLength(5);
+    expect(cards).toHaveLength(3);
   });
 
   it('preview the advertised features when logged out', () => {

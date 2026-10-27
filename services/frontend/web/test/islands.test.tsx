@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ann, json, splice } from './fixtures';
 
@@ -39,17 +39,36 @@ describe('the theme toggle', () => {
   });
 });
 
-describe('the motion toggle', () => {
-  it('saves the choice and marks the page', async () => {
-    const { MotionToggle } = await import('@/islands/MotionToggle');
-    render(<MotionToggle />);
-    await userEvent.click(screen.getByRole('button', { name: 'Motion: System' }));
-    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'Reduced' }));
+describe("the profile's appearance", () => {
+  it('saves the theme and applies it', async () => {
+    const { AppearanceCard } = await import('@/components/Appearance');
+    render(<AppearanceCard />);
+    const theme = within(screen.getByRole('radiogroup', { name: 'Theme' }));
+    expect(theme.getByRole('radio', { name: 'System' }).getAttribute('aria-checked')).toBe('true');
+    await userEvent.click(theme.getByRole('radio', { name: 'Light' }));
+    expect(localStorage.getItem('ms.theme')).toBe('light');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+    expect(theme.getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('saves the motion and marks the page', async () => {
+    const { AppearanceCard } = await import('@/components/Appearance');
+    render(<AppearanceCard />);
+    const motion = within(screen.getByRole('radiogroup', { name: 'Motion' }));
+    await userEvent.click(motion.getByRole('radio', { name: 'Reduced' }));
     expect(localStorage.getItem('ms.motion')).toBe('reduced');
     expect(document.documentElement.getAttribute('data-motion')).toBe('reduced');
-    await userEvent.click(screen.getByRole('button', { name: 'Motion: Reduced' }));
-    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'System' }));
+    await userEvent.click(motion.getByRole('radio', { name: 'System' }));
     expect(document.documentElement.hasAttribute('data-motion')).toBe(false);
+  });
+
+  it('follows a choice made in another tab', async () => {
+    const { AppearanceCard } = await import('@/components/Appearance');
+    render(<AppearanceCard />);
+    localStorage.setItem('ms.motion', 'full');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'ms.motion' }));
+    const motion = within(screen.getByRole('radiogroup', { name: 'Motion' }));
+    await waitFor(() => expect(motion.getByRole('radio', { name: 'Full' }).getAttribute('aria-checked')).toBe('true'));
   });
 });
 

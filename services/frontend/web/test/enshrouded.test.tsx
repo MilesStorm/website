@@ -159,7 +159,7 @@ describe('the Enshrouded panel', () => {
     cleanup();
     open({ 'GET /api/enshrouded': () => json(status({ update_pending: false })) });
     render(<EnshroudedPanel />);
-    expect(await screen.findByText(/Up to date: Steam's latest build is from 2 h 30 min ago\./)).toBeTruthy();
+    expect(await screen.findByText('Up to date · from 2 h 30 min ago')).toBeTruthy();
   });
 
   it('asks again every 10 seconds while shown, and at once when shown again', async () => {
@@ -182,6 +182,9 @@ describe('durations', () => {
     expect(duration(12 * 60 + 5)).toBe('12 min');
     expect(duration(3 * 3600 + 5 * 60)).toBe('3 h 5 min');
     expect(duration(2 * 86400 + 4 * 3600 + 59)).toBe('2 d 4 h');
+    expect(duration(2 * 86400 + 59)).toBe('2 d');
+    expect(duration(3 * 3600 + 59)).toBe('3 h');
+    expect(duration(3600 + 5 * 60)).toBe('1 h 5 min');
     expect(ago(1000, 990)).toBe('just now');
     expect(ago(10_000, 9_700)).toBe('5 min ago');
   });

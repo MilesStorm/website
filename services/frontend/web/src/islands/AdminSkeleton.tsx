@@ -32,6 +32,15 @@ export const ROLE_ROWS = 5;
 export const INVITES_HEAD = ['Note', 'Role', 'Used', 'Until (UTC)', 'Status'];
 export const INVITE_CELLS = ['h-5 w-28', 'h-5 w-20 rounded-4xl', 'h-5 w-10', 'h-5 w-20', 'h-5 w-16 rounded-4xl', ''];
 
+/** On a phone a row is no table row but a stack of its cells (the heads are left to assistive
+ * technology): one cell under the other for a user and a role; for an invite, the note on a
+ * line of its own and the rest wrapping after it. */
+export const STACKED = 'max-sm:grid max-sm:gap-1 max-sm:px-5 max-sm:py-3';
+export const STACKED_WRAP =
+  'max-sm:flex max-sm:flex-wrap max-sm:items-center max-sm:gap-x-3 max-sm:gap-y-1 max-sm:px-5 max-sm:py-3 max-sm:[&>td:first-child]:basis-full';
+/** The cell with the badges takes the room left. */
+export const FILL_CELL = 'w-full min-w-56 whitespace-normal max-sm:min-w-0';
+
 /** The tabs, with `children` as the open tab's contents. */
 export function AdminTabs({ children, inert, ...props }: React.ComponentProps<typeof Tabs> & { inert?: boolean }) {
   return (
@@ -64,20 +73,29 @@ export function SearchField(props: React.ComponentProps<typeof Input>) {
 export function TableCard({ head, actions = false, children }: { head: string[]; actions?: boolean; children: React.ReactNode }) {
   return (
     <Card className="gap-0 py-0">
-      <Table className="[&_td:first-child]:pl-5 [&_td:last-child]:pr-5 [&_th:first-child]:pl-5 [&_th:last-child]:pr-5">
-        <TableHeader className="bg-muted/50">
-          <TableRow className="hover:bg-transparent">
+      {/* Explicit roles: a phone's stacked rows aren't table layout, and some browsers then drop the table. */}
+      <Table
+        role="table"
+        className={cn(
+          'sm:[&_td:first-child]:pl-5 sm:[&_td:last-child]:pr-5 [&_th:first-child]:pl-5 [&_th:last-child]:pr-5',
+          'max-sm:block max-sm:[&_tbody]:block max-sm:[&_td]:p-0',
+        )}
+      >
+        <TableHeader role="rowgroup" className="bg-muted/50 max-sm:sr-only">
+          <TableRow role="row" className="hover:bg-transparent">
             {head.map((h) => (
-              <TableHead key={h}>{h}</TableHead>
+              <TableHead key={h} role="columnheader">
+                {h}
+              </TableHead>
             ))}
             {actions && (
-              <TableHead>
+              <TableHead role="columnheader">
                 <span className="sr-only">Actions</span>
               </TableHead>
             )}
           </TableRow>
         </TableHeader>
-        <TableBody>{children}</TableBody>
+        <TableBody role="rowgroup">{children}</TableBody>
       </Table>
     </Card>
   );
@@ -95,11 +113,21 @@ export function EmptyCard({ children }: { children: React.ReactNode }) {
 
 /** Rows of pulses while a table loads, one per cell, each the shape of what goes there (none for
  * an empty shape). With `fill`, the last column takes the room left, as a listing's badges do. */
-export function PlaceholderRows({ cells, rows, fill = false }: { cells: string[]; rows: number; fill?: boolean }) {
+export function PlaceholderRows({
+  cells,
+  rows,
+  fill = false,
+  stacked = STACKED,
+}: {
+  cells: string[];
+  rows: number;
+  fill?: boolean;
+  stacked?: string;
+}) {
   return Array.from({ length: rows }, (_, row) => (
-    <TableRow key={row} aria-hidden="true" className="hover:bg-transparent">
+    <TableRow key={row} aria-hidden="true" className={cn('hover:bg-transparent', stacked)}>
       {cells.map((shape, cell) => (
-        <TableCell key={cell} className={cn(fill && cell === cells.length - 1 && 'w-full min-w-56')}>
+        <TableCell key={cell} className={cn(fill && cell === cells.length - 1 && FILL_CELL)}>
           {shape && <Skeleton className={cn('rounded-md', shape)} />}
         </TableCell>
       ))}
@@ -154,7 +182,7 @@ export function InvitesSkeleton() {
         </CardFooter>
       </Card>
       <TableCard head={INVITES_HEAD} actions>
-        <PlaceholderRows cells={INVITE_CELLS} rows={3} />
+        <PlaceholderRows cells={INVITE_CELLS} rows={3} stacked={STACKED_WRAP} />
       </TableCard>
     </div>
   );
