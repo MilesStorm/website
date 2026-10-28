@@ -151,25 +151,37 @@ jobs:
   # release builds (homelab repo, ci-runners): the image is built by the node's shared BuildKit,
   # which keeps unchanged layers and the cargo cache mounts between runs. Renovate's branches
   # carry dependency versions no one has reviewed yet, so they build on a GitHub runner instead.
-  # The tests are split in two shards, each on its own runner (one per node), each running its
-  # half of the tests across its workers; `e2e` below is the check that both passed.
-  e2e-shard:
-    name: e2e (${{ matrix.shard }}/2)
+  e2e:
+    name: e2e
     runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
     # A newer push to the same branch replaces its run still in progress.
     concurrency:
-      group: e2e-${{ github.ref }}-${{ matrix.shard }}
+      group: e2e-${{ github.ref }}
       cancel-in-progress: true
     defaults:
       run:
         working-directory: services/frontend/web
     steps:
       - uses: actions/checkout@v4
+      # What the tests run in, fetched while the image builds: Playwright's image (the locked
+      # version) with the packages installed in it, and the services e2e/serve.sh starts. The
+      # Playwright step waits for it.
+      - name: Fetch the test images and packages
+        run: |
+          version=$(grep -A3 '"node_modules/@playwright/test"' package-lock.json | sed -n 's/.*"version": "\(.*\)".*/\1/p')
+          test -n "$version"
+          echo "PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v$version-noble" >> "$GITHUB_ENV"
+          fetch() {
+            pids=()
+            for image in redis:7-alpine surrealdb/surrealdb:v3.2.4 caddy:2.10.2-alpine; do
+              docker pull -q "$image" & pids+=($!)
+            done
+            docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/work" -w /work \
+              "mcr.microsoft.com/playwright:v$version-noble" npm ci --ignore-scripts --no-audit --no-fund || return 1
+            for pid in "${pids[@]}"; do wait "$pid" || return 1; done
+          }
+          { fetch > /tmp/fetch.log 2>&1 < /dev/null; echo $? > /tmp/fetch.status; } &
       - uses: docker/setup-buildx-action@v3
         with:
           driver: ${{ startsWith(github.ref_name, 'renovate/') && 'docker' || 'remote' }}
@@ -186,35 +198,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Wait for the test images and packages
+        run: |
+          for _ in $(seq 600); do test -f /tmp/fetch.status && break; sleep 1; done
+          cat /tmp/fetch.log
+          test "$(cat /tmp/fetch.status 2>/dev/null)" = 0
       - run: e2e/serve.sh
       # The browser runs in Playwright's image (the locked version), so the runner needs no
       # browser packages. No install scripts: the image has the browser already.
       - name: Playwright
         run: |
-          version=$(node -p 'require("./package-lock.json").packages["node_modules/@playwright/test"].version')
           docker run --rm --network host --ipc host --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=1 \
-            -v "$PWD:/work" -w /work "mcr.microsoft.com/playwright:v$version-noble" \
-            sh -c 'npm ci --ignore-scripts --no-audit --no-fund && npx playwright test --shard=${{ matrix.shard }}/2'
+            -v "$PWD:/work" -w /work "$PLAYWRIGHT_IMAGE" npx playwright test
       - name: Server, proxy and stand-in logs
         if: failure()
         run: docker logs frontend-e2e; docker logs frontend-e2e-tls; docker logs frontend-e2e-surreal; cat e2e/fake.log
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-report-${{ matrix.shard }}
+          name: playwright-report
           path: services/frontend/web/playwright-report
       - if: always()
         run: e2e/serve.sh stop; docker image rm frontend:e2e >/dev/null 2>&1 || true
-
-  # The required check (ruleset "Main protection"): every e2e shard passed.
-  e2e:
-    name: e2e
-    needs: e2e-shard
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - run: test "${{ needs.e2e-shard.result }}" = success
 
   # The trace contract checker's own tests (tracing/checker).
   trace-checker:
