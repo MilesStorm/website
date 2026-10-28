@@ -16,7 +16,7 @@ permissions:
 jobs:
   # The frontend's BFF: clippy and tests, the API contract, and the Astro build it serves.
   frontend-rust:
-    name: "frontend: Rust server"
+    name: "frontend: BFF server"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -59,7 +59,7 @@ jobs:
   # The Astro pages, beside the Rust: their TypeScript API types are current, they type-check
   # against them, and their component and tracing script tests.
   frontend-web:
-    name: "frontend: web pages"
+    name: "frontend: Astro pages"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -89,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Rust server and web pages both passed
+      - name: BFF server and Astro pages both passed
         run: test "${{ needs.frontend-rust.result }}" = success && test "${{ needs.frontend-web.result }}" = success
 
   # The browser extension's scripts, type-checked (tsconfig.json).
