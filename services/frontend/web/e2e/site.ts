@@ -17,7 +17,7 @@ export const STAGING = !!process.env.E2E_BASE_URL;
  * can't be asked (only the stand-ins can arrange that). */
 export type Who = 'anonymous' | 'plain' | 'all' | 'down';
 
-/** Staging is behind Miles's GitHub login. The staging journeys (release.yml) get past it with a
+/** Staging is behind Miles's login (oauth2-proxy and authentik). The staging journeys (release.yml) get past it with a
  * GitHub Actions token for this audience, which the gateway checks is that workflow's
  * (homelab: istio/manifests/login-admin-pages.yaml). A token lasts five minutes, so a fresh one
  * is asked for shortly before the last one runs out. */
@@ -43,6 +43,14 @@ const TOKEN = 'x-staging-journeys-token';
  * token included), and GitHub, where the login with GitHub link goes (it issued the token). */
 const ELSEWHERE = new Set(['static.cloudflareinsights.com', 'github.com']);
 
+/** oauth2-proxy's redirect to the login for a staging request it turned away: its `state` is
+ * `<nonce>:<the URL turned away>`. Chromium doesn't tie a closing page's keepalive beacon to the
+ * redirect it got, so `redirectedFrom` alone misses that one. */
+function turnedAway(url: URL, origin: string): boolean {
+  const state = url.searchParams.get('state');
+  return !!state && state.slice(state.indexOf(':') + 1).startsWith(`${origin}/`);
+}
+
 /** Against staging, gives `context` the token, and says which requests reached a host other than
  * staging and those above. A redirect staging itself answered with doesn't count: that is staging's
  * login gate turning away a request without the token (the tracing beacon a closing page sends
@@ -55,7 +63,7 @@ async function admit(context: BrowserContext): Promise<string[]> {
   context.on('request', (r) => {
     const url = new URL(r.url());
     const from = r.redirectedFrom();
-    if (from && new URL(from.url()).origin === origin) return;
+    if ((from && new URL(from.url()).origin === origin) || turnedAway(url, origin)) return;
     if (url.protocol.startsWith('http') && url.origin !== origin && !ELSEWHERE.has(url.host)) away.push(r.url());
   });
   return away;
