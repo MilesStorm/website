@@ -16,7 +16,7 @@ permissions:
 jobs:
   # The frontend's BFF: clippy and tests, the API contract, and the Astro build it serves.
   frontend-rust:
-    name: frontend (Rust)
+    name: "frontend: Rust server"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -38,8 +38,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: services/frontend
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test
       # The committed API contract is what the handlers say (web/src/api/openapi.json); the
       # TypeScript types generated from it are checked in frontend (web). Regenerate both with
       # `npm run api` in web/.
@@ -57,7 +59,7 @@ jobs:
   # The Astro pages, beside the Rust: their TypeScript API types are current, they type-check
   # against them, and their component and tracing script tests.
   frontend-web:
-    name: frontend (web)
+    name: "frontend: web pages"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -87,7 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - run: test "${{ needs.frontend-rust.result }}" = success && test "${{ needs.frontend-web.result }}" = success
+      - name: Rust server and web pages both passed
+        run: test "${{ needs.frontend-rust.result }}" = success && test "${{ needs.frontend-web.result }}" = success
 
   # The browser extension's scripts, type-checked (tsconfig.json).
   extension-types:
@@ -191,8 +194,8 @@ jobs:
       - uses: actions/checkout@v4
       # What the tests run in, fetched while the image builds: Playwright's image (the locked
       # version) with the packages installed in it, and the services e2e/serve.sh starts. The
-      # Playwright step waits for it.
-      - name: Fetch the test images and packages
+      # browser tests wait for it.
+      - name: Start downloading the test browser and services
         run: |
           version=$(grep -A3 '"node_modules/@playwright/test"' package-lock.json | sed -n 's/.*"version": "\(.*\)".*/\1/p')
           test -n "$version"
@@ -223,15 +226,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Wait for the test images and packages
+      - name: Wait for the test browser and services
         run: |
           for _ in $(seq 600); do test -f /tmp/fetch.status && break; sleep 1; done
           cat /tmp/fetch.log
           test "$(cat /tmp/fetch.status 2>/dev/null)" = 0
-      - run: e2e/serve.sh
+      - name: Start the site and its stand-in services
+        run: e2e/serve.sh
       # The browser runs in Playwright's image (the locked version), so the runner needs no
       # browser packages. No install scripts: the image has the browser already.
-      - name: Playwright
+      - name: Browser tests
         run: |
           docker run --rm --network host --ipc host --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=1 \
             -v "$PWD:/work" -w /work "$PLAYWRIGHT_IMAGE" npx playwright test
