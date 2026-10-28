@@ -150,6 +150,16 @@ reason = "the site's icon sent from disk: the read and the send, with nothing of
 
 [[leaf]]
 service = "frontend"
+name = "GET /email/logo-dark.png"
+reason = "the account emails' logo sent from disk, as the icon is: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
+name = "GET /email/logo-light.png"
+reason = "the account emails' logo sent from disk, as the icon is: nothing of ours inside"
+
+[[leaf]]
+service = "frontend"
 name = "* /api/{*rest}"
 reason = "an API path that doesn't exist: the 404 envelope, with nothing to ask"
 

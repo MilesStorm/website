@@ -290,6 +290,7 @@ fn every_page_is_a_leaf_span() {
     assert!(leaf("GET /_astro/*"), "no [[leaf]] for Astro's files");
     assert!(leaf("GET NotFound"), "no [[leaf]] for the 404 page");
     assert!(leaf("GET /favicon.ico"), "no [[leaf]] for the icon");
+    assert!(leaf("GET /email/logo-dark.png") && leaf("GET /email/logo-light.png"), "no [[leaf]] for the email logo");
     assert!(leaf("* /bff/{*rest}") && leaf("* /api/{*rest}"), "no [[leaf]] for the API's 404s");
 }
 

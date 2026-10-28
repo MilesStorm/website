@@ -259,6 +259,15 @@ impl Account {
     fn name(&self) -> &str {
         self.display_name.as_deref().unwrap_or(&self.username)
     }
+
+    /// " (username)" where the greeting is a display name, so the email says which login it is
+    /// about; nothing where the greeting is the username already.
+    fn login_aside(&self) -> String {
+        match &self.display_name {
+            Some(shown) if *shown != self.username => format!(" ({})", self.username),
+            _ => String::new(),
+        }
+    }
 }
 
 const ACCOUNT_COLUMNS: &str = "u.id, u.username, u.display_name, u.email, u.email_verified_at";
@@ -322,6 +331,9 @@ fn verify_letter(account: &Account, email: &str, code: &str) -> super::mail::Mai
         button: "Confirm my email",
         link: &link,
         footer: "The link works for 48 hours. If you didn't make an account on milesstorm.com, you can ignore this email.",
+        heading: "Confirm your email",
+        preview: "One click confirms this address for your milesstorm.com account.",
+        danger: false,
     }
     .build()
 }
@@ -329,8 +341,8 @@ fn verify_letter(account: &Account, email: &str, code: &str) -> super::mail::Mai
 fn reset_letter(account: &Account, email: &str, code: &str) -> super::mail::Mail {
     let link = link(Purpose::ResetPassword, code);
     let paragraph = format!(
-        "Someone asked to reset the password for your account, {}. If it was you, choose a new password with the button below.",
-        account.username
+        "Someone asked to reset the password for your account{}. If it was you, choose a new password with the button below.",
+        account.login_aside()
     );
     Letter {
         to: email,
@@ -340,6 +352,9 @@ fn reset_letter(account: &Account, email: &str, code: &str) -> super::mail::Mail
         button: "Choose a new password",
         link: &link,
         footer: "The link works for 1 hour. If you didn't ask for this, you can ignore this email: your password stays the same.",
+        heading: "Reset your password",
+        preview: "Choose a new password for your milesstorm.com account. The link works for 1 hour.",
+        danger: false,
     }
     .build()
 }
@@ -347,8 +362,8 @@ fn reset_letter(account: &Account, email: &str, code: &str) -> super::mail::Mail
 fn delete_letter(account: &Account, email: &str, code: &str) -> super::mail::Mail {
     let link = link(Purpose::DeleteAccount, code);
     let paragraph = format!(
-        "You asked to delete your account, {}. Deleting removes your profile and picture, and any data you chose to share will also be removed. It can't be undone.",
-        account.username
+        "You asked to delete your account{}. This can't be undone: deleting removes your profile and picture, and any data you chose to share.",
+        account.login_aside()
     );
     Letter {
         to: email,
@@ -358,6 +373,9 @@ fn delete_letter(account: &Account, email: &str, code: &str) -> super::mail::Mai
         button: "Delete my account",
         link: &link,
         footer: "The link works for 1 hour. If you didn't ask for this, someone may be logged in as you: change your password and nothing will be deleted.",
+        heading: "Delete your account",
+        preview: "Confirm to delete your milesstorm.com account. The link works for 1 hour.",
+        danger: true,
     }
     .build()
 }
