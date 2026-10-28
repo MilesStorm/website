@@ -5,3 +5,6 @@ web/src/vendor/
 web/.astro/
 web/test-results/
 web/playwright-report/
+# Only CI runs these (Playwright, vitest): a change to a test rebuilds no image layer.
+web/e2e/
+web/test/
