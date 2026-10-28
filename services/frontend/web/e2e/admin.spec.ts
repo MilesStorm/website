@@ -17,9 +17,11 @@ async function add(page: Page, kind: 'role' | 'permission', owner: string, name:
   await page.getByRole('menuitem', { name, exact: true }).click();
 }
 
-test('the panel lists users, roles and invite links, in light and dark', async ({ context, page }) => {
-  await logIn(context, 'all');
-  for (const colorScheme of ['light', 'dark'] as const) {
+// One test per theme: each checks three tabs with axe, which together came close to the test
+// time limit on a busy runner.
+for (const colorScheme of ['light', 'dark'] as const) {
+  test(`the panel lists users, roles and invite links, ${colorScheme}`, async ({ context, page }) => {
+    await logIn(context, 'all');
     await page.emulateMedia({ colorScheme });
     await page.goto('/admin');
     if (colorScheme === 'dark') await expect(page.locator('html')).toHaveClass(/\bdark\b/);
@@ -33,8 +35,8 @@ test('the panel lists users, roles and invite links, in light and dark', async (
     await tab(page, 'Invites');
     await expect(page.getByRole('heading', { name: 'New invite link' })).toBeVisible();
     await expectAccessible(page);
-  }
-});
+  });
+}
 
 test('the user list can be searched', async ({ context, page }) => {
   const me = await logIn(context, 'all');
