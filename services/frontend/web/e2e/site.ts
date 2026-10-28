@@ -113,6 +113,16 @@ export async function logIn(context: BrowserContext, who: Who, fresh: boolean | 
 export async function expectAccessible(page: Page): Promise<void> {
   // The placeholders' text is transparent on purpose (it only sizes them), so it has no contrast
   // to check. The stand-ins answer before axe looks; staging's real services not always.
+  // Colours are checked as they end up, not halfway through a fade (a menu opening): every
+  // animation that ends has ended first.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => {})),
+    ),
+  );
   const { violations } = await new AxeBuilder({ page }).exclude('.text-transparent').analyze();
   const bad = violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);

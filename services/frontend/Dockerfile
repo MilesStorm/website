@@ -51,10 +51,6 @@ RUN ./server openapi | diff - openapi.json && \
     touch /verified
 
 FROM debian:trixie-slim AS runtime
-# The commit this image is built from (CI passes github.sha): `service.version` on traces and
-# logs. Declared in this stage only, so a new commit doesn't invalidate the build cache.
-ARG GIT_SHA=unknown
-ENV GIT_SHA=$GIT_SHA
 RUN apt-get update && \
     apt-get install -y --no-install-recommends openssl libssl3 ca-certificates libc6 && \
     rm -rf /var/lib/apt/lists/*
@@ -72,6 +68,10 @@ COPY --from=web /app/web/sourcemaps ./sourcemaps
 
 USER appuser
 
+# The commit this image is built from (CI passes github.sha): `service.version` on traces and
+# logs. Declared last, so a new commit rebuilds nothing above it.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 ENV IP=0.0.0.0
 ENV PORT=80
 ENV WEB_DIST=/app/web
