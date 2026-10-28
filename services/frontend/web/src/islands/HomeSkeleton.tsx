@@ -10,7 +10,7 @@ export function HomeSkeleton() {
   return (
     <div className="flex flex-col gap-4" role="status" aria-label="Loading" aria-busy="true">
       <section className={HERO_SECTION}>
-        <Storm />
+        <Storm glow="name" />
         <Skeleton className="mb-2 h-6 w-32 rounded-4xl" />
         <div className={HERO_NAME}>
           <Skeleton className="size-12 shrink-0 rounded-full md:size-14" />

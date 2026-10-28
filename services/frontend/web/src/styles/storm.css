@@ -1,12 +1,12 @@
-/* The storm behind a hero (islands/Storm.tsx): a soft glow and a grid of dots, full strength
-   across the hero and fading out before the storm's own edges, so the cards below stay clear of
-   them. Neutral: the theme's own foreground. Stronger by default for plain sRGB screens, where
+/* The storm behind a hero (islands/Storm.tsx): a grid of dots, full strength across the hero and
+   fading out before the storm's own edges, so the cards below stay clear of them, and a soft glow
+   behind the hero's words only, on dark (on light it would be a stain). Neutral: the theme's own foreground. Stronger by default for plain sRGB screens, where
    faint greys sink into the black (and crushed shadows or a bright room sink them further);
    quieter on wide-gamut ones, and quieter again on light, where dark dots on white read heavier. */
 .storm {
   --storm-dot: 26%;
   --storm-dot-r: 1.5px;
-  --storm-glow: 17%;
+  --storm-glow: 14%;
   --storm-flash: 24%;
   --storm-lit: 0.75;
 }
@@ -14,20 +14,20 @@
   .storm {
     --storm-dot: 18%;
     --storm-dot-r: 1.25px;
-    --storm-glow: 11%;
+    --storm-glow: 9%;
   }
 }
 :root:not(.dark) .storm {
   --storm-dot: 12%;
   --storm-dot-r: 1.25px;
-  --storm-glow: 6%;
+  /* No glow on light: a darker patch on white reads as a stain, not as light. */
+  --storm-glow: 0%;
   --storm-flash: 10%;
   --storm-lit: 0.4;
 }
 @media (color-gamut: p3) {
   :root:not(.dark) .storm {
     --storm-dot: 9%;
-    --storm-glow: 4.5%;
   }
 }
 
