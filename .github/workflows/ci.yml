@@ -14,15 +14,19 @@ permissions:
   contents: read
 
 jobs:
-  # The frontend: clippy and tests of the BFF, the API contract and its TypeScript types, the
-  # Astro pages' types, component tests and build.
-  frontend:
-    name: frontend
+  # The frontend's BFF: clippy and tests, the API contract, and the Astro build it serves.
+  frontend-rust:
+    name: frontend (Rust)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
       run:
         working-directory: services/frontend
+    # Line tables are enough for a panic's backtrace; full debug info was most of the cache that
+    # every run downloads and unpacks.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,33 +40,54 @@ jobs:
           workspaces: services/frontend
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      # The committed API contract is what the handlers say (web/src/api/openapi.json), and the
-      # TypeScript types are generated from it: regenerate both with `npm run api` in web/.
+      # The committed API contract is what the handlers say (web/src/api/openapi.json); the
+      # TypeScript types generated from it are checked in frontend (web). Regenerate both with
+      # `npm run api` in web/.
       - name: OpenAPI document is current
         run: cargo run -q -p bff --bin server -- openapi | diff - web/src/api/openapi.json
-      - name: TypeScript API types are current
-        working-directory: services/frontend/web
-        run: npm ci && npm run api:types && git diff --exit-code -- src/api/schema.d.ts
       # aide can't read a response type through `impl IntoApiResponse`: handlers name theirs.
       - name: API handlers return concrete types
         run: '! grep -rn "impl IntoApiResponse" crates/bff/src'
-      # The Astro pages: typed against schema.d.ts, their component tests, and a build with
-      # exactly the pages in PAGES, each with the marker the server splices at.
-      - name: Astro pages type-check
+      # A build with exactly the pages in PAGES, each with the marker the server splices at.
+      - name: Astro build has exactly the pages
+        env:
+          ASTRO_TELEMETRY_DISABLED: 1
+        run: (cd web && npm ci && npm run tracing && npm run build) && cargo run -q -p bff --bin server -- check-pages web/dist
+
+  # The Astro pages, beside the Rust: their TypeScript API types are current, they type-check
+  # against them, and their component and tracing script tests.
+  frontend-web:
+    name: frontend (web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
         working-directory: services/frontend/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: TypeScript API types are current
+        run: npm ci && npm run api:types && git diff --exit-code -- src/api/schema.d.ts
+      - name: Astro pages type-check
         env:
           ASTRO_TELEMETRY_DISABLED: 1
         run: npm run tracing && npm run check
       - name: Component tests
-        working-directory: services/frontend/web
         run: npm test
       - name: Tracing script tests
-        working-directory: services/frontend/web
         run: npm run test:trace
-      - name: Astro build has exactly the pages
-        env:
-          ASTRO_TELEMETRY_DISABLED: 1
-        run: (cd web && npm run build) && cargo run -q -p bff --bin server -- check-pages web/dist
+
+  # The required check (ruleset "Main protection"): both halves passed.
+  frontend:
+    name: frontend
+    needs: [frontend-rust, frontend-web]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: test "${{ needs.frontend-rust.result }}" = success && test "${{ needs.frontend-web.result }}" = success
 
   # The browser extension's scripts, type-checked (tsconfig.json).
   extension-types:
