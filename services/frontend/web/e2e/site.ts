@@ -44,7 +44,9 @@ const TOKEN = 'x-staging-journeys-token';
 const ELSEWHERE = new Set(['static.cloudflareinsights.com', 'github.com']);
 
 /** Against staging, gives `context` the token, and says which requests reached a host other than
- * staging and those above. */
+ * staging and those above. A redirect staging itself answered with doesn't count: that is staging's
+ * login gate turning away a request without the token (the tracing beacon a closing page sends
+ * gets no extra headers), not the page reaching another host. */
 async function admit(context: BrowserContext): Promise<string[]> {
   const away: string[] = [];
   if (!STAGING) return away;
@@ -52,6 +54,8 @@ async function admit(context: BrowserContext): Promise<string[]> {
   const origin = new URL(process.env.E2E_BASE_URL!).origin;
   context.on('request', (r) => {
     const url = new URL(r.url());
+    const from = r.redirectedFrom();
+    if (from && new URL(from.url()).origin === origin) return;
     if (url.protocol.startsWith('http') && url.origin !== origin && !ELSEWHERE.has(url.host)) away.push(r.url());
   });
   return away;
