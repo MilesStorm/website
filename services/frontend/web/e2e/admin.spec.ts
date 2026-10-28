@@ -3,6 +3,10 @@
 import { expect, type Page } from '@playwright/test';
 import { STAGING, expectAccessible, logIn, shownHeight, test } from './site';
 
+// The stand-in's roles, permissions and invite links are one table every test here reads and
+// changes, so this file's tests run one after another (the other files' still run alongside).
+test.describe.configure({ mode: 'default' });
+
 async function tab(page: Page, name: 'Users' | 'Roles' | 'Invites') {
   await page.getByRole('tab', { name }).click();
 }

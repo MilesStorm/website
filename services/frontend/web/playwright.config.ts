@@ -9,6 +9,10 @@ const staging = !!process.env.E2E_BASE_URL;
 
 export default defineConfig({
   testDir: 'e2e',
+  // Every test, not every file, is a unit of work: a file's tests spread over the workers, so the
+  // run takes as long as its slowest test rather than its largest file (pages.spec.ts, one test
+  // per page and viewer). Files whose tests share stand-in state opt out (admin.spec.ts).
+  fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI && !staging ? [['list'], ['html', { open: 'never' }]] : 'list',
