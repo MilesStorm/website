@@ -13,7 +13,7 @@ export const CARD_GRID = 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3';
 
 /** The logged-out page's two previews: two cards of at most 28rem each, in the middle under the
  * hero (not stretched across the whole container on a wide screen). */
-export const PREVIEW_GRID = 'mx-auto grid w-full max-w-4xl gap-4 sm:grid-cols-2';
+export const PREVIEW_GRID = 'mx-auto grid w-full max-w-4xl gap-4 sm:grid-cols-2 4xl:max-w-5xl';
 
 /** What a card's icon sits in. */
 const ICON_BADGE = 'grid size-9 place-items-center rounded-full bg-muted text-foreground';

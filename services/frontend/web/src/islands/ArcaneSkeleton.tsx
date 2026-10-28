@@ -54,9 +54,12 @@ export function ExtensionCard() {
   );
 }
 
-/** The page: the camera on the left, as large as its column allows, and the cards in a column of
- * 22rem on its right; stacked below `lg`. */
-export const ARCANE_GRID = 'grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start';
+/** The page: the camera on the left, as large as its column allows, flush with the title, and the
+ * cards in a column of 22rem right beside it (26rem from 1920, 30rem from 2560); stacked below
+ * `lg`. On wide screens the camera is no taller than the window leaves room for (16:9 of its
+ * height less 12rem), and the cards stay beside it, not at the far edge. */
+export const ARCANE_GRID =
+  'grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start 3xl:grid-cols-[minmax(0,calc((100svh-12rem)*16/9))_26rem] 4xl:grid-cols-[minmax(0,calc((100svh-12rem)*16/9))_30rem]';
 
 /** The camera's column: the frame, and what comes up under it (the debug readout). */
 export const CAMERA_COLUMN = 'flex min-w-0 flex-col gap-4';
@@ -66,7 +69,8 @@ export const CAMERA_COLUMN = 'flex min-w-0 flex-col gap-4';
 export const SIDE_CARDS = 'grid gap-4 md:grid-cols-2 lg:grid-cols-1';
 
 /** The camera's frame: 16:9 until the camera has a shape (`--camera-ratio`), which it takes below
- * lg, up to three quarters of the screen's height; from lg 16:9 in its column. Tall enough on a
+ * lg, up to three quarters of the screen's height; from lg 16:9 in its column (ARCANE_GRID keeps
+ * it within the screen's height). Tall enough on a
  * phone for the longest message it holds (the camera refused: an icon, three or four lines and a
  * button). */
 export const CAMERA_FRAME =

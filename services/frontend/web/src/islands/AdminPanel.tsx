@@ -35,6 +35,7 @@ import {
   FILL_CELL,
   INVITES_COLS,
   INVITES_HEAD,
+  INVITES_LAYOUT,
   INVITE_FIELDS,
   INVITE_CELLS,
   INVITE_FORM,
@@ -494,7 +495,7 @@ function InvitesTab({ allRoles }: { allRoles: RoleRef[] }) {
   const reload = () => setRound((n) => n + 1);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className={INVITES_LAYOUT}>
       <NewInviteForm allRoles={allRoles} made={reload} />
       {invites !== null && !invites.ok ? (
         <FormAlert message={invites.message} />

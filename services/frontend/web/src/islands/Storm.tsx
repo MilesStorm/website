@@ -11,9 +11,9 @@ const GLOW = {
 };
 
 /** The storm behind a hero: a grid of dots across the viewport and a soft glow behind the hero's
- * words, in the `relative` box it sits in (the hero section). The field runs edge to edge (half
- * as wide again as a phone's screen, so its sides fall off past the screen's edges, not inside
- * them; the page wrapper clips the overflow with `overflow-x-clip`, so there is no scrollbar),
+ * words, in the `relative` box it sits in (the hero section). The field runs edge to edge (the
+ * page wrapper clips the overflow with `overflow-x-clip`, so there is no scrollbar; on a phone
+ * its mask is wider than the screen, so its sides fall off past the edges, not inside them),
  * from 8rem above the section, behind the header, to the section's foot, so the dots are gone
  * before the cards under the hero. Brightest round the words and fading out before its own edges
  * (the mask, lib/storm.ts). Without motion (the profile's choice, else the system's), and until
@@ -26,7 +26,7 @@ export const Storm = island('Storm', function Storm({ glow = 'hero' }: { glow?: 
     <div
       ref={root}
       aria-hidden="true"
-      className="storm pointer-events-none absolute -top-32 bottom-0 left-1/2 -z-10 w-[150vw] -translate-x-1/2 overflow-hidden md:w-screen"
+      className="storm pointer-events-none absolute -top-32 bottom-0 left-1/2 -z-10 w-screen -translate-x-1/2 overflow-hidden"
     >
       {/* On the section's middle: 4rem below the field's (the field reaches 8rem above it). */}
       <div

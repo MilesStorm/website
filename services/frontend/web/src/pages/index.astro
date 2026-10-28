@@ -15,7 +15,8 @@ import { CONTAINER } from '@/lib/layout';
 <Layout title="MilesStorm">
   <main class="relative isolate overflow-x-clip">
     <Gate session="out" class:list={[CONTAINER, 'flex flex-col gap-4 pb-16']}>
-      <section class={HERO_SECTION}>
+      {/* On a wide screen the hero takes most of the first screen, its words in the middle of it. */}
+      <section class={cn(HERO_SECTION, '3xl:min-h-[60svh] 4xl:min-h-[60svh]')}>
         <Storm client:idle />
         <p class={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

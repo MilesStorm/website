@@ -6,7 +6,7 @@ import { FormAlert } from '@/components/FormAlert';
 import { StatNote, StatusBadge } from '@/components/ServerCards';
 import { client, type Schemas } from '@/api/client';
 import { attempt, type Outcome } from '@/lib/errors';
-import { ARK_BUTTONS, ArkHeader, PlayersCard } from '@/islands/ArkSkeleton';
+import { ARK_BUTTONS, ARK_CARDS, ArkHeader, ControlsCard, PlayersCard } from '@/islands/ArkSkeleton';
 import { PAGE_STACK } from '@/lib/layout';
 import { island } from '@/lib/island';
 
@@ -74,25 +74,7 @@ export const ArkPanel = island('ArkPanel', function ArkPanel() {
   const stopNote = useId();
   return (
     <div className={PAGE_STACK}>
-      <ArkHeader
-        badge={shown && <StatusBadge tone={online ? 'online' : 'off'} label={online ? 'Online' : shown.value} />}
-        buttons={ARK_BUTTONS.map(([cmd, label], i) => (
-          <Button
-            key={cmd}
-            variant={i === 0 ? 'default' : 'outline'}
-            disabled={running !== null}
-            onClick={() => void run(cmd)}
-            // Stop has no confirmation: its consequence is read out with the button.
-            aria-describedby={cmd === 'stop' ? stopNote : undefined}
-            data-faro-user-action-name={`ark ${cmd}`}
-          >
-            {running === cmd ? `${label}…` : label}
-          </Button>
-        ))}
-      />
-      <p id={stopNote} hidden>
-        Shuts the game server down and disconnects its players.
-      </p>
+      <ArkHeader badge={shown && <StatusBadge tone={online ? 'online' : 'off'} label={online ? 'Online' : shown.value} />} />
       {/* What came of the last command, read out as it comes (the region is there from the start). */}
       <div aria-live="polite" className="empty:hidden">
         {said &&
@@ -105,13 +87,31 @@ export const ArkPanel = island('ArkPanel', function ArkPanel() {
             <FormAlert message={said.outcome.message} />
           ))}
       </div>
-      <PlayersCard
-        loading={count === null}
-        live
-        // Offline (the badge says so) or not known: a dash.
-        value={online ? shown!.value : <span aria-hidden="true">—</span>}
-        note={shown ? <StatNote>{shown.note}</StatNote> : <FormAlert message={count?.ok ? null : count?.message} />}
-      />
+      <div className={ARK_CARDS}>
+        <PlayersCard
+          loading={count === null}
+          live
+          // Offline (the badge says so) or not known: a dash.
+          value={online ? shown!.value : <span aria-hidden="true">—</span>}
+          note={shown ? <StatNote>{shown.note}</StatNote> : <FormAlert message={count?.ok ? null : count?.message} />}
+        />
+        <ControlsCard
+          noteId={stopNote}
+          buttons={ARK_BUTTONS.map(([cmd, label], i) => (
+            <Button
+              key={cmd}
+              variant={i === 0 ? 'default' : 'outline'}
+              disabled={running !== null}
+              onClick={() => void run(cmd)}
+              // Stop has no confirmation: what it does is under the buttons, and read out with it.
+              aria-describedby={cmd === 'stop' ? stopNote : undefined}
+              data-faro-user-action-name={`ark ${cmd}`}
+            >
+              {running === cmd ? `${label}…` : label}
+            </Button>
+          ))}
+        />
+      </div>
     </div>
   );
 });
