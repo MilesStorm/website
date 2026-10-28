@@ -81,10 +81,13 @@ export const Profile = island('Profile', function Profile() {
   if (!account) return <ProfileSkeleton />;
   if (!account.ok) {
     return (
-      <div className={SECTIONS}>
+      // The alert above the sections, not one of them (no divider, no section's padding).
+      <div className="flex max-w-5xl flex-col gap-8">
         <FormAlert message={account.message} />
-        <AppearanceCard />
-        <SessionCard />
+        <div className={SECTIONS}>
+          <AppearanceCard />
+          <SessionCard />
+        </div>
       </div>
     );
   }

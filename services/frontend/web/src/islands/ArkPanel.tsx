@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { CircleCheck } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -71,6 +71,7 @@ export const ArkPanel = island('ArkPanel', function ArkPanel() {
   const n = count?.ok ? (count.data.count ?? null) : undefined;
   const shown = n === undefined ? null : players(n);
   const online = n !== undefined && n !== null;
+  const stopNote = useId();
   return (
     <div className={PAGE_STACK}>
       <ArkHeader
@@ -82,13 +83,16 @@ export const ArkPanel = island('ArkPanel', function ArkPanel() {
             disabled={running !== null}
             onClick={() => void run(cmd)}
             // Stop has no confirmation: its consequence is read out with the button.
-            aria-description={cmd === 'stop' ? 'Shuts the game server down and disconnects its players.' : undefined}
+            aria-describedby={cmd === 'stop' ? stopNote : undefined}
             data-faro-user-action-name={`ark ${cmd}`}
           >
             {running === cmd ? `${label}…` : label}
           </Button>
         ))}
       />
+      <p id={stopNote} hidden>
+        Shuts the game server down and disconnects its players.
+      </p>
       {/* What came of the last command, read out as it comes (the region is there from the start). */}
       <div aria-live="polite" className="empty:hidden">
         {said &&

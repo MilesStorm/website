@@ -19,8 +19,8 @@ test('the panel shows the server, in light and dark', async ({ context, page }) 
 
 if (!STAGING) {
   // The stand-ins' usual answer (online, nobody waiting on a command), and with Steam's latest
-  // build unknown; on a wide window, where the lists sit beside each other (1024), at the breakpoint where the cards drop to their short labels
-  // and notes, and on a phone.
+  // build unknown; on a wide window, where the lists sit beside each other (1024), at the
+  // breakpoint where the cards drop to their short labels and notes, and on a phone.
   for (const width of [1280, 1024, 640, 390]) {
     test.describe(`at ${width}px`, () => {
       test.use({ viewport: { width, height: 900 } });

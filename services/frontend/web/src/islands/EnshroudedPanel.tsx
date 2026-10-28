@@ -168,7 +168,7 @@ function PlayersFigure({ status }: { status: Status }) {
 function BuildNote({ status, now }: { status: Status; now: number }) {
   if (status.update_queued && status.state === 'Online') return <StatNote>Update queued</StatNote>;
   if (status.latest_build_at === null) return <StatNote short="Unknown">Latest build unknown</StatNote>;
-  if (status.update_pending) return <StatNote short="Newer build">Newer build on Steam</StatNote>;
+  if (status.update_pending) return <StatNote short="Newer on Steam">Newer build on Steam</StatNote>;
   return <StatNote short="Up to date">{`Up to date · from ${ago(now, status.latest_build_at)}`}</StatNote>;
 }
 
