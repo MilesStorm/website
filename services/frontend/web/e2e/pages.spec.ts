@@ -97,6 +97,12 @@ test('what isn’t a page load gets no page: the icon, unknown API paths, unknow
   const icon = await request.get('/favicon.ico');
   expect(icon.status()).toBe(200);
   expect(icon.headers()['content-type']).toBe('image/x-icon');
+  // The account emails' logo (auth's mail.rs), at addresses sent emails keep.
+  for (const theme of ['dark', 'light']) {
+    const logo = await request.get(`/email/logo-${theme}.png`);
+    expect(logo.status()).toBe(200);
+    expect(logo.headers()['content-type']).toBe('image/png');
+  }
   for (const path of ['/api/nope', '/bff/nope', '/api/', '/bff/']) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(404);

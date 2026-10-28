@@ -166,7 +166,8 @@ pub fn site_url() -> String {
 }
 
 /// An email with a greeting, some paragraphs, one button and a closing note, in the
-/// website's default (dark) colours.
+/// website's look (shadcn's neutral palette, as in the site's styles/global.css): its dark
+/// colours by default, its light ones where the mail app follows the reader's light mode.
 pub struct Letter<'a> {
     pub to: &'a str,
     pub subject: &'a str,
@@ -177,7 +178,53 @@ pub struct Letter<'a> {
     pub link: &'a str,
     /// Under the button, smaller: why they got it and what to do if it wasn't them.
     pub footer: &'a str,
+    /// The heading above the greeting: what the email is for.
+    pub heading: &'a str,
+    /// The inbox's preview line (hidden in the email itself).
+    pub preview: &'a str,
+    /// The button does something that can't be undone: it's red, as on the site.
+    pub danger: bool,
 }
+
+/// The site's colours, dark then light (oklch values from styles/global.css, as hex: mail
+/// apps don't read oklch).
+const DARK: Palette = Palette {
+    page: "#0a0a0a",
+    card: "#171717",
+    border: "#262626",
+    text: "#fafafa",
+    muted: "#a1a1a1",
+    button: "#e5e5e5",
+    button_text: "#171717",
+    danger: "#dc2626",
+    danger_text: "#ffffff",
+};
+const LIGHT: Palette = Palette {
+    page: "#fafafa",
+    card: "#ffffff",
+    border: "#e5e5e5",
+    text: "#0a0a0a",
+    muted: "#737373",
+    button: "#171717",
+    button_text: "#fafafa",
+    danger: "#dc2626",
+    danger_text: "#ffffff",
+};
+
+struct Palette {
+    page: &'static str,
+    card: &'static str,
+    border: &'static str,
+    text: &'static str,
+    muted: &'static str,
+    button: &'static str,
+    button_text: &'static str,
+    danger: &'static str,
+    danger_text: &'static str,
+}
+
+/// The site's typeface where the reader has it, else the system's.
+const FONT: &str = "'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
 impl Letter<'_> {
     pub fn build(&self) -> Mail {
@@ -188,33 +235,88 @@ impl Letter<'_> {
         }
         text.push_str(&format!("{}: {}\n\n{}\n\n— milesstorm.com\n", self.button, self.link, self.footer));
 
+        let d = &DARK;
+        let l = &LIGHT;
+        let (button_bg, button_fg) = if self.danger { (d.danger, d.danger_text) } else { (d.button, d.button_text) };
+        let (light_bg, light_fg) = if self.danger { (l.danger, l.danger_text) } else { (l.button, l.button_text) };
         let paragraphs: String = self
             .paragraphs
             .iter()
             .map(|p| format!(r#"<p style="margin:0 0 16px">{}</p>"#, escape(p)))
             .collect();
+        // Spacers after the preview line, so the inbox doesn't fill the preview with the body.
+        let filler = "&zwnj;&nbsp;".repeat(40);
         let link = escape(self.link);
+        let site = escape(&site_url());
+        // Inline styles are the dark look (every mail app reads them), with `bgcolor` too so
+        // apps that invert colours keep it neutral; the <style> block swaps in the light one
+        // where the app supports `prefers-color-scheme` (Apple Mail, iOS, Outlook.com).
+        // Tables, as mail apps lay out nothing else reliably; the button's fill is on its cell,
+        // so Outlook (which ignores a link's padding and radius) still shows a button.
         let html = format!(
             r#"<!doctype html>
-<html><head><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"></head><body style="margin:0;padding:0;background:#1d232a">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1d232a;padding:32px 16px">
-<tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#191e24;border-radius:12px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d1d5db;font-size:16px;line-height:1.5">
-<tr><td style="padding:32px 32px 8px;font-size:14px;font-weight:700;letter-spacing:.04em;color:#40c6ed">MILESSTORM.COM</td></tr>
-<tr><td style="padding:8px 32px 0">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light"><meta name="supported-color-schemes" content="dark light">
+<title>{subject}</title>
+<style>
+@media (prefers-color-scheme: light) {{
+  .page {{ background:{l_page} !important; }}
+  .card {{ background:{l_card} !important; border-color:{l_border} !important; }}
+  .text {{ color:{l_text} !important; }}
+  .muted, .muted a {{ color:{l_muted} !important; }}
+  .rule {{ border-color:{l_border} !important; }}
+  .btn-cell {{ background:{light_bg} !important; border-color:{light_bg} !important; }}
+  .btn-cell a {{ color:{light_fg} !important; }}
+  .logo-dark {{ display:none !important; }}
+  .logo-light {{ display:inline-block !important; }}
+}}
+</style></head>
+<body class="page" bgcolor="{page}" style="margin:0;padding:0;background:{page};-webkit-text-size-adjust:100%">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:{page};opacity:0">{preview}{filler}</div>
+<table role="presentation" class="page" bgcolor="{page}" width="100%" cellpadding="0" cellspacing="0" style="background:{page}">
+<tr><td align="center" style="padding:40px 16px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;font-family:{font}">
+<tr><td class="text" style="padding:0 4px 20px;font-size:15px;line-height:20px;font-weight:600;letter-spacing:-0.01em;color:{text}">
+<img class="logo-dark" src="{site}/email/logo-dark.png" width="20" height="20" alt="" style="display:inline-block;vertical-align:middle;margin-right:8px;border:0">
+<img class="logo-light" src="{site}/email/logo-light.png" width="20" height="20" alt="" style="display:none;mso-hide:all;vertical-align:middle;margin-right:8px;border:0">
+<span style="vertical-align:middle">MilesStorm</span></td></tr>
+<tr><td class="card" bgcolor="{card}" style="background:{card};border:1px solid {border};border-radius:16px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+<tr><td class="text" style="padding:32px 32px 8px;font-size:15px;line-height:24px;color:{text}">
+<h1 style="margin:0 0 16px;font-size:20px;line-height:1.3;font-weight:600;letter-spacing:-0.01em">{heading}</h1>
 <p style="margin:0 0 16px">Hi {name},</p>
 {paragraphs}
-<p style="margin:24px 0"><a href="{link}" style="display:inline-block;background:#40c6ed;color:#191e24;text-decoration:none;font-weight:600;padding:12px 24px;border-radius:8px">{button}</a></p>
-<p style="margin:0 0 16px;font-size:13px;color:#9ca3af">If the button doesn't work, copy this link into your browser:<br><a href="{link}" style="color:#40c6ed;word-break:break-all">{link}</a></p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 24px"><tr>
+<td class="btn-cell" bgcolor="{button_bg}" style="background:{button_bg};border:1px solid {button_bg};border-radius:9999px">
+<a href="{link}" style="display:inline-block;color:{button_fg};font-family:{font};font-size:14px;font-weight:500;line-height:20px;text-decoration:none;padding:12px 24px;border-radius:9999px">{button}</a>
+</td></tr></table>
+<p class="muted" style="margin:0 0 24px;font-size:13px;line-height:1.5;color:{muted}">If the button doesn't work, copy this link into your browser:<br><a href="{link}" style="color:{muted};font-size:12px;text-decoration:underline;word-break:break-all">{link}</a></p>
 </td></tr>
-<tr><td style="padding:16px 32px 32px;font-size:13px;color:#9ca3af;border-top:1px solid #2a323c">{footer}</td></tr>
+<tr><td class="muted rule" style="padding:20px 32px 28px;border-top:1px solid {border};font-size:13px;line-height:1.5;color:{muted}">{footer}</td></tr>
+</table>
+</td></tr>
+<tr><td class="muted" style="padding:20px 4px 0;font-size:12px;line-height:1.5;color:{muted}"><a href="{site}" style="color:{muted};text-decoration:none">milesstorm.com</a></td></tr>
 </table>
 </td></tr>
 </table>
 </body></html>"#,
+            subject = escape(self.subject),
+            heading = escape(self.heading),
+            preview = escape(self.preview),
             name = escape(self.name),
             button = escape(self.button),
             footer = escape(self.footer),
+            font = FONT,
+            page = d.page,
+            card = d.card,
+            border = d.border,
+            text = d.text,
+            muted = d.muted,
+            l_page = l.page,
+            l_card = l.card,
+            l_border = l.border,
+            l_text = l.text,
+            l_muted = l.muted,
         );
         Mail { to: self.to.to_string(), subject: self.subject.to_string(), text, html }
     }
@@ -302,6 +404,9 @@ mod tests {
             button: "Go",
             link: "https://milesstorm.com/x?code=a_b-c",
             footer: "f",
+            heading: "h",
+            preview: "p",
+            danger: false,
         }
         .build();
         assert!(mail.html.contains("Hi &lt;b&gt;Eve&lt;/b&gt;,"));

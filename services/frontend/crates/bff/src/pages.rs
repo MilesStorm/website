@@ -204,9 +204,14 @@ fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Bu
     let assets = Router::new()
         .route_service("/_astro/{*path}", files)
         .layer(axum::middleware::map_response(immutable));
-    // The icon browsers ask for at the root (Astro's `public/`), not hashed: kept a day.
+    // The icon browsers ask for at the root (Astro's `public/`), not hashed, and the logo the
+    // account emails show (auth's mail.rs; white for its dark look, black for its light one),
+    // at addresses sent emails keep: kept a day.
+    let file = |name: &str| tower_http::services::ServeFile::new(built.dir.join(name));
     let favicon = Router::new()
-        .route_service("/favicon.ico", tower_http::services::ServeFile::new(built.dir.join("favicon.ico")))
+        .route_service("/favicon.ico", file("favicon.ico"))
+        .route_service("/email/logo-dark.png", file("email/logo-dark.png"))
+        .route_service("/email/logo-light.png", file("email/logo-light.png"))
         .layer(axum::middleware::map_response(a_day));
     router
         .merge(assets)
@@ -218,7 +223,7 @@ fn mount_rows<S: Clone + Send + Sync + 'static>(router: Router<S>, built: Arc<Bu
         .fallback(move |req: Request| not_found(built.clone(), req))
 }
 
-/// `favicon.ico`'s cache header, a 304 included.
+/// `favicon.ico`'s (and the email logo's) cache header, a 304 included.
 async fn a_day(mut res: Response) -> Response {
     if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
         res.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
