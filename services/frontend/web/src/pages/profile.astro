@@ -6,7 +6,7 @@ import { ProfileSkeleton } from '@/islands/ProfileSkeleton';
 ---
 
 <Layout title="Profile">
-  <Page measure="profile" title="Profile" description="Your account, and how this site looks for you.">
+  <Page title="Profile" description="Your account, and how this site looks for you.">
     <Profile client:only="react">
       <ProfileSkeleton slot="fallback" />
     </Profile>

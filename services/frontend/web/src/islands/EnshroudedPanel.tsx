@@ -119,7 +119,7 @@ export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPane
       </div>
       <UpdateNotice status={s} now={now} />
       {/* Always both: a card with nothing to list says so, so the grid is never lopsided. */}
-      <div className={`grid lg:grid-cols-3 3xl:grid-cols-[2fr_1fr] ${PAGE_GAP}`}>
+      <div className={`grid lg:grid-cols-3 ${PAGE_GAP}`}>
         <Sessions status={s} />
         <Activity recent={s.recent} now={now} />
       </div>
@@ -203,7 +203,7 @@ function UpdateNotice({ status, now }: { status: Status; now: number }) {
 function Sessions({ status }: { status: Status }) {
   const sessions = status.players?.sessions ?? [];
   return (
-    <Card className="@container/card lg:col-span-2 3xl:col-span-1">
+    <Card className="@container/card lg:col-span-2">
       <CardHeader>
         <CardTitle>
           <h2>Who's on</h2>

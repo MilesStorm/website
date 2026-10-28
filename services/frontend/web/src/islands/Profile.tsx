@@ -82,7 +82,7 @@ export const Profile = island('Profile', function Profile() {
   if (!account.ok) {
     return (
       // The alert above the sections, not one of them (no divider, no section's padding).
-      <div className="flex max-w-5xl flex-col gap-8">
+      <div className="flex max-w-5xl flex-col gap-8 2xl:max-w-none">
         <FormAlert message={account.message} />
         <div className={SECTIONS}>
           <AppearanceCard />

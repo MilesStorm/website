@@ -3,6 +3,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatCard } from '@/components/ServerCards';
 import { EXTENSION_XPI } from '@/lib/arcane';
+import { COLUMN_GAP_LG } from '@/lib/layout';
 import { cn } from '@/lib/utils';
 
 // The dice reader's cards under the camera, shared by the reader (islands/ArcaneCamera.tsx) and
@@ -54,23 +55,20 @@ export function ExtensionCard() {
   );
 }
 
-/** The page: the camera on the left, as large as its column allows, flush with the title, and the
- * cards in a column of 22rem right beside it; stacked below `lg`. From 1920 the camera is no
- * taller than the window leaves room for (16:9 of its height less 14rem), and the cards take the
- * rest of the width (at least 26rem). */
-export const ARCANE_GRID =
-  'grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start 3xl:grid-cols-[minmax(0,calc((100svh-14rem)*16/9))_minmax(26rem,1fr)]';
+/** The page, on the site's thirds from `lg` (THIRDS' columns): the camera over two of them, flush
+ * with the title, and the cards in the third, like Enshrouded's who's-on and commands; stacked
+ * below `lg`. */
+export const ARCANE_GRID = `grid gap-6 lg:grid-cols-3 lg:items-start ${COLUMN_GAP_LG}`;
 
 /** The camera's column: the frame, and what comes up under it (the debug readout). */
-export const CAMERA_COLUMN = 'flex min-w-0 flex-col gap-4';
+export const CAMERA_COLUMN = 'flex min-w-0 flex-col gap-4 lg:col-span-2';
 
 /** The cards beside the camera: one under the other, or two side by side where there is room
  * for it but not for the columns (`md` up to `lg`). */
 export const SIDE_CARDS = 'grid gap-4 md:grid-cols-2 lg:grid-cols-1';
 
 /** The camera's frame: 16:9 until the camera has a shape (`--camera-ratio`), which it takes below
- * lg, up to three quarters of the screen's height; from lg 16:9 in its column (ARCANE_GRID keeps
- * it within the screen's height). Tall enough on a
+ * lg, up to three quarters of the screen's height; from lg 16:9 in its two columns. Tall enough on a
  * phone for the longest message it holds (the camera refused: an icon, three or four lines and a
  * button). */
 export const CAMERA_FRAME =

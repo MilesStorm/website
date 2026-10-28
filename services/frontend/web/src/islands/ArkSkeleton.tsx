@@ -3,7 +3,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ButtonPlace } from '@/components/Placeholders';
 import { PageHeader } from '@/components/PageHeader';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader } from '@/components/ui/card';
-import { PAGE_GAP, PAGE_STACK } from '@/lib/layout';
+import { PAGE_STACK, THIRDS } from '@/lib/layout';
 import { FIGURE_PLACE_GROW, NotePlace, StatCard, StatusPlace } from '@/components/ServerCards';
 import type { Schemas } from '@/api/client';
 
@@ -25,9 +25,9 @@ export function ArkHeader({ badge }: { badge?: ReactNode }) {
   return <PageHeader title="Ark server" description="Who's online, and start, stop or restart the server." meta={badge} />;
 }
 
-/** The page's two cards: the count and the controls, side by side from `lg`, one under the other
- * below. */
-export const ARK_CARDS = `grid lg:grid-cols-2 ${PAGE_GAP}`;
+/** The page's two cards: the count and the controls, in the site's thirds (THIRDS), so each is a
+ * card's width, not half the page's, and they line up with Enshrouded's figures. */
+export const ARK_CARDS = THIRDS;
 
 /** What Stop does: shown under the buttons, and read out with Stop (it has no confirmation). */
 export const STOP_NOTE = 'Stop shuts the game server down and disconnects its players.';

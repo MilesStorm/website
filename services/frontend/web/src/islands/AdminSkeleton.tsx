@@ -21,13 +21,13 @@ export const TABS = [
 ] as const;
 
 /** Each table's column heads, and the shape of its row's cells while it loads (PlaceholderRows):
- * a user's name, address and roles' badges; a role's name and permissions' badges; an invite's
+ * a user's name, roles' badges and address (the roles beside the name they belong to); a role's name and permissions' badges; an invite's
  * note, role badge, uses, date and status badge, and no pulse for its button. */
-export const USERS_HEAD = ['Username', 'Email', 'Roles'];
-export const USERS_COLS = ['lg:w-[22%]', 'lg:w-[32%]', ''];
-export const USER_CELLS = ['h-5 w-24', 'h-5 w-40', 'h-6 w-44 rounded-4xl'];
+export const USERS_HEAD = ['Username', 'Roles', 'Email'];
+export const USERS_COLS = ['lg:w-1/3', 'lg:w-1/3', ''];
+export const USER_CELLS = ['h-5 w-24', 'h-6 w-44 rounded-4xl', 'h-5 w-40'];
 export const ROLES_HEAD = ['Role', 'Permissions'];
-export const ROLES_COLS = ['lg:w-[22%]', ''];
+export const ROLES_COLS = ['lg:w-1/3', ''];
 export const ROLE_CELLS = ['h-5 w-24', 'h-6 w-72 rounded-4xl'];
 /** The usual answer: a handful of roles, far fewer than a page. */
 export const ROLE_ROWS = 5;
@@ -36,9 +36,9 @@ export const INVITES_COLS = ['', 'lg:w-[12%]', 'lg:w-[9%]', 'lg:w-[13%]', 'lg:w-
 export const INVITE_CELLS = ['h-5 w-28', 'h-5 w-20 rounded-4xl', 'h-5 w-10', 'h-5 w-20', 'h-5 w-16 rounded-4xl', ''];
 
 /** Below `lg` the table sizes its columns to what is in them; from `lg` the widths are fixed (the
- * `*_COLS`, as shares of the card; the column without one takes the rest), so the columns stay put
+ * `*_COLS`: users' and roles' on the site's thirds; the column without one takes the rest), so the columns stay put
  * from page to page and search to search, and a long address is cut short (its whole text on
- * hover) instead of pushing the roles aside. */
+ * hover) instead of pushing the next column aside. */
 export const CUT = 'lg:truncate';
 
 /** On a phone a row is no table row but a stack of its cells (the heads are left to assistive
@@ -171,18 +171,18 @@ export const INVITE_FORM = {
   make: 'Make link',
 };
 
-/** The form's fields: two across, and from `lg` all four in a row; from 1920, in the rail beside
+/** The form's fields: two across, and from `lg` all four in a row; from 1536, in the rail beside
  * the links, two across again with the note (the second field, the one with the longest text) on
  * a row of its own above the others. */
 export const INVITE_FIELDS =
-  'grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-end 3xl:grid-cols-2 3xl:*:nth-2:order-first 3xl:*:nth-2:col-span-2';
+  'grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-end 2xl:grid-cols-2 2xl:*:nth-2:order-first 2xl:*:nth-2:col-span-2';
 
 /** The invites tab's place until the roles (its form's choices) are in: the form card with its
  * own text and a pulse for each field and the button, then the list's. */
-/** The invites tab: the form for a new link above the links; from 1920 the links on the left and
+/** The invites tab: the form for a new link above the links; from 1536 the links on the left and
  * the form beside them (staying in view while the list scrolls). */
 export const INVITES_LAYOUT =
-  'grid gap-6 3xl:grid-cols-[minmax(0,1fr)_28rem] 3xl:items-start 3xl:*:first:sticky 3xl:*:first:top-24 3xl:*:first:col-start-2 3xl:*:first:row-start-1 3xl:*:nth-2:col-start-1 3xl:*:nth-2:row-start-1';
+  'grid gap-6 2xl:grid-cols-[minmax(0,1fr)_28rem] 2xl:items-start 2xl:*:first:sticky 2xl:*:first:top-24 2xl:*:first:col-start-2 2xl:*:first:row-start-1 2xl:*:nth-2:col-start-1 2xl:*:nth-2:row-start-1';
 
 export function InvitesSkeleton() {
   return (

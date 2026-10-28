@@ -1,12 +1,10 @@
 /* The storm behind a hero (islands/Storm.tsx): a grid of dots, full strength across the hero and
-   fading out before the storm's own edges, so the cards below stay clear of them, and a soft glow
-   behind the hero's words only, on dark (on light it would be a stain). Neutral: the theme's own foreground. Stronger by default for plain sRGB screens, where
+   fading out before the storm's own edges, so the cards below stay clear of them. Neutral: the theme's own foreground. Stronger by default for plain sRGB screens, where
    faint greys sink into the black (and crushed shadows or a bright room sink them further);
    quieter on wide-gamut ones, and quieter again on light, where dark dots on white read heavier. */
 .storm {
   --storm-dot: 26%;
   --storm-dot-r: 0.09375rem;
-  --storm-glow: 14%;
   --storm-flash: 24%;
   --storm-lit: 0.75;
   /* The mask's width over the field's: 1.5 on a phone (a field as wide as the screen would
@@ -22,14 +20,11 @@
   .storm {
     --storm-dot: 18%;
     --storm-dot-r: 0.078125rem;
-    --storm-glow: 9%;
   }
 }
 :root:not(.dark) .storm {
   --storm-dot: 12%;
   --storm-dot-r: 0.078125rem;
-  /* No glow on light: a darker patch on white reads as a stain, not as light. */
-  --storm-glow: 0%;
   --storm-flash: 10%;
   --storm-lit: 0.4;
 }
@@ -39,15 +34,9 @@
   }
 }
 
-/* The glow and the flash share a falloff eased in steps, so no edge shows. */
-.storm-glow {
-  --strength: var(--storm-glow);
-}
+/* The flash's falloff, eased in steps so no edge shows. */
 .storm-flash {
   --strength: var(--storm-flash);
-}
-.storm-glow,
-.storm-flash {
   background: radial-gradient(
     closest-side,
     color-mix(in oklab, var(--foreground) var(--strength), transparent),
@@ -78,22 +67,4 @@
 }
 .storm[data-live] .storm-canvas {
   display: block;
-}
-
-/* Motion: the choice on <html> (the profile's Motion card), else the system's. */
-@media (prefers-reduced-motion: no-preference) {
-  :root:not([data-motion='reduced']) .storm-glow {
-    animation: storm-breathe 5.2s ease-in-out infinite alternate;
-  }
-}
-:root[data-motion='full'] .storm-glow {
-  animation: storm-breathe 5.2s ease-in-out infinite alternate;
-}
-@keyframes storm-breathe {
-  from {
-    opacity: 0.78;
-  }
-  to {
-    opacity: 1;
-  }
 }
