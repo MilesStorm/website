@@ -267,7 +267,7 @@ async fn router(
 ) -> anyhow::Result<axum::Router> {
     use crate::trace::RedisTracing;
     use axum::{routing::get, Router};
-    use axum_prometheus::PrometheusMetricLayer;
+    use axum_prometheus::{EndpointLabel, PrometheusMetricLayerBuilder};
     use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
     use tower_sessions::cookie::time::Duration;
     use tower_sessions::cookie::SameSite;
@@ -320,7 +320,13 @@ async fn router(
         .with_name("milesstorm.bff")
         .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
-    let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+    let (prometheus_layer, metric_handle) = PrometheusMetricLayerBuilder::new()
+        // The scrape isn't traffic, and timing it measures the exporter.
+        .with_ignore_patterns(&["/metrics"])
+        // A path no route matched (Astro's 404, a scanner's guess) gets one label, not a series each.
+        .with_endpoint_label_type(EndpointLabel::MatchedPathWithFallbackFn(|_| "unmatched".into()))
+        .with_default_metrics()
+        .build_pair();
     // Astro's pages, and its 404 page for any other path.
     let built = pages::from_env()?;
 
