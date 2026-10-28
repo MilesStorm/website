@@ -15,7 +15,7 @@ test('the profile shows the account, and its appearance card works', async ({ co
   await page.goto('/profile');
   await expect(page.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Appearance' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Session and account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Session' })).toBeVisible();
   await expectAccessible(page);
   const theme = page.getByRole('radiogroup', { name: 'Theme' });
   await theme.getByRole('radio', { name: 'Light' }).click();

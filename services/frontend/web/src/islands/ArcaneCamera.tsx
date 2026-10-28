@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
-import { Bug, CameraOff, LoaderCircle } from 'lucide-react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Bug, CameraOff, LoaderCircle, Unplug } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { wsUrl } from '@/api/client';
-import { ExtensionCard, RollCard, UNDER_CAMERA } from '@/islands/ArcaneSkeleton';
+import {
+  ARCANE_GRID,
+  CAMERA_COLUMN,
+  CAMERA_FRAME,
+  ExtensionCard,
+  RollCard,
+  SIDE_CARDS,
+} from '@/islands/ArcaneSkeleton';
 import {
   CAMERA_FRAME_MS,
   PageTimings,
@@ -16,7 +23,6 @@ import {
   type Detection,
 } from '@/lib/arcane';
 import { island } from '@/lib/island';
-import { cn } from '@/lib/utils';
 
 /** Why the camera didn't start: the browser (or the person) refused it, there is none, something
  * else has it, the browser can't open one here, or anything else. */
@@ -91,9 +97,10 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
   const [debugText, setDebugText] = useState('');
   const [lastRoll, setLastRoll] = useState<string | null>(null);
   const [timings, setTimings] = useState('');
-  const [sized, setSized] = useState(false);
   // Bumped by Reconnect: a new session, camera and connection.
   const [round, setRound] = useState(0);
+  // The camera's shape, once it has one (`w / h`): the frame takes it below lg (CAMERA_FRAME).
+  const [ratio, setRatio] = useState<string | null>(null);
 
   useEffect(() => {
     let left = false;
@@ -146,6 +153,7 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
       const h = Math.max(1, v.videoHeight);
       cap.width = overlay.current!.width = w;
       cap.height = overlay.current!.height = h;
+      setRatio(`${w} / ${h}`);
 
       const ws = new globalThis.WebSocket(wsUrl('/ws/arcane'));
       socket = ws;
@@ -237,86 +245,100 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
     ) : null;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div
-        className={cn(
-          'relative overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10',
-          connection.kind === 'error' && 'min-h-72',
-        )}
-      >
-        {/* 16:9, as the placeholder, until the camera says its own shape. */}
-        <video
-          ref={video}
-          className={sized ? 'block w-full' : 'block aspect-video w-full'}
-          autoPlay
-          playsInline
-          muted
-          aria-label="Camera"
-          onLoadedMetadata={() => setSized(true)}
-        />
-        <canvas ref={overlay} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true" />
-        {connection.kind === 'connecting' && (
-          <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground" aria-hidden="true">
-            <LoaderCircle className="size-4 motion-safe:animate-spin" />
-            Starting the camera…
-          </div>
-        )}
-        {connection.kind === 'error' && (
-          <CameraProblem problem={connection.problem} retry={() => setRound((n) => n + 1)} />
-        )}
-        {status && <div className="absolute top-3 left-3">{status}</div>}
-        {live && (
-          <Button
-            size="icon-sm"
-            variant={debug ? 'default' : 'secondary'}
-            className="absolute top-3 right-3"
-            aria-label="Debug"
-            aria-pressed={debug}
-            onClick={() => setDebug((d) => !d)}
-          >
-            <Bug aria-hidden="true" />
-          </Button>
+    <div className={ARCANE_GRID}>
+      <div className={CAMERA_COLUMN}>
+        <div className={CAMERA_FRAME} style={ratio ? ({ '--camera-ratio': ratio } as CSSProperties) : undefined}>
+          {/* Whatever shape the camera has, it is fitted inside the frame (the overlay with it,
+              so the boxes stay on the dice). Below lg the frame takes the camera's shape (a phone
+              held upright films 9:16); from lg it stays 16:9 in its column. */}
+          <video
+            ref={video}
+            className="absolute inset-0 size-full object-contain"
+            autoPlay
+            playsInline
+            muted
+            aria-label="Camera"
+          />
+          <canvas
+            ref={overlay}
+            className="pointer-events-none absolute inset-0 size-full object-contain"
+            aria-hidden="true"
+          />
+          {connection.kind === 'connecting' && (
+            <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted-foreground" aria-hidden="true">
+              <LoaderCircle className="size-4 motion-safe:animate-spin" />
+              Starting the camera…
+            </div>
+          )}
+          {connection.kind === 'error' && (
+            <FramePanel
+              icon={<CameraOff className="size-5 text-muted-foreground" aria-hidden="true" />}
+              title={PROBLEMS[connection.problem].title}
+              text={PROBLEMS[connection.problem].text}
+              action={PROBLEMS[connection.problem].retry}
+              onAction={() => setRound((n) => n + 1)}
+              faro="arcane allow camera"
+            />
+          )}
+          {connection.kind === 'disconnected' && (
+            <FramePanel
+              icon={<Unplug className="size-5 text-muted-foreground" aria-hidden="true" />}
+              title="The connection closed"
+              text="The camera is off until you connect again."
+              action="Reconnect"
+              onAction={() => setRound((n) => n + 1)}
+              faro="arcane reconnect"
+            />
+          )}
+          {status && <div className="absolute top-3 left-3">{status}</div>}
+          {live && (
+            <Button
+              size="icon-sm"
+              variant={debug ? 'default' : 'secondary'}
+              className="absolute top-3 right-3"
+              aria-label="Debug"
+              aria-pressed={debug}
+              onClick={() => setDebug((d) => !d)}
+            >
+              <Bug aria-hidden="true" />
+            </Button>
+          )}
+        </div>
+        {/* Read out when the connection changes, not with every frame's time. */}
+        <p className="sr-only" role="status" aria-label="Connection">
+          {connection.kind === 'connecting'
+            ? 'Connecting'
+            : connection.kind === 'connected'
+              ? 'Connected'
+              : connection.kind === 'disconnected'
+                ? 'Disconnected'
+                : PROBLEMS[connection.problem].title}
+        </p>
+        {debug && live && (
+          <Card size="sm">
+            <CardContent className="flex flex-col gap-2 font-mono text-xs">
+              <div className="flex flex-wrap items-center gap-4">
+                <span className="text-muted-foreground">frame_ms</span>
+                <span className="font-bold tabular-nums">{frameMs}ms</span>
+                <span className="text-muted-foreground">detections</span>
+                <span className="font-bold tabular-nums">{detections}</span>
+                <span className="font-bold tabular-nums">{timings}</span>
+                <span className="text-muted-foreground">ws</span>
+                <span className="font-bold">
+                  {{ connecting: 'connecting', connected: 'open', disconnected: 'closed', error: 'error' }[connection.kind]}
+                </span>
+              </div>
+              {serverError && <div className="break-all text-destructive">server: {serverError}</div>}
+              {debugText ? (
+                <pre className="overflow-x-auto leading-5 whitespace-pre-wrap">{debugText}</pre>
+              ) : connection.kind === 'connected' ? (
+                <div className="text-muted-foreground italic">no detections yet</div>
+              ) : null}
+            </CardContent>
+          </Card>
         )}
       </div>
-      {/* Read out when the connection changes, not with every frame's time. */}
-      <p className="sr-only" role="status" aria-label="Connection">
-        {connection.kind === 'connecting'
-          ? 'Connecting'
-          : connection.kind === 'connected'
-            ? 'Connected'
-            : connection.kind === 'disconnected'
-              ? 'Disconnected'
-              : PROBLEMS[connection.problem].title}
-      </p>
-      {connection.kind === 'disconnected' && (
-        <Button className="self-center" onClick={() => setRound((n) => n + 1)} data-faro-user-action-name="arcane reconnect">
-          Reconnect
-        </Button>
-      )}
-      {debug && live && (
-        <Card size="sm">
-          <CardContent className="flex flex-col gap-2 font-mono text-xs">
-            <div className="flex flex-wrap items-center gap-4">
-              <span className="text-muted-foreground">frame_ms</span>
-              <span className="font-bold tabular-nums">{frameMs}ms</span>
-              <span className="text-muted-foreground">detections</span>
-              <span className="font-bold tabular-nums">{detections}</span>
-              <span className="font-bold tabular-nums">{timings}</span>
-              <span className="text-muted-foreground">ws</span>
-              <span className="font-bold">
-                {{ connecting: 'connecting', connected: 'open', disconnected: 'closed', error: 'error' }[connection.kind]}
-              </span>
-            </div>
-            {serverError && <div className="break-all text-destructive">server: {serverError}</div>}
-            {debugText ? (
-              <pre className="overflow-x-auto leading-5 whitespace-pre-wrap">{debugText}</pre>
-            ) : connection.kind === 'connected' ? (
-              <div className="text-muted-foreground italic">no detections yet</div>
-            ) : null}
-          </CardContent>
-        </Card>
-      )}
-      <div className={UNDER_CAMERA}>
+      <div className={SIDE_CARDS}>
         <RollCard roll={lastRoll} />
         <ExtensionCard />
       </div>
@@ -326,21 +348,34 @@ export const ArcaneCamera = island('ArcaneCamera', function ArcaneCamera() {
   );
 });
 
-/** The camera's place when it didn't start: what happened, what to do, and the button that asks
- * again (a click is a gesture, so the browser may ask the person again). */
-function CameraProblem({ problem, retry }: { problem: Problem; retry: () => void }) {
-  const { title, text, retry: action } = PROBLEMS[problem];
+/** What the frame says when the camera isn't running: what happened, what to do, and the button
+ * that does it (a click is a gesture, so the browser may ask the person again). */
+function FramePanel({
+  icon,
+  title,
+  text,
+  action,
+  onAction,
+  faro,
+}: {
+  icon: ReactNode;
+  title: string;
+  text: string;
+  action: string | null;
+  onAction: () => void;
+  faro: string;
+}) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-center">
-      <div className="flex size-12 items-center justify-center rounded-full bg-background ring-1 ring-foreground/10">
-        <CameraOff className="size-5 text-muted-foreground" aria-hidden="true" />
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center sm:gap-4 sm:p-6">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-background ring-1 ring-foreground/10 sm:size-12">
+        {icon}
       </div>
-      <div className="flex max-w-sm flex-col gap-1">
+      <div className="flex max-w-md flex-col gap-1">
         <h2 className="text-base font-medium">{title}</h2>
         <p className="text-sm text-muted-foreground">{text}</p>
       </div>
       {action && (
-        <Button onClick={retry} data-faro-user-action-name="arcane allow camera">
+        <Button onClick={onAction} data-faro-user-action-name={faro}>
           {action}
         </Button>
       )}

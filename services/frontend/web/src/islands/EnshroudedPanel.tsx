@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CircleCheck, Info, LoaderCircle } from 'lucide-react';
+import { CircleCheck, History, Info, LoaderCircle, Users, type LucideIcon } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,6 +10,7 @@ import { attempt } from '@/lib/errors';
 import { CONFIRM, SENT, STATES, actionText, ago, busy, duration, playersOnline, type Command } from '@/lib/enshrouded';
 import { ENSHROUDED_BUTTONS, EnshroudedHeader, EnshroudedSkeleton, Figures, UPTIME_NOTE, UPTIME_NOTE_SHORT } from '@/islands/EnshroudedSkeleton';
 import { island } from '@/lib/island';
+import { PAGE_GAP, PAGE_STACK } from '@/lib/layout';
 
 type Status = Schemas['EnshroudedStatus'];
 
@@ -69,7 +70,7 @@ export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPane
   if (!status) {
     if (!failed) return <EnshroudedSkeleton />;
     return (
-      <div className="flex flex-col gap-6">
+      <div className={PAGE_STACK}>
         <EnshroudedHeader />
         <FormAlert message={failed} />
       </div>
@@ -78,9 +79,9 @@ export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPane
   const s = status;
   const state = STATES[s.state];
   return (
-    <div className="flex flex-col gap-6">
+    <div className={PAGE_STACK}>
       <FormAlert message={failed} />
-      <div data-overview className="flex flex-col gap-6">
+      <div data-overview className={PAGE_STACK}>
         <EnshroudedHeader
           badge={<StatusBadge tone={state.tone} label={state.label} moving={state.moving} />}
           buttons={<ControlButtons status={s} now={now} command={command} ask={(cmd) => setCommand({ kind: 'confirming', cmd })} />}
@@ -96,6 +97,7 @@ export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPane
           <PlayersFigure status={s} />
           <StatCard
             compact
+            grow
             label="Uptime"
             value={s.uptime_secs !== null ? duration(s.uptime_secs) : <span aria-hidden="true">—</span>}
             footer={
@@ -108,6 +110,7 @@ export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPane
           />
           <StatCard
             compact
+            grow
             label="Build"
             value={s.version ?? <span aria-hidden="true">—</span>}
             footer={<BuildNote status={s} now={now} />}
@@ -115,8 +118,11 @@ export const EnshroudedPanel = island('EnshroudedPanel', function EnshroudedPane
         </Figures>
       </div>
       <UpdateNotice status={s} now={now} />
-      <Sessions status={s} />
-      <Activity recent={s.recent} now={now} />
+      {/* Always both: a card with nothing to list says so, so the grid is never lopsided. */}
+      <div className={`grid lg:grid-cols-3 ${PAGE_GAP}`}>
+        <Sessions status={s} />
+        <Activity recent={s.recent} now={now} />
+      </div>
     </div>
   );
 });
@@ -127,6 +133,7 @@ function PlayersFigure({ status }: { status: Status }) {
   return (
     <StatCard
       compact
+      grow
       label="Players online"
       shortLabel="Players"
       heading
@@ -139,7 +146,7 @@ function PlayersFigure({ status }: { status: Status }) {
         ) : (
           <>
             {p.online}
-            <span className="text-xl text-muted-foreground"> / {p.max}</span>
+            <span className="text-xl text-muted-foreground @[340px]/card:text-2xl"> / {p.max}</span>
           </>
         )
       }
@@ -161,7 +168,7 @@ function PlayersFigure({ status }: { status: Status }) {
 function BuildNote({ status, now }: { status: Status; now: number }) {
   if (status.update_queued && status.state === 'Online') return <StatNote>Update queued</StatNote>;
   if (status.latest_build_at === null) return <StatNote short="Unknown">Latest build unknown</StatNote>;
-  if (status.update_pending) return <StatNote short="Newer on Steam">Newer build on Steam</StatNote>;
+  if (status.update_pending) return <StatNote short="Newer build">Newer build on Steam</StatNote>;
   return <StatNote short="Up to date">{`Up to date · from ${ago(now, status.latest_build_at)}`}</StatNote>;
 }
 
@@ -191,29 +198,45 @@ function UpdateNotice({ status, now }: { status: Status; now: number }) {
   );
 }
 
-/** Who is on, and for how long (Enshrouded shares no names). */
+/** Who is on, and for how long (Enshrouded shares no names): a tile each, as many across as the
+ * card has room for. */
 function Sessions({ status }: { status: Status }) {
   const sessions = status.players?.sessions ?? [];
-  if (sessions.length === 0) return null;
   return (
-    <Card>
+    <Card className="@container/card lg:col-span-2">
       <CardHeader>
         <CardTitle>
           <h2>Who's on</h2>
         </CardTitle>
         <CardDescription>Enshrouded doesn't share player names.</CardDescription>
       </CardHeader>
-      <CardContent>
-        <ul className="flex flex-col divide-y text-sm">
-          {sessions.map((secs, i) => (
-            <li key={i} className="flex justify-between gap-4 py-2 first:pt-0 last:pb-0">
-              <span className="font-medium">Player {i + 1}</span>
-              <span className="text-muted-foreground tabular-nums">on for {duration(secs)}</span>
-            </li>
-          ))}
-        </ul>
+      <CardContent className="flex flex-1 flex-col">
+        {sessions.length === 0 ? (
+          <Empty icon={Users}>
+            {status.players === null ? "The server doesn't say who is on." : 'Nobody is on right now.'}
+          </Empty>
+        ) : (
+          <ul className="grid gap-2 text-sm @[32rem]/card:grid-cols-2 @[48rem]/card:grid-cols-3">
+            {sessions.map((secs, i) => (
+              <li key={i} className="flex items-center justify-between gap-4 rounded-xl bg-muted/50 px-3 py-2.5">
+                <span className="font-medium">Player {i + 1}</span>
+                <span className="text-muted-foreground tabular-nums">on for {duration(secs)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+/** What a card says when it has nothing to list: centred in the room the card has. */
+function Empty({ icon: Icon, children }: { icon: LucideIcon; children: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+      <Icon aria-hidden="true" className="size-5" />
+      <p>{children}</p>
+    </div>
   );
 }
 
@@ -354,28 +377,31 @@ function Answer({
   }
 }
 
-/** Who restarted or updated the server lately. */
+/** Who restarted or updated the server lately: the line, then when under it. */
 function Activity({ recent, now }: { recent: Schemas['EnshroudedAction'][]; now: number }) {
-  if (recent.length === 0) return null;
   return (
-    <Card>
+    <Card className="@container/card">
       <CardHeader>
         <CardTitle>
           <h2>Recent commands</h2>
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        <ul className="flex flex-col divide-y text-sm">
-          {recent.map((a, i) => (
-            <li key={i} className="flex justify-between gap-4 py-2 first:pt-0 last:pb-0">
-              <span>
-                <span className="font-medium">{a.name ?? 'A deleted account'}</span>
-                {actionText(a.action)}
-              </span>
-              <span className="whitespace-nowrap text-muted-foreground">{ago(now, a.at)}</span>
-            </li>
-          ))}
-        </ul>
+      <CardContent className="flex flex-1 flex-col">
+        {recent.length === 0 ? (
+          <Empty icon={History}>No commands sent lately.</Empty>
+        ) : (
+          <ul className="flex flex-col divide-y text-sm">
+            {recent.map((a, i) => (
+              <li key={i} className="flex flex-col gap-0.5 py-2.5 first:pt-0 last:pb-0">
+                <span>
+                  <span className="font-medium">{a.name ?? 'A deleted account'}</span>
+                  {actionText(a.action)}
+                </span>
+                <span className="text-xs text-muted-foreground">{ago(now, a.at)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </CardContent>
     </Card>
   );

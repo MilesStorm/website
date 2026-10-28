@@ -35,7 +35,11 @@ export const HomeCards = island('HomeCards', function HomeCards() {
             height={56}
             className="size-12 shrink-0 rounded-full object-cover ring-2 ring-border md:size-14"
           />
-          <h1 className="min-w-0 break-words text-primary xl:tracking-tighter">{viewer.shown_name}</h1>
+          {/* One line, beside the picture: a name too long for it ends in an ellipsis (the whole of it
+              in the tooltip) instead of breaking mid-word away from the picture. */}
+          <h1 className="min-w-0 truncate text-primary xl:tracking-tighter" title={viewer.shown_name}>
+            {viewer.shown_name}
+          </h1>
         </div>
       </section>
       <section className={CARD_GRID}>

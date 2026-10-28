@@ -33,6 +33,7 @@ export const PICTURE_HINT = 'JPEG, PNG, WebP or GIF, up to 5 MB.';
 export const NAME_HINT = 'Shown on the site instead of your username. Leave it empty to use your username.';
 export const USERNAME_HINT = "You log in with it. It can't be changed.";
 export const SHARING_TITLE = 'Help improve dice recognition';
+export const SHARING_SECTION_INTRO = 'Optional. Lets pictures of your rolls teach the dice reader.';
 export const SHARING_INTRO = 'Helps the dice reader get better at reading them.';
 export const SHARING_FACTS: [string, string][] = [
   ["What's saved", 'The camera picture and what the model read.'],
@@ -46,6 +47,8 @@ export const SHARING_FACTS_TITLE = "What's shared";
 export const SHARING_FACTS_INTRO = 'What is saved, which rolls, and who sees them.';
 export const SHARING_DELETE_TITLE = 'Shared pictures';
 export const SHARING_DELETE_INTRO = "Removes every roll picture you've shared or flagged, and turns sharing off.";
+export const SESSION_INTRO = 'Your login on this device.';
+export const DANGER_INTRO = "These can't be undone.";
 export const LOGOUT_INTRO = 'Ends your session in this browser.';
 export const DELETE_INTRO =
   "Removes your account and profile picture. Any data you chose to share will also be removed. This can't be undone.";

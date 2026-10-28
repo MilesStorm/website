@@ -30,15 +30,19 @@ import { TabsContent } from '@/components/ui/tabs';
 import { FormAlert } from '@/components/FormAlert';
 import {
   AdminTabs,
+  CUT,
   EmptyCard,
   FILL_CELL,
+  INVITES_COLS,
   INVITES_HEAD,
+  INVITE_FIELDS,
   INVITE_CELLS,
   INVITE_FORM,
   InvitesSkeleton,
   ListingFooter,
   ListingSkeleton,
   PlaceholderRows,
+  ROLES_COLS,
   ROLES_HEAD,
   ROLE_CELLS,
   ROLE_ROWS,
@@ -46,6 +50,7 @@ import {
   STACKED,
   STACKED_WRAP,
   TableCard,
+  USERS_COLS,
   USERS_HEAD,
   USER_CELLS,
 } from '@/islands/AdminSkeleton';
@@ -64,6 +69,7 @@ import { attempt, type Outcome } from '@/lib/errors';
 import { isKnownPermission } from '@/lib/gates';
 import { useMenu } from '@/lib/menu';
 import { island } from '@/lib/island';
+import { cn } from '@/lib/utils';
 
 type RoleRef = Schemas['AdminRoleRef'];
 type Permission = Schemas['AdminPermission'];
@@ -96,14 +102,14 @@ export const AdminPanel = island('AdminPanel', function AdminPanel() {
       <AdminTabs defaultValue="users">
         <TabsContent value="users">
           {loading ? (
-            <ListingSkeleton head={USERS_HEAD} cells={USER_CELLS} rows={PAGE_SIZE} />
+            <ListingSkeleton head={USERS_HEAD} cols={USERS_COLS} cells={USER_CELLS} rows={PAGE_SIZE} />
           ) : (
             <UsersTab allRoles={allRoles} me={me} />
           )}
         </TabsContent>
         <TabsContent value="roles">
           {loading ? (
-            <ListingSkeleton head={ROLES_HEAD} cells={ROLE_CELLS} rows={ROLE_ROWS} />
+            <ListingSkeleton head={ROLES_HEAD} cols={ROLES_COLS} cells={ROLE_CELLS} rows={ROLE_ROWS} />
           ) : (
             <RolesTab allPermissions={allPermissions} />
           )}
@@ -180,12 +186,13 @@ function UsersTab({ allRoles, me }: { allRoles: RoleRef[]; me: string | null }) 
       list={list}
       error={error}
       head={USERS_HEAD}
+      cols={USERS_COLS}
       cells={USER_CELLS}
       rows={PAGE_SIZE}
       row={(user) => (
         <TableRow role="row" key={user.id} className={STACKED}>
-          <TableCell role="cell" className="font-medium">{user.username}</TableCell>
-          <TableCell role="cell" className="text-muted-foreground">{user.email ?? NO_EMAIL}</TableCell>
+          <TableCell role="cell" className={cn('font-medium', CUT)} title={user.username}>{user.username}</TableCell>
+          <TableCell role="cell" className={cn('text-muted-foreground', CUT)} title={user.email ?? undefined}>{user.email ?? NO_EMAIL}</TableCell>
           <TableCell role="cell" className={FILL_CELL}>
             <Assigned
               owner={user.username}
@@ -226,11 +233,12 @@ function RolesTab({ allPermissions }: { allPermissions: Permission[] }) {
       list={list}
       error={error}
       head={ROLES_HEAD}
+      cols={ROLES_COLS}
       cells={ROLE_CELLS}
       rows={ROLE_ROWS}
       row={(role) => (
         <TableRow role="row" key={role.id} className={STACKED}>
-          <TableCell role="cell" className="font-medium">{role.name}</TableCell>
+          <TableCell role="cell" className={cn('font-medium', CUT)} title={role.name}>{role.name}</TableCell>
           <TableCell role="cell" className={FILL_CELL}>
             <Assigned
               owner={role.name}
@@ -269,6 +277,7 @@ function Listing<T>({
   list,
   error,
   head,
+  cols,
   cells,
   rows,
   row,
@@ -279,6 +288,7 @@ function Listing<T>({
   list: ReturnType<typeof useListing<T>>;
   error: string | null;
   head: string[];
+  cols: string[];
   cells: string[];
   rows: number;
   row: (item: T) => React.ReactNode;
@@ -298,7 +308,7 @@ function Listing<T>({
       ) : result?.data.items.length === 0 ? (
         <EmptyCard>No {noun}s found.</EmptyCard>
       ) : (
-        <TableCard head={head}>
+        <TableCard head={head} cols={cols}>
           {result === null ? <PlaceholderRows cells={cells} rows={rows} fill /> : result.data.items.map(row)}
         </TableCard>
       )}
@@ -491,7 +501,7 @@ function InvitesTab({ allRoles }: { allRoles: RoleRef[] }) {
       ) : invites?.data.length === 0 ? (
         <EmptyCard>No invite links yet.</EmptyCard>
       ) : (
-        <TableCard head={INVITES_HEAD} actions>
+        <TableCard head={INVITES_HEAD} cols={INVITES_COLS} actions>
           {invites === null ? (
             <PlaceholderRows cells={INVITE_CELLS} rows={3} stacked={STACKED_WRAP} />
           ) : (
@@ -557,7 +567,7 @@ function NewInviteForm({ allRoles, made }: { allRoles: RoleRef[]; made: () => vo
           </CardTitle>
           <CardDescription>{INVITE_FORM.intro}</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        <CardContent className={INVITE_FIELDS}>
           <Field>
             <FieldLabel htmlFor={ids.role}>{INVITE_FORM.role}</FieldLabel>
             <NativeSelect id={ids.role} className="w-full" value={roleId} onChange={(e) => setRoleId(Number(e.target.value))}>
@@ -633,7 +643,7 @@ function InviteRow({ invite, changed }: { invite: Schemas['AdminInvite']; change
   };
   return (
     <TableRow role="row" className={STACKED_WRAP}>
-      <TableCell role="cell">
+      <TableCell role="cell" className="whitespace-normal">
         <div className="font-medium">{invite.note ?? '—'}</div>
         {invite.created_by && <div className="text-xs text-muted-foreground">by {invite.created_by}</div>}
         {invite.joined.length > 0 && <div className="text-xs text-muted-foreground">joined: {invite.joined.join(', ')}</div>}

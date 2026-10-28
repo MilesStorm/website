@@ -1,9 +1,11 @@
-import { CARD_GRID } from '@/components/FeatureCard';
+import { CARD_GRID, FeatureCardPlaceholder } from '@/components/FeatureCard';
+import { FEATURES } from '@/lib/features';
 import { Storm } from './Storm';
 import { Skeleton } from '@/components/ui/skeleton';
 
 /** The logged-in start page's shape while it loads: the hero's own lines with a pulse for the
- * picture and the name, so nothing moves when it arrives; the cards' places below. */
+ * picture and the name, so nothing moves when it arrives; the viewer's cards below, in pulses
+ * (FeatureCardPlaceholder). */
 export function HomeSkeleton() {
   return (
     <div className="flex flex-col gap-4" role="status" aria-label="Loading" aria-busy="true">
@@ -18,10 +20,20 @@ export function HomeSkeleton() {
           </div>
         </div>
       </section>
+      {/* The cards homeCards gives this viewer, in its order: each feature open where the viewer
+          has its permission, then locked where they lack it (and it's advertised). The server's
+          attributes on <html> pick them before any script runs (lib/gates.ts). */}
       <div className={CARD_GRID}>
-        <Skeleton className="h-40 rounded-2xl" />
-        <Skeleton className="h-40 rounded-2xl" />
-        <Skeleton className="h-40 rounded-2xl" />
+        {FEATURES.map((feature) => (
+          <div key={feature.to} className="contents" data-requires={feature.permission ?? undefined}>
+            <FeatureCardPlaceholder feature={feature} state="open" />
+          </div>
+        ))}
+        {FEATURES.filter((f) => f.permission !== null && f.advertised).map((feature) => (
+          <div key={`${feature.to}-locked`} className="contents" data-lacks={feature.permission!}>
+            <FeatureCardPlaceholder feature={feature} state="locked" />
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -1,32 +1,33 @@
-/* The storm behind a hero (components/Storm.tsx): a soft glow and a grid of dots, fading out
-   towards the hero's edges, so the cards below stay clear of them. Neutral: the theme's own
-   foreground. Stronger by default for plain sRGB screens, where faint greys sink into the black;
+/* The storm behind a hero (islands/Storm.tsx): a soft glow and a grid of dots, full strength
+   across the hero and fading out before the storm's own edges, so the cards below stay clear of
+   them. Neutral: the theme's own foreground. Stronger by default for plain sRGB screens, where
+   faint greys sink into the black (and crushed shadows or a bright room sink them further);
    quieter on wide-gamut ones, and quieter again on light, where dark dots on white read heavier. */
 .storm {
-  --storm-dot: 20%;
-  --storm-dot-r: 1.3px;
-  --storm-glow: 14%;
-  --storm-flash: 22%;
+  --storm-dot: 26%;
+  --storm-dot-r: 1.5px;
+  --storm-glow: 17%;
+  --storm-flash: 24%;
   --storm-lit: 0.75;
 }
 @media (color-gamut: p3) {
   .storm {
-    --storm-dot: 12%;
-    --storm-dot-r: 1px;
-    --storm-glow: 8.5%;
+    --storm-dot: 18%;
+    --storm-dot-r: 1.25px;
+    --storm-glow: 11%;
   }
 }
 :root:not(.dark) .storm {
-  --storm-dot: 9%;
-  --storm-dot-r: 1px;
-  --storm-glow: 4.5%;
-  --storm-flash: 9%;
+  --storm-dot: 12%;
+  --storm-dot-r: 1.25px;
+  --storm-glow: 6%;
+  --storm-flash: 10%;
   --storm-lit: 0.4;
 }
 @media (color-gamut: p3) {
   :root:not(.dark) .storm {
-    --storm-dot: 7%;
-    --storm-glow: 3.5%;
+    --storm-dot: 9%;
+    --storm-glow: 4.5%;
   }
 }
 
@@ -42,12 +43,12 @@
   background: radial-gradient(
     closest-side,
     color-mix(in oklab, var(--foreground) var(--strength), transparent),
-    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.74), transparent) 19%,
-    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.5), transparent) 34%,
-    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.29), transparent) 47%,
-    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.15), transparent) 58%,
-    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.06), transparent) 70%,
-    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.015), transparent) 84%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.9), transparent) 25%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.76), transparent) 40%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.56), transparent) 55%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.36), transparent) 68%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.19), transparent) 80%,
+    color-mix(in oklab, var(--foreground) calc(var(--strength) * 0.07), transparent) 90%,
     transparent
   );
 }
@@ -55,14 +56,13 @@
   will-change: opacity;
 }
 
-/* The same ellipse and fade the canvas draws (lib/storm.ts). */
+/* The mask (the plateau and its fade) is the canvas's too: both come from lib/storm.ts. */
 .storm-dots {
   background-image: radial-gradient(
     color-mix(in oklab, var(--foreground) var(--storm-dot), transparent) var(--storm-dot-r),
     transparent var(--storm-dot-r)
   );
   background-size: 18px 18px;
-  mask-image: radial-gradient(closest-side, black, transparent 85%);
 }
 .storm[data-live] .storm-dots {
   display: none;

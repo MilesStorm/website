@@ -65,6 +65,18 @@ describe('the Enshrouded panel', () => {
     expect(screen.getByRole('button', { name: 'Restart' })).toHaveProperty('disabled', false);
   });
 
+  it('says so when nobody is on and no command was sent, or the server does not say', async () => {
+    open({ 'GET /api/enshrouded': () => json(status({ players: { online: 0, max: 16, sessions: [] }, recent: [] })) });
+    const { EnshroudedPanel } = await import('@/islands/EnshroudedPanel');
+    render(<EnshroudedPanel />);
+    expect(await screen.findByText('Nobody is on right now.')).toBeTruthy();
+    expect(screen.getByText('No commands sent lately.')).toBeTruthy();
+    cleanup();
+    open({ 'GET /api/enshrouded': () => json(status({ state: 'Crashed', players: null })) });
+    render(<EnshroudedPanel />);
+    expect(await screen.findByText("The server doesn't say who is on.")).toBeTruthy();
+  });
+
   it('asks before a restart, warns about players, sends the typed command', async () => {
     const calls = open({
       'GET /api/enshrouded': () => json(status()),

@@ -1,5 +1,6 @@
 // The CSS that shows or hides parts of a page by who is looking, from the attributes the server
-// writes on <html> (`data-session`, `data-perms`). It needs no script, so the first paint is
+// writes on <html> (`data-session`, `data-perms`): `data-requires` shows a part only to viewers with
+// the permission, `data-lacks` only to those without it. It needs no script, so the first paint is
 // right. Without the attributes (a page the server didn't splice) the logged-out parts show.
 import type { KnownPermission } from '@/api/session';
 
@@ -20,6 +21,8 @@ export const GATE_CSS = [
   'html:not([data-session="in"]) [data-gate="in"]{display:none!important}',
   'html[data-session="in"] [data-gate="out"]{display:none!important}',
   ...(Object.keys(PERMISSIONS) as KnownPermission[]).map(
-    (p) => `html:not([data-perms~="${p}"]) [data-requires="${p}"]{display:none!important}`,
+    (p) =>
+      `html:not([data-perms~="${p}"]) [data-requires="${p}"]{display:none!important}` +
+      `html[data-perms~="${p}"] [data-lacks="${p}"]{display:none!important}`,
   ),
 ].join('');
