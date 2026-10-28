@@ -5,21 +5,29 @@
    quieter on wide-gamut ones, and quieter again on light, where dark dots on white read heavier. */
 .storm {
   --storm-dot: 26%;
-  --storm-dot-r: 1.5px;
+  --storm-dot-r: 0.09375rem;
   --storm-glow: 14%;
   --storm-flash: 24%;
   --storm-lit: 0.75;
+  /* The mask's width over the field's: 1.5 on a phone (a field as wide as the screen would
+     otherwise fade in from its sides), 1 from `md`. */
+  --storm-wide: 1.5;
+}
+@media (width >= 48rem) {
+  .storm {
+    --storm-wide: 1;
+  }
 }
 @media (color-gamut: p3) {
   .storm {
     --storm-dot: 18%;
-    --storm-dot-r: 1.25px;
+    --storm-dot-r: 0.078125rem;
     --storm-glow: 9%;
   }
 }
 :root:not(.dark) .storm {
   --storm-dot: 12%;
-  --storm-dot-r: 1.25px;
+  --storm-dot-r: 0.078125rem;
   /* No glow on light: a darker patch on white reads as a stain, not as light. */
   --storm-glow: 0%;
   --storm-flash: 10%;
@@ -62,7 +70,8 @@
     color-mix(in oklab, var(--foreground) var(--storm-dot), transparent) var(--storm-dot-r),
     transparent var(--storm-dot-r)
   );
-  background-size: 18px 18px;
+  /* In rem, like the canvas's grid (lib/storm.ts): the storm grows with the root size. */
+  background-size: 1.125rem 1.125rem;
 }
 .storm[data-live] .storm-dots {
   display: none;

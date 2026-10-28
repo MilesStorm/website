@@ -39,8 +39,10 @@ export function HomeSkeleton() {
   );
 }
 
-/** The hero (HomeCards, and the logged-out page's), and its place here: its spacing leaves the storm room to fade out. */
-export const HERO_SECTION = 'relative flex flex-col items-center gap-2 pt-12 pb-16 text-center md:pt-20 md:pb-20 lg:pt-24';
+/** The hero (HomeCards, and the logged-out page's), and its place here: its spacing leaves the storm room to fade out.
+ * On a wide screen it takes a good part of the first screen (the logged-out page's more), its words in the middle. */
+export const HERO_SECTION =
+  'relative flex flex-col items-center gap-2 pt-12 pb-16 text-center md:pt-20 md:pb-20 lg:pt-24 3xl:min-h-[45svh] 3xl:justify-center 4xl:min-h-[55svh]';
 
 /** The hero's line with the picture and the name, and its place here. */
 export const HERO_NAME =

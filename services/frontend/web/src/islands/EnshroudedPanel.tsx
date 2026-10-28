@@ -216,7 +216,7 @@ function Sessions({ status }: { status: Status }) {
             {status.players === null ? "The server doesn't say who is on." : 'Nobody is on right now.'}
           </Empty>
         ) : (
-          <ul className="grid gap-2 text-sm @[32rem]/card:grid-cols-2 @[48rem]/card:grid-cols-3">
+          <ul className="grid gap-2 text-sm @[32rem]/card:grid-cols-2 @[48rem]/card:grid-cols-3 @[64rem]/card:grid-cols-4">
             {sessions.map((secs, i) => (
               <li key={i} className="flex items-center justify-between gap-4 rounded-xl bg-muted/50 px-3 py-2.5">
                 <span className="font-medium">Player {i + 1}</span>

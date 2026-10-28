@@ -30,8 +30,10 @@ for (const [from, to, a0, a1] of [
   }
 }
 
-/** The CSS mask for the still frame's dots (`mask-image`). */
-export const maskImage = `radial-gradient(closest-side, ${MASK.map(
+/** The CSS mask for the still frame's dots (`mask-image`): an ellipse as tall as the box and
+ * `--storm-wide` times as wide (styles/storm.css; wider than the box on a phone, so the field's
+ * sides fall off past the screen's edges, not inside them). */
+export const maskImage = `radial-gradient(calc(50% * var(--storm-wide)) 50% at 50% 50%, ${MASK.map(
   ([at, a]) => `rgb(0 0 0 / ${a.toFixed(4)}) ${(at * 100).toFixed(2)}%`,
 ).join(', ')})`;
 
@@ -91,6 +93,11 @@ export function startStorm(root: HTMLElement): () => void {
   let color = '';
   let dotAlpha = 0;
   let dotRadius = 1;
+  // CSS px per storm px: the root font size over 16 (global.css scales it up on wide screens), so
+  // the canvas draws in the still frame's units (rem) and the grid, drops and strikes grow with it.
+  let unit = 1;
+  // The mask's width over the box's (`--storm-wide`).
+  let wide = 1;
   let strength = 0;
   const pointer = { x: 0, y: 0, on: false };
   const eased = { x: 0, y: 0 };
@@ -103,22 +110,25 @@ export function startStorm(root: HTMLElement): () => void {
     const style = getComputedStyle(root);
     color = style.getPropertyValue('--foreground').trim();
     dotAlpha = parseFloat(style.getPropertyValue('--storm-dot')) / 100;
-    dotRadius = parseFloat(style.getPropertyValue('--storm-dot-r'));
+    unit = parseFloat(getComputedStyle(document.documentElement).fontSize) / 16 || 1;
+    // In rem (the still frame's), so in storm px: 16 per rem.
+    dotRadius = parseFloat(style.getPropertyValue('--storm-dot-r')) * 16;
     strength = parseFloat(style.getPropertyValue('--storm-lit'));
+    wide = parseFloat(style.getPropertyValue('--storm-wide')) || 1;
   }
 
-  // The CSS mask: an ellipse filling the box (`closest-side`), from the same stops.
+  // The CSS mask: an ellipse as tall as the box and `wide` times as wide, from the same stops.
   function maskAt(x: number, y: number) {
-    return mask(Math.hypot((x - width / 2) / (width / 2), (y - height / 2) / (height / 2)));
+    return mask(Math.hypot((x - width / 2) / ((width / 2) * wide), (y - height / 2) / (height / 2)));
   }
 
   function layout() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    width = canvas!.clientWidth;
-    height = canvas!.clientHeight;
-    canvas!.width = width * dpr;
-    canvas!.height = height * dpr;
-    ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+    width = canvas!.clientWidth / unit;
+    height = canvas!.clientHeight / unit;
+    canvas!.width = canvas!.clientWidth * dpr;
+    canvas!.height = canvas!.clientHeight * dpr;
+    ctx!.setTransform(dpr * unit, 0, 0, dpr * unit, 0, 0);
     dots = [];
     cols = [];
     for (let x = GRID / 2; x < width; x += GRID) {
@@ -269,7 +279,7 @@ export function startStorm(root: HTMLElement): () => void {
       ctx!.lineCap = 'round';
       ctx!.strokeStyle = color;
       ctx!.shadowColor = color;
-      ctx!.shadowBlur = 14;
+      ctx!.shadowBlur = 14 * unit;
       for (const [x1, y1, x2, y2, w] of bolt) {
         ctx!.globalAlpha = light * (w > 1 ? 1.1 : 0.6) * strength * maskAt((x1 + x2) / 2, (y1 + y2) / 2);
         ctx!.lineWidth = w;
@@ -308,13 +318,13 @@ export function startStorm(root: HTMLElement): () => void {
     (e) => {
       if (e.pointerType === 'touch') return;
       const rect = canvas.getBoundingClientRect();
-      pointer.x = e.clientX - rect.left;
-      pointer.y = e.clientY - rect.top;
+      pointer.x = (e.clientX - rect.left) / unit;
+      pointer.y = (e.clientY - rect.top) / unit;
       if (!pointer.on) {
         eased.x = pointer.x;
         eased.y = pointer.y;
       }
-      pointer.on = pointer.x >= 0 && pointer.y >= 0 && pointer.x <= rect.width && pointer.y <= rect.height;
+      pointer.on = pointer.x >= 0 && pointer.y >= 0 && pointer.x <= width && pointer.y <= height;
     },
     { signal },
   );
@@ -325,8 +335,11 @@ export function startStorm(root: HTMLElement): () => void {
     run();
   });
   seen.observe(root);
+  // A new width can mean a new root size (global.css), so the units are read again.
   const sized = new ResizeObserver(() => {
-    if (frame) layout();
+    if (!frame) return;
+    readStyle();
+    layout();
   });
   sized.observe(canvas);
   // The theme script toggles `.dark` on <html>, and sets `data-motion` for a motion choice.
