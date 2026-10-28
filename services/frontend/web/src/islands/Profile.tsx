@@ -233,8 +233,11 @@ function AccountCard({ account, update }: { account: Account; update: (a: Accoun
           </Button>
         </form>
       </Setting>
-      <Setting title="Username" description={USERNAME_HINT}>
-        <span className="text-sm font-medium">{account.username}</span>
+      {/* Under its label on a phone, one line (a long name ends in an ellipsis, all of it in the tooltip). */}
+      <Setting title="Username" description={USERNAME_HINT} wide>
+        <span className="min-w-0 truncate text-sm font-medium @lg:max-w-64" title={account.username}>
+          {account.username}
+        </span>
       </Setting>
       <EmailSetting account={account} />
     </Section>

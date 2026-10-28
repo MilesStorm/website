@@ -104,7 +104,7 @@ export function ProfileSkeleton() {
             <ButtonPlace label="Save" size="default" />
           </div>
         </Setting>
-        <Setting title="Username" description={USERNAME_HINT}>
+        <Setting title="Username" description={USERNAME_HINT} wide>
           <Skeleton className="h-5 w-10" />
         </Setting>
         <div className="flex flex-col gap-1">

@@ -94,7 +94,7 @@ export function Setting({
           </div>
         </div>
         {children && (
-          <div data-wide={wide || undefined} className="flex shrink-0 items-center justify-end gap-2 @max-lg:data-wide:w-full">
+          <div data-wide={wide || undefined} className="flex min-w-0 shrink-0 items-center justify-end gap-2 @max-lg:data-wide:w-full @max-lg:data-wide:justify-start">
             {children}
           </div>
         )}
