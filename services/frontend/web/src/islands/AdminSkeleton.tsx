@@ -171,18 +171,18 @@ export const INVITE_FORM = {
   make: 'Make link',
 };
 
-/** The form's fields: two across, and from `lg` all four in a row; from 2560, in the rail beside
+/** The form's fields: two across, and from `lg` all four in a row; from 1920, in the rail beside
  * the links, two across again with the note (the second field, the one with the longest text) on
  * a row of its own above the others. */
 export const INVITE_FIELDS =
-  'grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-end 4xl:grid-cols-2 4xl:*:nth-2:order-first 4xl:*:nth-2:col-span-2';
+  'grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-end 3xl:grid-cols-2 3xl:*:nth-2:order-first 3xl:*:nth-2:col-span-2';
 
 /** The invites tab's place until the roles (its form's choices) are in: the form card with its
  * own text and a pulse for each field and the button, then the list's. */
-/** The invites tab: the form for a new link above the links; from 2560 the links on the left and
+/** The invites tab: the form for a new link above the links; from 1920 the links on the left and
  * the form beside them (staying in view while the list scrolls). */
 export const INVITES_LAYOUT =
-  'grid gap-6 4xl:grid-cols-[minmax(0,1fr)_28rem] 4xl:items-start 4xl:*:first:sticky 4xl:*:first:top-24 4xl:*:first:col-start-2 4xl:*:first:row-start-1 4xl:*:nth-2:col-start-1 4xl:*:nth-2:row-start-1';
+  'grid gap-6 3xl:grid-cols-[minmax(0,1fr)_28rem] 3xl:items-start 3xl:*:first:sticky 3xl:*:first:top-24 3xl:*:first:col-start-2 3xl:*:first:row-start-1 3xl:*:nth-2:col-start-1 3xl:*:nth-2:row-start-1';
 
 export function InvitesSkeleton() {
   return (

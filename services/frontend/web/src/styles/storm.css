@@ -70,7 +70,7 @@
     color-mix(in oklab, var(--foreground) var(--storm-dot), transparent) var(--storm-dot-r),
     transparent var(--storm-dot-r)
   );
-  /* In rem, like the canvas's grid (lib/storm.ts): the storm grows with the root size. */
+  /* In rem, like the canvas's grid (lib/storm.ts): the storm follows the reader's text size. */
   background-size: 1.125rem 1.125rem;
 }
 .storm[data-live] .storm-dots {

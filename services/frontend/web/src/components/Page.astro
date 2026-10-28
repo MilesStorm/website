@@ -1,20 +1,23 @@
 ---
 // A page's frame: the shared container (lib/layout.ts, the navbar's too), the page's vertical
 // rhythm and its heading (PageHeader: shadcn's typography, a muted line under it). The content
-// takes the container's whole width; a page that needs a measure sets it on its own sections.
+// takes the container's whole width, or from 1920 `measure` (MEASURE in lib/layout.ts): the width
+// its content wants, centred, so its cards keep their size instead of stretching across the window.
 // Without a title the island draws its own heading (one that carries live data, such as
 // Enshrouded's status), with the same PageHeader.
 import { PageHeader } from '@/components/PageHeader';
-import { CONTAINER, PAGE_PADDING, PAGE_STACK } from '@/lib/layout';
+import { CONTAINER, MEASURE, PAGE_PADDING, PAGE_STACK } from '@/lib/layout';
+import { cn } from '@/lib/utils';
 
 interface Props {
   title?: string;
   description?: string;
+  measure?: keyof typeof MEASURE;
 }
-const { title, description } = Astro.props;
+const { title, description, measure } = Astro.props;
 ---
 
-<main class:list={[CONTAINER, PAGE_STACK, PAGE_PADDING]}>
+<main class={cn(CONTAINER, PAGE_STACK, PAGE_PADDING, measure && MEASURE[measure])}>
   {title && <PageHeader title={title} description={description} />}
   <slot />
 </main>

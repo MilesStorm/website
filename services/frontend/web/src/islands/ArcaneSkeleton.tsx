@@ -55,11 +55,11 @@ export function ExtensionCard() {
 }
 
 /** The page: the camera on the left, as large as its column allows, flush with the title, and the
- * cards in a column of 22rem right beside it (26rem from 1920, 30rem from 2560); stacked below
- * `lg`. On wide screens the camera is no taller than the window leaves room for (16:9 of its
- * height less 12rem), and the cards stay beside it, not at the far edge. */
+ * cards in a column of 22rem right beside it; stacked below `lg`. From 1920 the camera is no
+ * taller than the window leaves room for (16:9 of its height less 14rem), and the cards take the
+ * rest of the width (at least 26rem). */
 export const ARCANE_GRID =
-  'grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start 3xl:grid-cols-[minmax(0,calc((100svh-12rem)*16/9))_26rem] 4xl:grid-cols-[minmax(0,calc((100svh-12rem)*16/9))_30rem]';
+  'grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start 3xl:grid-cols-[minmax(0,calc((100svh-14rem)*16/9))_minmax(26rem,1fr)]';
 
 /** The camera's column: the frame, and what comes up under it (the debug readout). */
 export const CAMERA_COLUMN = 'flex min-w-0 flex-col gap-4';

@@ -3,11 +3,21 @@
 // width. Used by components/Navbar.astro and components/Page.astro (and by islands that draw
 // their own full-width sections); nothing else spells these classes out.
 
-/** The container: centred, gutters of 16px on a phone, 24px from `sm`, 32px from `lg`, 48px from
- * 2560. At most 80rem wide, then 88rem from 1920, 100rem from 2560 and 120rem from 3200: with the
- * root size growing on wide screens (global.css), about 85% of the window there, not a strip. */
+/** The container: centred, gutters of 16px on a phone, 24px from `sm`, 32px from `lg`. At most
+ * 80rem (1280px) wide below 1920; from 1920 as wide as the window (up to 200rem), with gutters that
+ * grow with it (4.5% of the width, 2rem to 8rem): about 91% of a 1440p screen. Type never grows
+ * with the window: the pages use the room with columns and panels side by side. */
 export const CONTAINER =
-  'mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 3xl:max-w-[88rem] 4xl:max-w-[100rem] 4xl:px-12 5xl:max-w-[120rem]';
+  'mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 3xl:max-w-[200rem] 3xl:px-[clamp(2rem,4.5vw,8rem)]';
+
+/** A page's width from 1920 (Page.astro's `measure`), centred: what its content wants, not the
+ * window's. Below 1920 every page has the container's. Arcane has none: its camera takes the room. */
+export const MEASURE = {
+  ark: '3xl:max-w-[56rem]',
+  profile: '3xl:max-w-[80rem]',
+  admin: '3xl:max-w-[80rem]',
+  enshrouded: '3xl:max-w-[90rem]',
+};
 
 /** A page's vertical rhythm: the space above and below its content. */
 export const PAGE_PADDING = 'py-8 sm:py-10 lg:py-12';

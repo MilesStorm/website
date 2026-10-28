@@ -9,11 +9,11 @@ const NOTE: Record<Exclude<CardState, 'open'>, string> = {
 
 /** The start page's cards: a column on a phone, two from `sm`, three from `lg`. A card is as tall
  * as its text, and the cards of a row are as tall as the tallest. */
-export const CARD_GRID = 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3';
+export const CARD_GRID = 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3 3xl:mx-auto 3xl:w-full 3xl:max-w-[72rem]';
 
 /** The logged-out page's two previews: two cards of at most 28rem each, in the middle under the
  * hero (not stretched across the whole container on a wide screen). */
-export const PREVIEW_GRID = 'mx-auto grid w-full max-w-4xl gap-4 sm:grid-cols-2 4xl:max-w-5xl';
+export const PREVIEW_GRID = 'mx-auto grid w-full max-w-4xl gap-4 sm:grid-cols-2';
 
 /** What a card's icon sits in. */
 const ICON_BADGE = 'grid size-9 place-items-center rounded-full bg-muted text-foreground';
