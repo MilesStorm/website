@@ -26,12 +26,16 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock clippy.toml ./
 COPY surreal/ surreal/
 COPY crates/ crates/
-# Cache folders kept on the build machine (eta) between builds: downloaded crates and compiled
-# code, so a code change only recompiles what changed. They are not part of the image, so the
-# binary is copied out of target/.
+# Cache folders kept on the build machine between builds: downloaded crates and compiled code,
+# so a code change only recompiles what changed. They are not part of the image, so the binary is
+# copied out of target/. Every branch builds into the same target/, and cargo judges this
+# workspace's crates fresh by modification time: the sources are touched once the cache is held,
+# so they are always newer than what another commit's build left there, and this commit's code
+# is what gets compiled.
 RUN --mount=type=cache,id=frontend-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=frontend-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=frontend-target,target=/app/target,sharing=locked \
+    find crates surreal -type f -exec touch {} + && \
     cargo build --release --locked -p bff --bin server && \
     cp target/release/server /app/server
 
