@@ -24,7 +24,7 @@ use axum_login::{
     },
 };
 use tracing::Instrument as _;
-use axum_prometheus::PrometheusMetricLayer;
+use axum_prometheus::{EndpointLabel, PrometheusMetricLayerBuilder};
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use oauth2::{AuthUrl, ClientId, ClientSecret, TokenUrl, basic::BasicClient};
 use tower_sessions_sqlx_store::PostgresStore;
@@ -210,7 +210,13 @@ impl Auth {
             enshrouded: enshrouded::Control::from_env(),
         };
 
-        let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+        let (prometheus_layer, metric_handle) = PrometheusMetricLayerBuilder::new()
+            // The scrape isn't traffic, and timing it measures the exporter.
+            .with_ignore_patterns(&["/metrics"])
+            // A path no route matched gets one label, not a series each.
+            .with_endpoint_label_type(EndpointLabel::MatchedPathWithFallbackFn(|_| "unmatched".into()))
+            .with_default_metrics()
+            .build_pair();
 
         let app = Router::new()
             .route(

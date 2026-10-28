@@ -424,19 +424,32 @@ where
     })
 }
 
-/// CPU work on the blocking pool (password hashing), as a span under the current one. The
-/// span is entered inside the closure, so its busy time is the work's CPU time.
+/// How many [`spawn_blocking`] closures run at once. A password hash holds 19 MiB (Argon2's
+/// default), and the allocator keeps what a burst used: an e2e run's 58 logins at once can leave
+/// over 1 GB resident, past staging's limit. Two at a time stay near 45 MB and hash ~60 a second.
+static BLOCKING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// CPU work on the blocking pool (password hashing), as a span under the current one, at most
+/// [`BLOCKING`] at a time. The span is entered inside the closure, so its busy time is the
+/// work's CPU time; the wait for a turn is idle time.
 #[allow(clippy::disallowed_methods, reason = "the traced wrapper around tokio::task::spawn_blocking")]
-pub fn spawn_blocking<F, R>(name: &'static str, f: F) -> JoinHandle<R>
+pub fn spawn_blocking<F, R>(name: &'static str, f: F) -> impl Future<Output = Result<R, tokio::task::JoinError>>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
     let span = tracing::info_span!("blocking", otel.name = name, trace_id = Empty, span_id = Empty);
     record_ids(&span);
-    TASKS.spawn_blocking(move || {
-        span.in_scope(|| std::panic::catch_unwind(AssertUnwindSafe(f))).unwrap_or_else(|payload| panicked(&span, payload))
-    })
+    async move {
+        let permit = BLOCKING.acquire().await.expect("the semaphore is never closed");
+        TASKS
+            .spawn_blocking(move || {
+                let _permit = permit;
+                span.in_scope(|| std::panic::catch_unwind(AssertUnwindSafe(f)))
+                    .unwrap_or_else(|payload| panicked(&span, payload))
+            })
+            .await
+    }
 }
 
 /// At shutdown: waits for the tasks from [`spawn`], [`spawn_in_trace`] and [`spawn_blocking`]
@@ -770,7 +783,7 @@ mod tests {
 
         assert!(spawn("unit", None, async_panic("unit")).await.unwrap_err().is_panic());
         assert!(spawn_in_trace("follower", async_panic("follower")).await.unwrap_err().is_panic());
-        let blocking: JoinHandle<()> = spawn_blocking("blocking", || panic!("blocking: ada@example.com"));
+        let blocking = spawn_blocking("blocking", || -> () { panic!("blocking: ada@example.com") });
         assert!(blocking.await.unwrap_err().is_panic());
 
         for name in ["unit", "follower", "blocking"] {
