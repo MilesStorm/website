@@ -4,19 +4,30 @@
 // screen. Everything fades with the dot's own mask, so nothing is bright at the edges.
 import { motionOn } from '@/lib/theme';
 
-/** The mask's plateau: full strength out to this share of the ellipse's radii... */
-const PLATEAU = 0.55;
-/** ...then an eased fade to nothing at this share. */
+/** The mask's core: full strength out to this share of the ellipse's radii, around the hero's words... */
+const CORE = 0.2;
+/** ...easing down to `FIELD` of it here (the dots away from the words, still plainly there)... */
+const SHOULDER = 0.65;
+const FIELD = 0.4;
+/** ...then to nothing at this share. */
 const REACH = 0.95;
-const STEPS = 8;
+const STEPS = 6;
 
-/** The mask as stops, [share of the radii, opacity]: a plateau, then a smoothstep fade in `STEPS`
- * pieces. The CSS mask (`maskImage`) is drawn from these and the canvas (`maskAt`) interpolates
- * the same ones, so the still frame and the live storm are the same picture. */
-const MASK: [number, number][] = [[0, 1], [PLATEAU, 1]];
-for (let i = 1; i <= STEPS; i++) {
-  const t = 1 - i / STEPS;
-  MASK.push([PLATEAU + ((REACH - PLATEAU) * i) / STEPS, t * t * (3 - 2 * t)]);
+const smooth = (t: number) => t * t * (3 - 2 * t);
+
+/** The mask as stops, [share of the radii, opacity]: the core, then two smoothstep falls in `STEPS`
+ * pieces each, so the dots are brightest round the words and the field has no edge. The CSS mask
+ * (`maskImage`) is drawn from these and the canvas (`maskAt`) interpolates the same ones, so the
+ * still frame and the live storm are the same picture. */
+const MASK: [number, number][] = [[0, 1], [CORE, 1]];
+for (const [from, to, a0, a1] of [
+  [CORE, SHOULDER, 1, FIELD],
+  [SHOULDER, REACH, FIELD, 0],
+]) {
+  for (let i = 1; i <= STEPS; i++) {
+    const t = i / STEPS;
+    MASK.push([from + (to - from) * t, a0 + (a1 - a0) * smooth(t)]);
+  }
 }
 
 /** The CSS mask for the still frame's dots (`mask-image`). */
@@ -44,7 +55,7 @@ const BUCKETS = 24;
 interface Dot {
   x: number;
   y: number;
-  /** The CSS mask's opacity here: 1 out to the plateau, 0 from the reach. */
+  /** The CSS mask's opacity here: 1 in the core, 0 from the reach. */
   m: number;
 }
 

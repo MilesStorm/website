@@ -20,7 +20,7 @@ export const HomeCards = island('HomeCards', function HomeCards() {
   return (
     <div className="flex flex-col gap-4">
       <section className={HERO_SECTION}>
-        <Storm />
+        <Storm glow="name" />
         <p className={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M13 2 4 14h7l-1 8 9-12h-7z" />
