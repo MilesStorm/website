@@ -328,18 +328,21 @@ jobs:
           path: services/frontend/web/playwright-report
       - if: always()
         run: e2e/serve.sh stop; docker image rm frontend:e2e >/dev/null 2>&1 || true
-      # What the runner container and Docker's (the site, its stand-ins, the browser) used at
-      # most, to size the runners' memory limits. The image builds in BuildKit, not here. Docker
-      # runs in its own container of the pod: a container in Docker's cgroup namespace reads it.
+      # What the runner container and Docker's containers (the site, its stand-ins, the browser)
+      # used at most, to size the runners' memory limits. The image builds in BuildKit, not here.
+      # Docker runs in its own container of the pod and puts its containers under /docker of its
+      # cgroup namespace (the namespace's root has no memory.peak); a container in that namespace
+      # reads it.
       - name: Memory peak (runner and Docker, not BuildKit)
         if: always() && runner.environment == 'self-hosted'
         run: |
           echo "runner: $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
-          if peak=$(docker run --rm --cgroupns host --entrypoint cat "$PLAYWRIGHT_IMAGE" /sys/fs/cgroup/memory.peak 2>&1); then
+          if peak=$(docker run --rm --cgroupns host --entrypoint cat "$PLAYWRIGHT_IMAGE" /sys/fs/cgroup/docker/memory.peak 2>&1); then
             echo "docker: $(( peak / 1048576 )) MiB"
           else
             echo "docker: not readable: $peak"
+            docker run --rm --cgroupns host --entrypoint ls "$PLAYWRIGHT_IMAGE" /sys/fs/cgroup || true
           fi
 
   # The trace contract checker's own tests (tracing/checker).
