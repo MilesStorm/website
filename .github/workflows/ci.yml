@@ -76,13 +76,15 @@ jobs:
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
-      # What the job's container used at most, to size the runners' memory limit. The peak counts
+      # Which node the job ran on (NODE_NAME, from the runner pod's spec), and what the job's
+      # container used at most, to size the runners' memory limit. The peak counts
       # page cache, which the kernel drops at the limit: `max` is how often usage reached the
       # limit, `oom_kill` how many processes it killed, and memory.pressure how long the job's
       # processes waited for memory (`total`, microseconds).
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
         run: |
+          echo "node: ${NODE_NAME:-not set (pod $(hostname))}"
           echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
           cat /sys/fs/cgroup/memory.pressure || true
@@ -165,13 +167,15 @@ jobs:
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
-      # What the job's container used at most, to size the runners' memory limit. The peak counts
+      # Which node the job ran on (NODE_NAME, from the runner pod's spec), and what the job's
+      # container used at most, to size the runners' memory limit. The peak counts
       # page cache, which the kernel drops at the limit: `max` is how often usage reached the
       # limit, `oom_kill` how many processes it killed, and memory.pressure how long the job's
       # processes waited for memory (`total`, microseconds).
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
         run: |
+          echo "node: ${NODE_NAME:-not set (pod $(hostname))}"
           echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
           cat /sys/fs/cgroup/memory.pressure || true
@@ -228,13 +232,15 @@ jobs:
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
-      # What the job's container used at most, to size the runners' memory limit. The peak counts
+      # Which node the job ran on (NODE_NAME, from the runner pod's spec), and what the job's
+      # container used at most, to size the runners' memory limit. The peak counts
       # page cache, which the kernel drops at the limit: `max` is how often usage reached the
       # limit, `oom_kill` how many processes it killed, and memory.pressure how long the job's
       # processes waited for memory (`total`, microseconds).
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
         run: |
+          echo "node: ${NODE_NAME:-not set (pod $(hostname))}"
           echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
           cat /sys/fs/cgroup/memory.pressure || true
@@ -328,14 +334,15 @@ jobs:
           path: services/frontend/web/playwright-report
       - if: always()
         run: e2e/serve.sh stop; docker image rm frontend:e2e >/dev/null 2>&1 || true
-      # What the runner container and Docker's containers (the site, its stand-ins, the browser)
-      # used at most, to size the runners' memory limits. The image builds in BuildKit, not here.
-      # Docker runs in its own container of the pod and puts its containers under /docker of its
-      # cgroup namespace (the namespace's root has no memory.peak); a container in that namespace
-      # reads it.
+      # Which node the job ran on (NODE_NAME, from the runner pod's spec), and what the runner
+      # container and Docker's containers (the site, its stand-ins, the browser) used at most, to
+      # size the runners' memory limits. The image builds in BuildKit, not here. Docker runs in its
+      # own container of the pod and puts its containers under /docker of its cgroup namespace
+      # (the namespace's root has no memory.peak); a container in that namespace reads it.
       - name: Memory peak (runner and Docker, not BuildKit)
         if: always() && runner.environment == 'self-hosted'
         run: |
+          echo "node: ${NODE_NAME:-not set (pod $(hostname))}"
           echo "runner: $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
           if peak=$(docker run --rm --cgroupns host --entrypoint cat "$PLAYWRIGHT_IMAGE" /sys/fs/cgroup/docker/memory.peak 2>&1); then
