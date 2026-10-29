@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
-# Four stages: `web` (the Astro pages) and `bff` (the server) build in parallel, `verify` checks
-# they agree, and the runtime takes both and has no Node. Caching comes from building on eta's
-# own Docker, which keeps unchanged layers and the cargo cache mounts between CI runs.
+# `web` (the Astro pages) and `bff` (the server) build in parallel, `verify` checks they agree,
+# and the runtime takes both and has no Node. Caching is by layer only: the server's dependencies
+# are one layer (cargo-chef), rebuilt only when Cargo.lock or a manifest changes.
 
 # ---- web: the Astro build. Node is here only. ----
 FROM node:22.23.3-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS web
@@ -11,28 +11,36 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 # The TypeScript types must be the ones generated from the committed OpenAPI document (`verify`
-# checks that document against the server), and the pages must type-check against them.
+# checks that document against the server). That the pages type-check against them is CI's
+# frontend check (`npm run check`), not the image's.
 RUN cp src/api/schema.d.ts /tmp/schema.d.ts && \
     npm run api:types && \
     cmp src/api/schema.d.ts /tmp/schema.d.ts && \
     npm run tracing && \
-    npx astro check && \
     npm run build
 
 # ---- bff: the server ----
-FROM rust:1-trixie AS bff
+# cargo-chef: the dependencies compile in a layer of their own, keyed by the recipe (Cargo.lock
+# and the manifests), so a code change compiles only this workspace's crates. A layer is reused
+# only when its inputs are identical, so a build always compiles its own commit's code, and no
+# build waits for another (no shared cache folder).
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1-trixie AS chef
 WORKDIR /app
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock clippy.toml ./
+COPY surreal/ surreal/
+COPY crates/ crates/
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS bff
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --locked --recipe-path recipe.json -p bff --bin server
 # Not web/: a change to the Astro pages rebuilds no Rust.
 COPY Cargo.toml Cargo.lock clippy.toml ./
 COPY surreal/ surreal/
 COPY crates/ crates/
-# Cache folders kept on the build machine (eta) between builds: downloaded crates and compiled
-# code, so a code change only recompiles what changed. They are not part of the image, so the
-# binary is copied out of target/.
-RUN --mount=type=cache,id=frontend-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=frontend-cargo-git,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,id=frontend-target,target=/app/target,sharing=locked \
-    cargo build --release --locked -p bff --bin server && \
+RUN cargo build --release --locked -p bff --bin server && \
     cp target/release/server /app/server
 
 # ---- verify: the server and the pages agree ----
