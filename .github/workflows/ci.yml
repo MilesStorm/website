@@ -69,10 +69,14 @@ jobs:
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
-      # What the job's container used at most, to size the runners' memory limit.
+      # What the job's container used at most, to size the runners' memory limit. The peak counts
+      # page cache, which the kernel drops at the limit: `max` is how often usage reached the
+      # limit, `oom_kill` how many processes it killed.
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
-        run: echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
+        run: |
+          echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
+          grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
 
   # The Astro pages, beside the Rust: their TypeScript API types are current, they type-check
   # against them, and their component and tracing script tests.
@@ -146,10 +150,14 @@ jobs:
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
-      # What the job's container used at most, to size the runners' memory limit.
+      # What the job's container used at most, to size the runners' memory limit. The peak counts
+      # page cache, which the kernel drops at the limit: `max` is how often usage reached the
+      # limit, `oom_kill` how many processes it killed.
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
-        run: echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
+        run: |
+          echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
+          grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
 
   # The dice pipeline: clippy and tests, then its models for real in ONNX Runtime on the CPU.
   # It builds without CUDA (burn loads it at run time) and no test needs a GPU.
@@ -197,10 +205,14 @@ jobs:
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
-      # What the job's container used at most, to size the runners' memory limit.
+      # What the job's container used at most, to size the runners' memory limit. The peak counts
+      # page cache, which the kernel drops at the limit: `max` is how often usage reached the
+      # limit, `oom_kill` how many processes it killed.
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
-        run: echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
+        run: |
+          echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
+          grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
 
   # The frontend's built image, as it runs, in a browser: every page for every kind of viewer,
   # the navbar without JavaScript, theme and cookie notice, and axe (no serious or critical
@@ -289,8 +301,12 @@ jobs:
         if: always() && runner.environment == 'self-hosted'
         run: |
           echo "runner: $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
-          peak=$(docker run --rm --cgroupns host --entrypoint cat "$PLAYWRIGHT_IMAGE" /sys/fs/cgroup/memory.peak 2>/dev/null) \
-            && echo "docker: $(( peak / 1048576 )) MiB" || echo "docker: not readable"
+          grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
+          if peak=$(docker run --rm --cgroupns host --entrypoint cat "$PLAYWRIGHT_IMAGE" /sys/fs/cgroup/memory.peak 2>&1); then
+            echo "docker: $(( peak / 1048576 )) MiB"
+          else
+            echo "docker: not readable: $peak"
+          fi
 
   # The trace contract checker's own tests (tracing/checker).
   trace-checker:
