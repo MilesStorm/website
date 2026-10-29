@@ -35,6 +35,13 @@ spec:
         ports:
         - containerPort: 7070
           name: http
+        # Requests only, no limits. Memory: the 7-day p95 of the working set. CPU: well above its
+        # p95 (under 1m), like frontend's, so logins keep their share of CPU beside CI's runners
+        # (CPU weight follows the request).
+        resources:
+          requests:
+            cpu: 100m
+            memory: 32Mi
         env:
           - name: DATABASE_URL
             valueFrom: 

@@ -3,8 +3,7 @@ FROM lukemathwalker/cargo-chef:latest AS chef
 # of rustc, so when a layer has to be rebuilt, this build on either node's BuildKit reuses what an
 # earlier one compiled. Entries are keyed by the hash of each compile's inputs, never by file
 # times. Without SCCACHE_WEBDAV_ENDPOINT (GitHub's runners), or when the cache can't be reached,
-# rustc compiles as usual. CARGO_BUILD_JOBS: BuildKit shares the node with production and runs
-# up to four steps at once.
+# rustc compiles as usual.
 # Checked against the SHA-256 published with the release.
 ARG SCCACHE_VERSION=v0.19.0
 RUN url=https://github.com/mozilla/sccache/releases/download/$SCCACHE_VERSION/sccache-$SCCACHE_VERSION-x86_64-unknown-linux-musl.tar.gz && \
@@ -18,8 +17,7 @@ ENV SCCACHE_WEBDAV_ENDPOINT=$SCCACHE_WEBDAV_ENDPOINT \
     SCCACHE_WEBDAV_DISABLE_CREATE_DIR=true \
     SCCACHE_SKIP_CACHE_CHECK=true \
     SCCACHE_SERVER_UDS=/tmp/sccache.sock \
-    RUSTC_WRAPPER=${SCCACHE_WEBDAV_ENDPOINT:+sccache} \
-    CARGO_BUILD_JOBS=4
+    RUSTC_WRAPPER=${SCCACHE_WEBDAV_ENDPOINT:+sccache}
 
 FROM chef as planner
 WORKDIR /app
