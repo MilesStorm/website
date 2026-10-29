@@ -264,10 +264,12 @@ jobs:
     defaults:
       run:
         working-directory: services/frontend/web
-    # A pull-through registry for the images below, when there is one: an image is pulled as
-    # $REGISTRY_MIRROR/<registry>/<repository>:<tag> and named as usual. Empty: from each registry.
+    # The cluster's pull-through registry (homelab repo, ci-runners): an image from another
+    # registry is pulled as $REGISTRY_MIRROR/<registry>/<repository>:<tag> and named as usual, or
+    # straight from its registry when the mirror fails. Docker Hub's go through it without a
+    # prefix (Docker's own registry-mirror setting in the runner pods). Not on GitHub's runners.
     env:
-      REGISTRY_MIRROR: ""
+      REGISTRY_MIRROR: ${{ !startsWith(github.ref_name, 'renovate/') && 'registry-cache.arc-runners.svc.cluster.local:5000' || '' }}
     steps:
       - uses: actions/checkout@v4
       # What the tests run in, fetched while the image builds: Playwright's image (the locked
@@ -279,13 +281,16 @@ jobs:
           test -n "$version"
           echo "PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v$version-noble" >> "$GITHUB_ENV"
           pull() {
-            if [ -z "$REGISTRY_MIRROR" ]; then docker pull -q "$1"; return; fi
-            docker pull -q "$REGISTRY_MIRROR/$1" && docker tag "$REGISTRY_MIRROR/$1" "$1"
+            if [ -n "$REGISTRY_MIRROR" ] && docker pull -q "$REGISTRY_MIRROR/$1"; then
+              docker tag "$REGISTRY_MIRROR/$1" "$1"
+            else
+              docker pull -q "$1"
+            fi
           }
           fetch() {
             pids=()
-            for image in docker.io/library/redis:7-alpine docker.io/surrealdb/surrealdb:v3.2.4 docker.io/library/caddy:2.10.2-alpine; do
-              pull "$image" & pids+=($!)
+            for image in redis:7-alpine surrealdb/surrealdb:v3.2.4 caddy:2.10.2-alpine; do
+              docker pull -q "$image" & pids+=($!)
             done
             pull "mcr.microsoft.com/playwright:v$version-noble" || return 1
             docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/work" -w /work \
