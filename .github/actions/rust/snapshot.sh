@@ -77,7 +77,11 @@ exists() {
 # Into the paths it was taken from. A broken transfer leaves nothing half-restored.
 fetch() {
   local name=$1 ws=$2
-  if curl -sSf --connect-timeout 5 "$server/$name.tar.zst" | zstd -dq | tar -xf - -C /; then
+  local start=$SECONDS size
+  size=$(curl -sSfI --connect-timeout 5 "$server/$name.tar.zst" | tr -d '\r' | awk 'tolower($1) == "content-length:" { print $2 }')
+  # tar --totals: the bytes written to disk, which is what a slow disk pays for.
+  if curl -sSf --connect-timeout 5 "$server/$name.tar.zst" | zstd -dq | tar -xf - -C / --totals; then
+    echo "$name: $(( ${size:-0} / 1048576 )) MiB in $(( SECONDS - start ))s"
     return 0
   fi
   echo "::warning::Snapshot $name couldn't be restored; building without it."
@@ -103,7 +107,7 @@ save() {
   # Whole into a file first: a PUT that stopped half-way through a stream would store a
   # truncated snapshot. The server writes each upload to a temporary file and renames it into
   # place (homelab repo, ci-runners/manifests/sccache.yaml), so a reader never sees half of one.
-  tar -cf - -C / "${paths[@]}" | zstd -q -f -T4 -3 -o "$file" || { echo "::warning::Snapshot not stored."; return 0; }
+  tar -cf - -C / --totals "${paths[@]}" | zstd -q -f -T4 -3 -o "$file" || { echo "::warning::Snapshot not stored."; return 0; }
   echo "Snapshot: $(( $(stat -c %s "$file") / 1048576 )) MiB"
   local name
   for name in "${names[@]}"; do

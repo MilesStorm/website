@@ -42,7 +42,10 @@ runs:
         missing=$(for p in $PACKAGES; do dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || echo "$p"; done)
         [ -z "$missing" ] && exit 0
         sudo apt-get update -qq
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $missing >/dev/null
+        # Without dpkg's fsync after every file: on gamma's SATA disk, shared with the node's
+        # pods, those took minutes while other jobs wrote. A crash loses only this pod.
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+          -o DPkg::Options::=--force-unsafe-io $missing >/dev/null
 
     # Downloads, temporary files and an installed toolchain go on the job's scratch disk: on the
     # cluster's runners, the container's own files are on the node's nearly full root disk.
