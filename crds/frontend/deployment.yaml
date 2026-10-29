@@ -35,6 +35,13 @@ spec:
         ports:
         - containerPort: 80
           name: http
+        # Requests only, no limits. Memory: the 7-day p95 of the working set. CPU: well above its
+        # p95 (3m), so the site keeps its share of CPU beside CI's runners (CPU weight follows the
+        # request).
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
         env:
           - name: AUTH_SERVICE_URL
             value: "http://auth-service.auth.svc.cluster.local"
