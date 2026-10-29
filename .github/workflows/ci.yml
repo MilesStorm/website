@@ -45,7 +45,10 @@ jobs:
         with:
           node-version: 22
       - uses: ./.github/actions/rust
-      # From crates.io on every run (a fresh runner has none).
+        with:
+          job: frontend-rust
+          workspace: services/frontend
+      # From crates.io, on a run that restored no snapshot (.github/actions/rust).
       - name: Crate downloads
         run: cargo fetch
       - name: Clippy
@@ -66,17 +69,23 @@ jobs:
         env:
           ASTRO_TELEMETRY_DISABLED: 1
         run: (cd web && npm ci && npm run tracing && npm run build) && target/debug/server check-pages web/dist
+      # For the next run (.github/actions/rust), once every check passed.
+      - name: Store the build
+        if: success() && env.RUST_SNAPSHOT_KEY != ''
+        run: bash "$GITHUB_WORKSPACE/.github/actions/rust/snapshot.sh" save
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
       # What the job's container used at most, to size the runners' memory limit. The peak counts
       # page cache, which the kernel drops at the limit: `max` is how often usage reached the
-      # limit, `oom_kill` how many processes it killed.
+      # limit, `oom_kill` how many processes it killed, and memory.pressure how long the job's
+      # processes waited for memory (`total`, microseconds).
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
         run: |
           echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
+          cat /sys/fs/cgroup/memory.pressure || true
 
   # The Astro pages, beside the Rust: their TypeScript API types are current, they type-check
   # against them, and their component and tracing script tests.
@@ -142,22 +151,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust
         with:
+          job: auth
+          workspace: services/auth
           packages: pkg-config libssl-dev
       - name: Crate downloads
         run: cargo fetch
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # For the next run (.github/actions/rust), once every check passed.
+      - name: Store the build
+        if: success() && env.RUST_SNAPSHOT_KEY != ''
+        run: bash "$GITHUB_WORKSPACE/.github/actions/rust/snapshot.sh" save
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
       # What the job's container used at most, to size the runners' memory limit. The peak counts
       # page cache, which the kernel drops at the limit: `max` is how often usage reached the
-      # limit, `oom_kill` how many processes it killed.
+      # limit, `oom_kill` how many processes it killed, and memory.pressure how long the job's
+      # processes waited for memory (`total`, microseconds).
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
         run: |
           echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
+          cat /sys/fs/cgroup/memory.pressure || true
 
   # The dice pipeline: clippy and tests, then its models for real in ONNX Runtime on the CPU.
   # It builds without CUDA (burn loads it at run time) and no test needs a GPU.
@@ -172,6 +189,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust
         with:
+          job: ai-pipeline
+          workspace: services/ai_pipeline
           packages: python3-venv
       - name: Crate downloads
         run: cargo fetch
@@ -202,17 +221,23 @@ jobs:
           ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=$RUNNER_TEMP/dice_head.onnx \
             YOLO_FP16_ONNX_PATH=$RUNNER_TEMP/yolo_fp16.onnx DICE_HEAD_FP16_ONNX_PATH=$RUNNER_TEMP/dice_head_fp16.onnx \
             cargo test -- --ignored fp16
+      # For the next run (.github/actions/rust), once every check passed.
+      - name: Store the build
+        if: success() && env.RUST_SNAPSHOT_KEY != ''
+        run: bash "$GITHUB_WORKSPACE/.github/actions/rust/snapshot.sh" save
       - name: Compile cache hits
         if: always() && env.RUSTC_WRAPPER != ''
         run: sccache --show-stats
       # What the job's container used at most, to size the runners' memory limit. The peak counts
       # page cache, which the kernel drops at the limit: `max` is how often usage reached the
-      # limit, `oom_kill` how many processes it killed.
+      # limit, `oom_kill` how many processes it killed, and memory.pressure how long the job's
+      # processes waited for memory (`total`, microseconds).
       - name: Memory peak
         if: always() && runner.environment == 'self-hosted'
         run: |
           echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
+          cat /sys/fs/cgroup/memory.pressure || true
 
   # The frontend's built image, as it runs, in a browser: every page for every kind of viewer,
   # the navbar without JavaScript, theme and cookie notice, and axe (no serious or critical
@@ -233,6 +258,10 @@ jobs:
     defaults:
       run:
         working-directory: services/frontend/web
+    # A pull-through registry for the images below, when there is one: an image is pulled as
+    # $REGISTRY_MIRROR/<registry>/<repository>:<tag> and named as usual. Empty: from each registry.
+    env:
+      REGISTRY_MIRROR: ""
     steps:
       - uses: actions/checkout@v4
       # What the tests run in, fetched while the image builds: Playwright's image (the locked
@@ -243,11 +272,16 @@ jobs:
           version=$(grep -A3 '"node_modules/@playwright/test"' package-lock.json | sed -n 's/.*"version": "\(.*\)".*/\1/p')
           test -n "$version"
           echo "PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v$version-noble" >> "$GITHUB_ENV"
+          pull() {
+            if [ -z "$REGISTRY_MIRROR" ]; then docker pull -q "$1"; return; fi
+            docker pull -q "$REGISTRY_MIRROR/$1" && docker tag "$REGISTRY_MIRROR/$1" "$1"
+          }
           fetch() {
             pids=()
-            for image in redis:7-alpine surrealdb/surrealdb:v3.2.4 caddy:2.10.2-alpine; do
-              docker pull -q "$image" & pids+=($!)
+            for image in docker.io/library/redis:7-alpine docker.io/surrealdb/surrealdb:v3.2.4 docker.io/library/caddy:2.10.2-alpine; do
+              pull "$image" & pids+=($!)
             done
+            pull "mcr.microsoft.com/playwright:v$version-noble" || return 1
             docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/work" -w /work \
               "mcr.microsoft.com/playwright:v$version-noble" npm ci --ignore-scripts --no-audit --no-fund || return 1
             for pid in "${pids[@]}"; do wait "$pid" || return 1; done

@@ -1,20 +1,32 @@
 name: Rust
 description: >-
-  The C compiler and libraries a workspace's build needs, the stable toolchain with clippy, and
-  sccache in front of rustc when the workflow sets SCCACHE_WEBDAV_ENDPOINT.
+  The C compiler and libraries a workspace's build needs, the stable toolchain with clippy, and,
+  when the workflow sets SCCACHE_WEBDAV_ENDPOINT, the job's last target/ and sccache in front of
+  rustc.
 
 # The cluster's runner image (ci/runner/Dockerfile) has all of it, so every job of a push compiles
 # with the rustc its image was built with; GitHub's runners have the compiler and a toolchain.
 # Whatever a runner lacks (GitHub's runner image, before the cluster runs ours) is installed here.
 #
-# The compile cache: one WebDAV server on eta (homelab repo, ci-runners/manifests/sccache.yaml;
-# past 30 GB it drops the entries read longest ago), through sccache. An entry is one file named
+# Two caches on one WebDAV server on eta (homelab repo, ci-runners/manifests/sccache.yaml; past
+# 30 GB it drops the entries read longest ago):
+# - The job's target/ and crate downloads from an earlier run (snapshot.sh), as GitHub's
+#   rust-cache kept them: cargo then compiles only the workspace's own crates. Stored by a run
+#   that didn't find one for its exact rustc, Cargo.lock and build settings; a run that doesn't
+#   find one starts from main's. The job stores it with snapshot.sh save once its checks passed.
+# - Every compile, through sccache, for what the snapshot doesn't hold. An entry is one file named
 # by the hash of everything that went into the compile, written whole with one PUT, so any number
 # of jobs can use it at once. A job finds what the same job compiled before, on either node; the
 # image builds keep entries of their own (other profile, paths and rustc). When the cache can't be
 # reached, a lookup is a miss and rustc compiles as usual (SCCACHE_SKIP_CACHE_CHECK).
 
 inputs:
+  job:
+    description: The job's name, which its snapshots are stored under.
+    required: true
+  workspace:
+    description: The Cargo workspace's directory.
+    required: true
   packages:
     description: Debian packages the build needs besides a C compiler.
     default: ""
@@ -25,7 +37,7 @@ runs:
     - name: C compiler and libraries
       shell: bash
       env:
-        PACKAGES: gcc libc6-dev ${{ inputs.packages }}
+        PACKAGES: gcc libc6-dev zstd ${{ inputs.packages }}
       run: |
         missing=$(for p in $PACKAGES; do dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || echo "$p"; done)
         [ -z "$missing" ] && exit 0
@@ -77,3 +89,10 @@ runs:
         fi
         # cc-rs also compiles C through sccache when it is the RUSTC_WRAPPER.
         { echo "RUSTC_WRAPPER=sccache"; echo "SCCACHE_SERVER_UDS=$RUNNER_TEMP/sccache.sock"; } >> "$GITHUB_ENV"
+
+    - name: The job's last build
+      shell: bash
+      env:
+        JOB: ${{ inputs.job }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: bash "$GITHUB_ACTION_PATH/snapshot.sh" restore "$JOB" "$WORKSPACE"

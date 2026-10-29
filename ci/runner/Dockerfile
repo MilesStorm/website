@@ -6,9 +6,10 @@ FROM ghcr.io/actions/actions-runner:2.338.2
 
 USER root
 
-# The C compiler for build scripts and linking, OpenSSL for auth, venv for ai-pipeline's tools.
+# The C compiler for build scripts and linking, OpenSSL for auth, venv for ai-pipeline's tools,
+# zstd for the jobs' target/ snapshots.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libc6-dev pkg-config libssl-dev python3-venv && \
+    apt-get install -y --no-install-recommends gcc libc6-dev pkg-config libssl-dev python3-venv zstd && \
     rm -rf /var/lib/apt/lists/*
 
 # Read-only for the jobs: they keep their crate downloads in their own CARGO_HOME
