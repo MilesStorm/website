@@ -1,4 +1,4 @@
-# The cluster's runner image (homelab repo, ci-runners/values.yaml): GitHub's runner image with
+# The cluster's runner image (homelab repo, argo/apps/ci-runners.yaml): GitHub's runner image with
 # what the Rust jobs need, so a job doesn't install them on every run. Built and pushed by
 # .github/workflows/ci-runner.yml, weekly too, which brings the newest stable Rust: every job
 # of a push then compiles with the same rustc, the one in the image its runner pod started from.
