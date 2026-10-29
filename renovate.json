@@ -17,6 +17,14 @@
   ],
   "customManagers": [
     {
+      "description": "sccache's version (ci/runner/Dockerfile, the services' Dockerfiles, .github/actions/rust); each checks the download against the release's own .sha256.",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/", "/^\\.github/actions/rust/action\\.yml$/"],
+      "matchStrings": ["SCCACHE_VERSION=(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "mozilla/sccache"
+    },
+    {
       "description": "The images e2e/serve.sh runs beside the built one: SurrealDB, Caddy, Redis.",
       "customType": "regex",
       "managerFilePatterns": ["/services/frontend/web/e2e/serve\\.sh$/"],

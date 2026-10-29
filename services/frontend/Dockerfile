@@ -26,6 +26,27 @@ RUN cp src/api/schema.d.ts /tmp/schema.d.ts && \
 # build waits for another (no shared cache folder).
 FROM lukemathwalker/cargo-chef:0.1.78-rust-1-trixie AS chef
 WORKDIR /app
+# The cluster's compile cache (.github/actions/rust), when the build is given it: sccache in front
+# of rustc, so when a layer has to be rebuilt, this build on either node's BuildKit reuses what an
+# earlier one compiled. Entries are keyed by the hash of each compile's inputs, never by file
+# times. Without SCCACHE_WEBDAV_ENDPOINT (GitHub's runners), or when the cache can't be reached,
+# rustc compiles as usual. CARGO_BUILD_JOBS: BuildKit shares the node with production and runs
+# up to four steps at once.
+# Checked against the SHA-256 published with the release.
+ARG SCCACHE_VERSION=v0.19.0
+RUN url=https://github.com/mozilla/sccache/releases/download/$SCCACHE_VERSION/sccache-$SCCACHE_VERSION-x86_64-unknown-linux-musl.tar.gz && \
+    curl -sSfL -o /tmp/sccache.tgz "$url" && \
+    echo "$(curl -sSfL "$url.sha256")  /tmp/sccache.tgz" | sha256sum -c --quiet && \
+    tar -xzf /tmp/sccache.tgz -C /usr/local/bin --strip-components=1 --wildcards '*/sccache' && rm /tmp/sccache.tgz
+# Its own socket in the step's /tmp, not 127.0.0.1:4226: BuildKit runs every build's steps in the
+# node's network, so two builds at once would share one server.
+ARG SCCACHE_WEBDAV_ENDPOINT=
+ENV SCCACHE_WEBDAV_ENDPOINT=$SCCACHE_WEBDAV_ENDPOINT \
+    SCCACHE_WEBDAV_DISABLE_CREATE_DIR=true \
+    SCCACHE_SKIP_CACHE_CHECK=true \
+    SCCACHE_SERVER_UDS=/tmp/sccache.sock \
+    RUSTC_WRAPPER=${SCCACHE_WEBDAV_ENDPOINT:+sccache} \
+    CARGO_BUILD_JOBS=4
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock clippy.toml ./
@@ -35,13 +56,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS bff
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --locked --recipe-path recipe.json -p bff --bin server
+RUN cargo chef cook --release --locked --recipe-path recipe.json -p bff --bin server && \
+    { [ -z "$RUSTC_WRAPPER" ] || sccache --stop-server || true; }
 # Not web/: a change to the Astro pages rebuilds no Rust.
 COPY Cargo.toml Cargo.lock clippy.toml ./
 COPY surreal/ surreal/
 COPY crates/ crates/
 RUN cargo build --release --locked -p bff --bin server && \
-    cp target/release/server /app/server
+    cp target/release/server /app/server && \
+    { [ -z "$RUSTC_WRAPPER" ] || sccache --stop-server || true; }
 
 # ---- verify: the server and the pages agree ----
 FROM debian:trixie-slim AS verify

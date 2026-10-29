@@ -30,6 +30,9 @@ env:
     frontend:services/frontend:crates/bff/Cargo.toml
     auth:services/auth:Cargo.toml
     ai-pipeline:services/ai_pipeline:Cargo.toml
+  # The cluster's compile cache (.github/actions/rust), which the builds reach from BuildKit: a
+  # build on either node reuses what an earlier build of the same Dockerfile compiled.
+  SCCACHE_WEBDAV_ENDPOINT: "http://sccache.arc-runners.svc.cluster.local"
 
 on:
   push:
@@ -134,7 +137,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # service.version on every span, log and profile (TRACING.md).
-          build-args: GIT_SHA=${{ github.sha }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            SCCACHE_WEBDAV_ENDPOINT=${{ env.SCCACHE_WEBDAV_ENDPOINT }}
 
   # The end-to-end tests (services/frontend/web/e2e) against https://staging.milesstorm.com, with
   # real auth and staging's test accounts. Nothing is uploaded: this repository is public, and a
@@ -144,6 +149,7 @@ jobs:
     # Not after a failed build; a run that built nothing still tests staging.
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     name: staging journeys
+    # GitHub's runners: nothing here compiles, and the browser comes in Playwright's image.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: staging
@@ -164,6 +170,17 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fetched while staging rolls out: Playwright's image (the locked version), which has the
+      # browsers, with the packages installed in it, as ci.yml's e2e does.
+      - name: Start downloading the test browser
+        run: |
+          version=$(grep -A3 '"node_modules/@playwright/test"' package-lock.json | sed -n 's/.*"version": "\(.*\)".*/\1/p')
+          test -n "$version"
+          echo "PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v$version-noble" >> "$GITHUB_ENV"
+          { docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/work" -w /work \
+              "mcr.microsoft.com/playwright:v$version-noble" npm ci --ignore-scripts --no-audit --no-fund \
+              > /tmp/fetch.log 2>&1 < /dev/null; echo $? > /tmp/fetch.status; } &
 
       # Staging follows the staging tags through Image Updater (every 2 minutes), then Argo syncs
       # and the pods roll out. The frontend says which commit it was built from (<meta
@@ -193,18 +210,25 @@ jobs:
             sleep 300
           fi
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npx playwright test
+      - name: Wait for the test browser
+        run: |
+          for _ in $(seq 600); do test -f /tmp/fetch.status && break; sleep 1; done
+          cat /tmp/fetch.log
+          test "$(cat /tmp/fetch.status 2>/dev/null)" = 0
+
+      # The job's GitHub Actions token gets the tests past staging's login (e2e/site.ts).
+      - name: Browser tests
         env:
           E2E_BASE_URL: https://staging.milesstorm.com
           E2E_PLAIN_USERNAME: ${{ secrets.STAGING_PLAIN_USERNAME }}
           E2E_PLAIN_PASSWORD: ${{ secrets.STAGING_PLAIN_PASSWORD }}
           E2E_ALL_USERNAME: ${{ secrets.STAGING_ALL_USERNAME }}
           E2E_ALL_PASSWORD: ${{ secrets.STAGING_ALL_PASSWORD }}
+        run: |
+          docker run --rm --ipc host --user "$(id -u):$(id -g)" -e HOME=/tmp -e CI=1 \
+            -e E2E_BASE_URL -e E2E_PLAIN_USERNAME -e E2E_PLAIN_PASSWORD -e E2E_ALL_USERNAME -e E2E_ALL_PASSWORD \
+            -e ACTIONS_ID_TOKEN_REQUEST_URL -e ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -v "$PWD:/work" -w /work "$PLAYWRIGHT_IMAGE" npx playwright test
 
   # Every service whose staging build (staging tag) isn't what production runs (production tag),
   # compared by the commit each was built from. A failed build leaves the staging tag where it was.
