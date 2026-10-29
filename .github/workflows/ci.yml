@@ -13,40 +13,51 @@ on:
 permissions:
   contents: read
 
+# Where jobs run: the ones that compile Rust run on the cluster's runners (homelab repo,
+# ci-runners), beside the compile cache (.github/actions/rust). The light ones (Astro pages,
+# extension-types, trace-checker and the frontend summary) have nothing to cache and stay on
+# GitHub's. Renovate's branches carry dependency versions no one has reviewed yet: they run on
+# GitHub's runners and never write to the compile cache.
+#
+# Line tables are enough for a panic's backtrace; full debug info more than doubles what the
+# compile cache stores, and slows the link.
+env:
+  SCCACHE_WEBDAV_ENDPOINT: ${{ !startsWith(github.ref_name, 'renovate/') && 'http://sccache.arc-runners.svc.cluster.local' || '' }}
+  SCCACHE_WEBDAV_DISABLE_CREATE_DIR: "true"
+  SCCACHE_SKIP_CACHE_CHECK: "true"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
   # The frontend's BFF: clippy and tests, the API contract, and the Astro build it serves.
+  # One compile for clippy and one for the tests; the contract and page checks run the server
+  # binary the tests built.
   frontend-rust:
     name: "frontend: BFF server"
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
     timeout-minutes: 20
     defaults:
       run:
         working-directory: services/frontend
-    # Line tables are enough for a panic's backtrace; full debug info was most of the cache that
-    # every run downloads and unpacks.
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: services/frontend
+      - uses: ./.github/actions/rust
+      # From crates.io on every run (a fresh runner has none).
+      - name: Crate downloads
+        run: cargo fetch
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      # Also builds target/debug/server, which the steps below run.
       - name: Rust tests
         run: cargo test
       # The committed API contract is what the handlers say (web/src/api/openapi.json); the
       # TypeScript types generated from it are checked in frontend (web). Regenerate both with
       # `npm run api` in web/.
       - name: OpenAPI document is current
-        run: cargo run -q -p bff --bin server -- openapi | diff - web/src/api/openapi.json
+        run: target/debug/server openapi | diff - web/src/api/openapi.json
       # aide can't read a response type through `impl IntoApiResponse`: handlers name theirs.
       - name: API handlers return concrete types
         run: '! grep -rn "impl IntoApiResponse" crates/bff/src'
@@ -54,7 +65,14 @@ jobs:
       - name: Astro build has exactly the pages
         env:
           ASTRO_TELEMETRY_DISABLED: 1
-        run: (cd web && npm ci && npm run tracing && npm run build) && cargo run -q -p bff --bin server -- check-pages web/dist
+        run: (cd web && npm ci && npm run tracing && npm run build) && target/debug/server check-pages web/dist
+      - name: Compile cache hits
+        if: always() && env.RUSTC_WRAPPER != ''
+        run: sccache --show-stats
+      # What the job's container used at most, to size the runners' memory limit.
+      - name: Memory peak
+        if: always() && runner.environment == 'self-hosted'
+        run: echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
 
   # The Astro pages, beside the Rust: their TypeScript API types are current, they type-check
   # against them, and their component and tracing script tests.
@@ -111,74 +129,87 @@ jobs:
   # The auth service: clippy and tests.
   auth:
     name: auth
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
     timeout-minutes: 20
     defaults:
       run:
         working-directory: services/auth
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: services/auth
+          packages: pkg-config libssl-dev
+      - name: Crate downloads
+        run: cargo fetch
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - name: Compile cache hits
+        if: always() && env.RUSTC_WRAPPER != ''
+        run: sccache --show-stats
+      # What the job's container used at most, to size the runners' memory limit.
+      - name: Memory peak
+        if: always() && runner.environment == 'self-hosted'
+        run: echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
 
   # The dice pipeline: clippy and tests, then its models for real in ONNX Runtime on the CPU.
   # It builds without CUDA (burn loads it at run time) and no test needs a GPU.
   ai-pipeline:
     name: ai-pipeline
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
     timeout-minutes: 30
     defaults:
       run:
         working-directory: services/ai_pipeline
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: services/ai_pipeline
+          packages: python3-venv
+      - name: Crate downloads
+        run: cargo fetch
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       # The YOLO model for real, in ONNX Runtime on the CPU (the image runs it on the GPU).
       - name: YOLO in ONNX Runtime
         run: |
-          curl -sSfL -o /tmp/onnxruntime.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.28.3/onnxruntime-linux-x64-1.28.3.tgz
-          echo "db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c  /tmp/onnxruntime.tgz" | sha256sum -c
-          mkdir /tmp/onnxruntime && tar -xzf /tmp/onnxruntime.tgz -C /tmp/onnxruntime --strip-components=1
-          ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so cargo test -- --ignored yolo_runs
+          curl -sSfL -o $RUNNER_TEMP/onnxruntime.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.28.3/onnxruntime-linux-x64-1.28.3.tgz
+          echo "db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c  $RUNNER_TEMP/onnxruntime.tgz" | sha256sum -c
+          mkdir $RUNNER_TEMP/onnxruntime && tar -xzf $RUNNER_TEMP/onnxruntime.tgz -C $RUNNER_TEMP/onnxruntime --strip-components=1
+          ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime/lib/libonnxruntime.so cargo test -- --ignored yolo_runs
       # The dice head for real: its ONNX model built from the released weights, as the image does.
       - name: Dice head in ONNX Runtime
         run: |
-          curl -sSfL -o /tmp/dice_head.safetensors https://github.com/MilesStorm/website/releases/download/dice-head-v1/dice_head_resnet18.safetensors
-          echo "6b6e71693e5b9b667c2d047a3f1dd464017538637eea8c7f6b136c1cf20c2bd9  /tmp/dice_head.safetensors" | sha256sum -c
-          python3 -m venv /tmp/onnx && /tmp/onnx/bin/pip install --quiet onnx==1.23.2
-          /tmp/onnx/bin/python tools/head_onnx.py /tmp/dice_head.safetensors /tmp/dice_head.onnx
-          ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=/tmp/dice_head.onnx cargo test -- --ignored head_runs
+          curl -sSfL -o $RUNNER_TEMP/dice_head.safetensors https://github.com/MilesStorm/website/releases/download/dice-head-v1/dice_head_resnet18.safetensors
+          echo "6b6e71693e5b9b667c2d047a3f1dd464017538637eea8c7f6b136c1cf20c2bd9  $RUNNER_TEMP/dice_head.safetensors" | sha256sum -c
+          python3 -m venv $RUNNER_TEMP/onnx && $RUNNER_TEMP/onnx/bin/pip install --quiet --no-cache-dir onnx==1.23.2
+          $RUNNER_TEMP/onnx/bin/python tools/head_onnx.py $RUNNER_TEMP/dice_head.safetensors $RUNNER_TEMP/dice_head.onnx
+          ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=$RUNNER_TEMP/dice_head.onnx cargo test -- --ignored head_runs
       # The half-precision copies answer as the f32 models do: the check the service makes on
       # the card at every start, here on the CPU.
       - name: Half-precision models
         run: |
-          /tmp/onnx/bin/pip install --quiet onnxruntime==1.31.0 sympy==1.14.0
-          /tmp/onnx/bin/python tools/onnx_fp16.py src/model/yolo26s.onnx /tmp/yolo_fp16.onnx
-          /tmp/onnx/bin/python tools/onnx_fp16.py /tmp/dice_head.onnx /tmp/dice_head_fp16.onnx
-          ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=/tmp/dice_head.onnx \
-            YOLO_FP16_ONNX_PATH=/tmp/yolo_fp16.onnx DICE_HEAD_FP16_ONNX_PATH=/tmp/dice_head_fp16.onnx \
+          $RUNNER_TEMP/onnx/bin/pip install --quiet --no-cache-dir onnxruntime==1.31.0 sympy==1.14.0
+          $RUNNER_TEMP/onnx/bin/python tools/onnx_fp16.py src/model/yolo26s.onnx $RUNNER_TEMP/yolo_fp16.onnx
+          $RUNNER_TEMP/onnx/bin/python tools/onnx_fp16.py $RUNNER_TEMP/dice_head.onnx $RUNNER_TEMP/dice_head_fp16.onnx
+          ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime/lib/libonnxruntime.so DICE_HEAD_ONNX_PATH=$RUNNER_TEMP/dice_head.onnx \
+            YOLO_FP16_ONNX_PATH=$RUNNER_TEMP/yolo_fp16.onnx DICE_HEAD_FP16_ONNX_PATH=$RUNNER_TEMP/dice_head_fp16.onnx \
             cargo test -- --ignored fp16
+      - name: Compile cache hits
+        if: always() && env.RUSTC_WRAPPER != ''
+        run: sccache --show-stats
+      # What the job's container used at most, to size the runners' memory limit.
+      - name: Memory peak
+        if: always() && runner.environment == 'self-hosted'
+        run: echo "$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
 
   # The frontend's built image, as it runs, in a browser: every page for every kind of viewer,
   # the navbar without JavaScript, theme and cookie notice, and axe (no serious or critical
   # violations). Auth and Ark are stand-ins (services/frontend/web/e2e/fake-upstreams.mjs);
   # SurrealDB is a real one in memory (e2e/serve.sh). Runs on the cluster's runners, like the
   # release builds (homelab repo, ci-runners): the image is built by the node's shared BuildKit,
-  # which keeps unchanged layers and the cargo cache mounts between runs. Renovate's branches
-  # carry dependency versions no one has reviewed yet, so they build on a GitHub runner instead.
+  # which keeps unchanged layers between runs, and compiles through the compile cache. Renovate's
+  # branches carry dependency versions no one has reviewed yet, so they build on a GitHub runner
+  # instead, without the compile cache.
   e2e:
     name: e2e
     runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
@@ -220,7 +251,9 @@ jobs:
           context: services/frontend
           load: true
           tags: frontend:e2e
-          build-args: GIT_SHA=${{ github.sha }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            SCCACHE_WEBDAV_ENDPOINT=${{ env.SCCACHE_WEBDAV_ENDPOINT }}
       - name: No Node in the image
         run: docker run --rm --entrypoint sh frontend:e2e -c '! command -v node && test -z "$(find / -xdev -name node -type f 2>/dev/null)"'
       - uses: actions/setup-node@v4
@@ -249,6 +282,15 @@ jobs:
           path: services/frontend/web/playwright-report
       - if: always()
         run: e2e/serve.sh stop; docker image rm frontend:e2e >/dev/null 2>&1 || true
+      # What the runner container and Docker's (the site, its stand-ins, the browser) used at
+      # most, to size the runners' memory limits. The image builds in BuildKit, not here. Docker
+      # runs in its own container of the pod: a container in Docker's cgroup namespace reads it.
+      - name: Memory peak (runner and Docker, not BuildKit)
+        if: always() && runner.environment == 'self-hosted'
+        run: |
+          echo "runner: $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB"
+          peak=$(docker run --rm --cgroupns host --entrypoint cat "$PLAYWRIGHT_IMAGE" /sys/fs/cgroup/memory.peak 2>/dev/null) \
+            && echo "docker: $(( peak / 1048576 )) MiB" || echo "docker: not readable"
 
   # The trace contract checker's own tests (tracing/checker).
   trace-checker:

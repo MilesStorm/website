@@ -13,6 +13,27 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN cargo install cargo-chef --locked
+# The cluster's compile cache (.github/actions/rust), when the build is given it: sccache in front
+# of rustc, so when a layer has to be rebuilt, this build on either node's BuildKit reuses what an
+# earlier one compiled. Entries are keyed by the hash of each compile's inputs, never by file
+# times. Without SCCACHE_WEBDAV_ENDPOINT (GitHub's runners), or when the cache can't be reached,
+# rustc compiles as usual. CARGO_BUILD_JOBS: BuildKit shares the node with production and runs
+# up to four steps at once.
+# Checked against the SHA-256 published with the release.
+ARG SCCACHE_VERSION=v0.19.0
+RUN url=https://github.com/mozilla/sccache/releases/download/$SCCACHE_VERSION/sccache-$SCCACHE_VERSION-x86_64-unknown-linux-musl.tar.gz && \
+    curl -sSfL -o /tmp/sccache.tgz "$url" && \
+    echo "$(curl -sSfL "$url.sha256")  /tmp/sccache.tgz" | sha256sum -c --quiet && \
+    tar -xzf /tmp/sccache.tgz -C /usr/local/bin --strip-components=1 --wildcards '*/sccache' && rm /tmp/sccache.tgz
+# Its own socket in the step's /tmp, not 127.0.0.1:4226: BuildKit runs every build's steps in the
+# node's network, so two builds at once would share one server.
+ARG SCCACHE_WEBDAV_ENDPOINT=
+ENV SCCACHE_WEBDAV_ENDPOINT=$SCCACHE_WEBDAV_ENDPOINT \
+    SCCACHE_WEBDAV_DISABLE_CREATE_DIR=true \
+    SCCACHE_SKIP_CACHE_CHECK=true \
+    SCCACHE_SERVER_UDS=/tmp/sccache.sock \
+    RUSTC_WRAPPER=${SCCACHE_WEBDAV_ENDPOINT:+sccache} \
+    CARGO_BUILD_JOBS=4
 
 
 FROM chef AS planner
@@ -26,11 +47,13 @@ WORKDIR /app
 
 # Cook dependencies first (cached layer when only source changes).
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json && \
+    { [ -z "$RUSTC_WRAPPER" ] || sccache --stop-server || true; }
 
 # Full source build.
 COPY . .
-RUN cargo build --release
+RUN cargo build --release && \
+    { [ -z "$RUSTC_WRAPPER" ] || sccache --stop-server || true; }
 
 # `--strip-debug` keeps the symbol table, so eBPF CPU profiles show function names.
 RUN strip --strip-debug /app/target/release/dice_detector
