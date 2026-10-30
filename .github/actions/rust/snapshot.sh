@@ -32,6 +32,31 @@ prune() {
   return 0
 }
 
+# Only what this run's build used goes into a snapshot. Without this, a snapshot restored from
+# another key (main's, after Cargo.lock or a build setting changed) keeps its old artifacts beside
+# the new ones, and every change adds more. cargo reports every unit of a build, fresh ones too,
+# with the files it produced; anything else in deps/ and build/ is left over. Deleting a file
+# cargo still wanted only costs a rebuild of that unit on the next run, never a wrong result.
+sweep() {
+  local ws=$1 debug=$1/target/debug
+  [ -d "$debug/deps" ] || return 0
+  local -A used=()
+  local h
+  while read -r h; do used[$h]=1; done < <(cd "$ws" && {
+    cargo test --no-run --message-format=json 2>/dev/null
+    cargo clippy --all-targets --message-format=json 2>/dev/null
+  } | jq -r '(select(.reason == "compiler-artifact") | .filenames[]),
+             (select(.reason == "build-script-executed") | .out_dir)' \
+    | grep -oE -- '-[0-9a-f]{16}')
+  [ ${#used[@]} -gt 0 ] || return 0
+  local f
+  for f in "$debug"/deps/* "$debug"/build/*; do
+    h=$(grep -oE -- '-[0-9a-f]{16}' <<<"${f##*/}" | tail -1)
+    [ -n "$h" ] && [ -z "${used[$h]:-}" ] && rm -rf "$f"
+  done
+  return 0
+}
+
 restore() {
   local job=$1 ws
   ws=$(cd "$2" && pwd)
@@ -97,6 +122,7 @@ save() {
   fi
   [ ${#names[@]} -gt 0 ] || { echo "Snapshot ${RUST_SNAPSHOT_KEY:-} is current."; return 0; }
   local ws=$RUST_SNAPSHOT_DIR file=$RUNNER_TEMP/snapshot.tar.zst paths=()
+  sweep "$ws"
   prune "$ws" || return 0
   local p
   local cargo_home
