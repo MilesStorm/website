@@ -12,6 +12,19 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libc6-dev pkg-config libssl-dev python3-venv zstd && \
     rm -rf /var/lib/apt/lists/*
 
+# Node 26 (LTS) for actions/setup-node, which otherwise downloads it in every job: the newest 26.x
+# from the same manifest setup-node reads, laid out as its tool cache. setup-node uses a cached
+# version that matches (check-latest is off). The runner reads RUNNER_TOOL_CACHE (and the older
+# AGENT_TOOLSDIRECTORY); the runner user owns it, so setup-node can still add a version a workflow
+# asks for.
+ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache \
+    AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
+RUN url=$(curl -sSfL https://raw.githubusercontent.com/actions/node-versions/main/versions-manifest.json | \
+      python3 -c 'import json,sys; v=next(v for v in json.load(sys.stdin) if v["stable"] and v["version"].startswith("26.")); f=next(f for f in v["files"] if f["platform"]=="linux" and f["arch"]=="x64"); print(v["version"], f["download_url"])') && \
+    set -- $url && dir=/opt/hostedtoolcache/node/$1/x64 && mkdir -p "$dir" && \
+    curl -sSfL "$2" | tar -xz -C "$dir" && touch "$dir.complete" && \
+    chown -R runner:runner /opt/hostedtoolcache && "$dir/bin/node" --version
+
 # Read-only for the jobs: they keep their crate downloads in their own CARGO_HOME
 # (.github/actions/rust).
 ENV RUSTUP_HOME=/opt/rustup \
