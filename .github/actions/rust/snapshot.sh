@@ -63,10 +63,11 @@ restore() {
   [ -n "${SCCACHE_WEBDAV_ENDPOINT:-}" ] || { echo "No cache server for this run."; return 0; }
   # A snapshot fits only the same rustc, dependencies, build settings and paths (CARGO_HOME and the
   # checkout are the same on every runner).
-  local rustc deps key
+  # format: bump to retire every stored snapshot, as when what goes into one changes (sweep).
+  local format=2 rustc deps key
   rustc=$(rustc -vV | sha256sum | cut -c1-12)
   deps=$(
-    { cat "$ws/Cargo.lock" "$ws"/rust-toolchain* "$CARGO_HOME/config.toml" 2>/dev/null
+    { echo "format $format"; cat "$ws/Cargo.lock" "$ws"/rust-toolchain* "$CARGO_HOME/config.toml" 2>/dev/null
       env | grep -E '^(CARGO_HOME|CARGO_INCREMENTAL|CARGO_PROFILE_[A-Z_]+|RUSTC_WRAPPER|RUSTFLAGS|RUSTDOCFLAGS)=' | sort
     } | sha256sum | cut -c1-12
   )
