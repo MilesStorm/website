@@ -51,11 +51,13 @@ jobs:
           ASTRO_TELEMETRY_DISABLED: 1
         run: |
           # The step's shell exits on the first error (-e): the condition of an if doesn't, so
-          # the exit status always lands in astro.rc, which the later step waits for.
+          # the exit status always lands in astro.rc (renamed into place, never seen half
+          # written), which the later step waits for while the process lives.
           {
             if (cd web && npm ci && npm run tracing && npm run build); then rc=0; else rc=1; fi
-            echo $rc > "$RUNNER_TEMP/astro.rc"
+            echo $rc > "$RUNNER_TEMP/astro.rc.tmp" && mv "$RUNNER_TEMP/astro.rc.tmp" "$RUNNER_TEMP/astro.rc"
           } > "$RUNNER_TEMP/astro.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/astro.pid"
       - uses: ./.github/actions/rust
         with:
           job: frontend-rust
@@ -79,10 +81,16 @@ jobs:
       # A build with exactly the pages in PAGES, each with the marker the server splices at.
       - name: Astro build has exactly the pages
         run: |
-          while [ ! -f "$RUNNER_TEMP/astro.rc" ]; do sleep 1; done
+          while [ ! -f "$RUNNER_TEMP/astro.rc" ] && kill -0 "$(cat "$RUNNER_TEMP/astro.pid")" 2>/dev/null; do
+            sleep 1
+          done
           cat "$RUNNER_TEMP/astro.log"
-          [ "$(cat "$RUNNER_TEMP/astro.rc")" = 0 ]
+          [ "$(cat "$RUNNER_TEMP/astro.rc" 2>/dev/null)" = 0 ]
           target/debug/server check-pages web/dist
+      # A failed Rust step skips the page check above, which prints this log.
+      - name: Astro build log
+        if: failure()
+        run: cat "$RUNNER_TEMP/astro.log" || true
       # For the next run (.github/actions/rust), once every check passed.
       - name: Store the build
         if: success() && env.RUST_SNAPSHOT_KEY != ''
