@@ -62,9 +62,10 @@ jobs:
         with:
           job: frontend-rust
           workspace: services/frontend
-      # From crates.io, on a run that restored no snapshot (.github/actions/rust).
+      # From crates.io, on a run that restored no snapshot (.github/actions/rust). Offline first:
+      # with every crate restored, cargo would still spend up to ~25 s refreshing the index.
       - name: Crate downloads
-        run: cargo fetch
+        run: cargo fetch --offline || cargo fetch
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       # Also builds target/debug/server, which the steps below run.
@@ -179,7 +180,7 @@ jobs:
           workspace: services/auth
           packages: pkg-config libssl-dev
       - name: Crate downloads
-        run: cargo fetch
+        run: cargo fetch --offline || cargo fetch
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       # For the next run (.github/actions/rust), once every check passed.
@@ -219,7 +220,7 @@ jobs:
           workspace: services/ai_pipeline
           packages: python3-venv
       - name: Crate downloads
-        run: cargo fetch
+        run: cargo fetch --offline || cargo fetch
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       # The YOLO model for real, in ONNX Runtime on the CPU (the image runs it on the GPU).
