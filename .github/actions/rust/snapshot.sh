@@ -42,12 +42,15 @@ sweep() {
   [ -d "$debug/deps" ] || return 0
   local -A used=()
   local h
-  while read -r h; do used[$h]=1; done < <(cd "$ws" && {
-    cargo test --no-run --message-format=json 2>/dev/null
-    cargo clippy --all-targets --message-format=json 2>/dev/null
-  } | jq -r '(select(.reason == "compiler-artifact") | .filenames[]),
-             (select(.reason == "build-script-executed") | .out_dir)' \
-    | grep -oE -- '-[0-9a-f]{16}')
+  # Both builds must report in full: a partial list would delete what the next run needs.
+  local units=$RUNNER_TEMP/units.json
+  (cd "$ws" && cargo test --no-run --message-format=json 2>/dev/null > "$units" \
+    && cargo clippy --all-targets --message-format=json 2>/dev/null >> "$units") || return 0
+  while read -r h; do used[$h]=1; done < <(
+    jq -rR 'fromjson? | (select(.reason == "compiler-artifact") | .filenames[]),
+                        (select(.reason == "build-script-executed") | .out_dir)' "$units" \
+      | grep -oE -- '-[0-9a-f]{16}')
+  rm -f "$units"
   [ ${#used[@]} -gt 0 ] || return 0
   local f
   for f in "$debug"/deps/* "$debug"/build/*; do
@@ -75,16 +78,16 @@ restore() {
   {
     echo "RUST_SNAPSHOT_DIR=$ws"
     echo "RUST_SNAPSHOT_KEY=$key"
-    echo "RUST_SNAPSHOT_MAIN=$job-$rustc-main"
+    echo "RUST_SNAPSHOT_MAIN=$job-$rustc-main-f$format"
   } >> "$GITHUB_ENV"
 
   # Main's snapshot for this rustc is what a branch with new dependencies starts from; only main
   # stores it.
-  if [ "$GITHUB_REF" = refs/heads/main ] && ! exists "$job-$rustc-main"; then
+  if [ "$GITHUB_REF" = refs/heads/main ] && ! exists "$job-$rustc-main-f$format"; then
     echo "RUST_SNAPSHOT_SAVE_MAIN=true" >> "$GITHUB_ENV"
   fi
   local name
-  for name in "$key" "$job-$rustc-main"; do
+  for name in "$key" "$job-$rustc-main-f$format" "$job-$rustc-main"; do
     if exists "$name" && fetch "$name" "$ws"; then
       echo "Restored $name."
       prune "$ws"
