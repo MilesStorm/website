@@ -20,7 +20,7 @@ permissions:
 # GitHub's runners and never write to the compile cache.
 #
 # Line tables are enough for a panic's backtrace; full debug info more than doubles what the
-# compile cache stores, and slows the link.
+# compile cache stores, and slows the link. Dependencies get none (.github/actions/rust).
 env:
   SCCACHE_WEBDAV_ENDPOINT: ${{ !startsWith(github.ref_name, 'renovate/') && 'http://sccache.arc-runners.svc.cluster.local' || '' }}
   SCCACHE_WEBDAV_DISABLE_CREATE_DIR: "true"

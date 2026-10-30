@@ -32,16 +32,45 @@ prune() {
   return 0
 }
 
+# Only what this run's build used goes into a snapshot. Without this, a snapshot restored from
+# another key (main's, after Cargo.lock or a build setting changed) keeps its old artifacts beside
+# the new ones, and every change adds more. cargo reports every unit of a build, fresh ones too,
+# with the files it produced; anything else in deps/ and build/ is left over. Deleting a file
+# cargo still wanted only costs a rebuild of that unit on the next run, never a wrong result.
+sweep() {
+  local ws=$1 debug=$1/target/debug
+  [ -d "$debug/deps" ] || return 0
+  local -A used=()
+  local h
+  # Both builds must report in full: a partial list would delete what the next run needs.
+  local units=$RUNNER_TEMP/units.json
+  (cd "$ws" && cargo test --no-run --message-format=json 2>/dev/null > "$units" \
+    && cargo clippy --all-targets --message-format=json 2>/dev/null >> "$units") || return 0
+  while read -r h; do used[$h]=1; done < <(
+    jq -rR 'fromjson? | (select(.reason == "compiler-artifact") | .filenames[]),
+                        (select(.reason == "build-script-executed") | .out_dir)' "$units" \
+      | grep -oE -- '-[0-9a-f]{16}')
+  rm -f "$units"
+  [ ${#used[@]} -gt 0 ] || return 0
+  local f
+  for f in "$debug"/deps/* "$debug"/build/*; do
+    h=$(grep -oE -- '-[0-9a-f]{16}' <<<"${f##*/}" | tail -1)
+    [ -n "$h" ] && [ -z "${used[$h]:-}" ] && rm -rf "$f"
+  done
+  return 0
+}
+
 restore() {
   local job=$1 ws
   ws=$(cd "$2" && pwd)
   [ -n "${SCCACHE_WEBDAV_ENDPOINT:-}" ] || { echo "No cache server for this run."; return 0; }
   # A snapshot fits only the same rustc, dependencies, build settings and paths (CARGO_HOME and the
   # checkout are the same on every runner).
-  local rustc deps key
+  # format: bump to retire every stored snapshot, as when what goes into one changes (sweep).
+  local format=2 rustc deps key
   rustc=$(rustc -vV | sha256sum | cut -c1-12)
   deps=$(
-    { cat "$ws/Cargo.lock" "$ws"/rust-toolchain* 2>/dev/null
+    { echo "format $format"; cat "$ws/Cargo.lock" "$ws"/rust-toolchain* "$CARGO_HOME/config.toml" 2>/dev/null
       env | grep -E '^(CARGO_HOME|CARGO_INCREMENTAL|CARGO_PROFILE_[A-Z_]+|RUSTC_WRAPPER|RUSTFLAGS|RUSTDOCFLAGS)=' | sort
     } | sha256sum | cut -c1-12
   )
@@ -49,16 +78,16 @@ restore() {
   {
     echo "RUST_SNAPSHOT_DIR=$ws"
     echo "RUST_SNAPSHOT_KEY=$key"
-    echo "RUST_SNAPSHOT_MAIN=$job-$rustc-main"
+    echo "RUST_SNAPSHOT_MAIN=$job-$rustc-main-f$format"
   } >> "$GITHUB_ENV"
 
   # Main's snapshot for this rustc is what a branch with new dependencies starts from; only main
   # stores it.
-  if [ "$GITHUB_REF" = refs/heads/main ] && ! exists "$job-$rustc-main"; then
+  if [ "$GITHUB_REF" = refs/heads/main ] && ! exists "$job-$rustc-main-f$format"; then
     echo "RUST_SNAPSHOT_SAVE_MAIN=true" >> "$GITHUB_ENV"
   fi
   local name
-  for name in "$key" "$job-$rustc-main"; do
+  for name in "$key" "$job-$rustc-main-f$format" "$job-$rustc-main"; do
     if exists "$name" && fetch "$name" "$ws"; then
       echo "Restored $name."
       prune "$ws"
@@ -97,6 +126,7 @@ save() {
   fi
   [ ${#names[@]} -gt 0 ] || { echo "Snapshot ${RUST_SNAPSHOT_KEY:-} is current."; return 0; }
   local ws=$RUST_SNAPSHOT_DIR file=$RUNNER_TEMP/snapshot.tar.zst paths=()
+  sweep "$ws"
   prune "$ws" || return 0
   local p
   local cargo_home
