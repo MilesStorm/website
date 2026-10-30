@@ -41,7 +41,7 @@ restore() {
   local rustc deps key
   rustc=$(rustc -vV | sha256sum | cut -c1-12)
   deps=$(
-    { cat "$ws/Cargo.lock" "$ws"/rust-toolchain* 2>/dev/null
+    { cat "$ws/Cargo.lock" "$ws"/rust-toolchain* "$CARGO_HOME/config.toml" 2>/dev/null
       env | grep -E '^(CARGO_HOME|CARGO_INCREMENTAL|CARGO_PROFILE_[A-Z_]+|RUSTC_WRAPPER|RUSTFLAGS|RUSTDOCFLAGS)=' | sort
     } | sha256sum | cut -c1-12
   )

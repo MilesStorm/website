@@ -49,11 +49,14 @@ runs:
 
     # Downloads, temporary files and an installed toolchain go on the job's scratch disk: on the
     # cluster's runners, the container's own files are on the node's nearly full root disk.
+    # Dependencies build without debug info: only our own crates' lines matter in a backtrace,
+    # and it shrinks the BFF's target/ snapshot from 3.4 to 2.4 GB.
     - name: Toolchain
       id: toolchain
       shell: bash
       run: |
         mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/tmp"
+        printf '[profile.dev.package."*"]\ndebug = false\n' > "$RUNNER_TEMP/cargo/config.toml"
         { echo "CARGO_HOME=$RUNNER_TEMP/cargo"; echo "TMPDIR=$RUNNER_TEMP/tmp"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
         if cargo clippy --version >/dev/null 2>&1; then
           rustc --version
