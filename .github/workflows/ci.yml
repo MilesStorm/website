@@ -31,7 +31,7 @@ env:
 jobs:
   # The frontend's BFF: clippy and tests, the API contract, and the Astro build it serves.
   # One compile for clippy and one for the tests; the contract and page checks run the server
-  # binary the tests built.
+  # binary the tests built. The Astro build needs no Rust, so it runs beside them.
   frontend-rust:
     name: "frontend: BFF server"
     runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
@@ -43,14 +43,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
+      # In the background (npm ci is most of it); "Astro build has exactly the pages" waits for
+      # it. The runner ends leftover processes only when the job ends.
+      - name: Astro build (background)
+        env:
+          ASTRO_TELEMETRY_DISABLED: 1
+        run: |
+          # The step's shell exits on the first error (-e): the condition of an if doesn't, so
+          # the exit status always lands in astro.rc (renamed into place, never seen half
+          # written), which the later step waits for while the process lives.
+          {
+            if (cd web && npm ci && npm run tracing && npm run build); then rc=0; else rc=1; fi
+            echo $rc > "$RUNNER_TEMP/astro.rc.tmp" && mv "$RUNNER_TEMP/astro.rc.tmp" "$RUNNER_TEMP/astro.rc"
+          } > "$RUNNER_TEMP/astro.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/astro.pid"
       - uses: ./.github/actions/rust
         with:
           job: frontend-rust
           workspace: services/frontend
-      # From crates.io, on a run that restored no snapshot (.github/actions/rust).
+      # From crates.io, on a run that restored no snapshot (.github/actions/rust). Offline first:
+      # with every crate restored, cargo would still spend up to ~25 s refreshing the index.
       - name: Crate downloads
-        run: cargo fetch
+        run: cargo fetch --offline || cargo fetch
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       # Also builds target/debug/server, which the steps below run.
@@ -66,9 +81,17 @@ jobs:
         run: '! grep -rn "impl IntoApiResponse" crates/bff/src'
       # A build with exactly the pages in PAGES, each with the marker the server splices at.
       - name: Astro build has exactly the pages
-        env:
-          ASTRO_TELEMETRY_DISABLED: 1
-        run: (cd web && npm ci && npm run tracing && npm run build) && target/debug/server check-pages web/dist
+        run: |
+          while [ ! -f "$RUNNER_TEMP/astro.rc" ] && kill -0 "$(cat "$RUNNER_TEMP/astro.pid")" 2>/dev/null; do
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/astro.log"
+          [ "$(cat "$RUNNER_TEMP/astro.rc" 2>/dev/null)" = 0 ]
+          target/debug/server check-pages web/dist
+      # A failed Rust step skips the page check above, which prints this log.
+      - name: Astro build log
+        if: failure()
+        run: cat "$RUNNER_TEMP/astro.log" || true
       # For the next run (.github/actions/rust), once every check passed.
       - name: Store the build
         if: success() && env.RUST_SNAPSHOT_KEY != ''
@@ -102,7 +125,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
       - name: TypeScript API types are current
         run: npm ci && npm run api:types && git diff --exit-code -- src/api/schema.d.ts
       - name: Astro pages type-check
@@ -137,7 +160,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
       - run: npm ci
       - run: npm run types
 
@@ -157,7 +180,7 @@ jobs:
           workspace: services/auth
           packages: pkg-config libssl-dev
       - name: Crate downloads
-        run: cargo fetch
+        run: cargo fetch --offline || cargo fetch
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       # For the next run (.github/actions/rust), once every check passed.
@@ -197,7 +220,7 @@ jobs:
           workspace: services/ai_pipeline
           packages: python3-venv
       - name: Crate downloads
-        run: cargo fetch
+        run: cargo fetch --offline || cargo fetch
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       # The YOLO model for real, in ONNX Runtime on the CPU (the image runs it on the GPU).
@@ -315,7 +338,7 @@ jobs:
         run: docker run --rm --entrypoint sh frontend:e2e -c '! command -v node && test -z "$(find / -xdev -name node -type f 2>/dev/null)"'
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
       - name: Wait for the test browser and services
         run: |
           for _ in $(seq 600); do test -f /tmp/fetch.status && break; sleep 1; done

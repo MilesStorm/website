@@ -4,7 +4,7 @@
 # are one layer (cargo-chef), rebuilt only when Cargo.lock or a manifest changes.
 
 # ---- web: the Astro build. Node is here only. ----
-FROM node:22.23.3-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa AS web
+FROM node:26.13.0-trixie-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS web
 ENV ASTRO_TELEMETRY_DISABLED=1
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
