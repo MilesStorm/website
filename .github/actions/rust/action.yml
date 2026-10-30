@@ -8,7 +8,7 @@ description: >-
 # with the rustc its image was built with; GitHub's runners have the compiler and a toolchain.
 # Whatever a runner lacks (GitHub's runner image, before the cluster runs ours) is installed here.
 #
-# Two caches on one WebDAV server on eta (homelab repo, ci-runners/manifests/sccache.yaml; past
+# Two caches on one WebDAV server on gamma (homelab repo, ci-runners/manifests/sccache.yaml; past
 # 30 GB it drops the entries read longest ago):
 # - The job's target/ and crate downloads from an earlier run (snapshot.sh), as GitHub's
 #   rust-cache kept them: cargo then compiles only the workspace's own crates. Stored by a run
@@ -49,16 +49,12 @@ runs:
 
     # Downloads, temporary files and an installed toolchain go on the job's scratch disk: on the
     # cluster's runners, the container's own files are on the node's nearly full root disk.
-    # CARGO_BUILD_JOBS: the nodes also run production, and a runner has 6 GiB.
     - name: Toolchain
       id: toolchain
       shell: bash
-      env:
-        RUNNER_KIND: ${{ runner.environment }}
       run: |
         mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/tmp"
         { echo "CARGO_HOME=$RUNNER_TEMP/cargo"; echo "TMPDIR=$RUNNER_TEMP/tmp"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
-        [ "$RUNNER_KIND" != self-hosted ] || echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
         if cargo clippy --version >/dev/null 2>&1; then
           rustc --version
         else
