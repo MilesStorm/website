@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PAGE_SIZE } from '@/lib/admin';
+import { PAGE_GAP } from '@/lib/layout';
 import { cn } from '@/lib/utils';
 
 // The admin panel's frame, shared by the panel (islands/AdminPanel.tsx) and its placeholder, so
@@ -177,12 +178,13 @@ export const INVITE_FORM = {
 export const INVITE_FIELDS =
   'grid gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:items-end 2xl:grid-cols-2 2xl:*:nth-2:order-first 2xl:*:nth-2:col-span-2';
 
+/** The invites tab: the form for a new link above the links; from 1536 on the site's thirds, the
+ * links over the first two and the form in the right-hand third (staying in view while the list
+ * scrolls), like Arcane's camera and cards. */
+export const INVITES_LAYOUT = `grid ${PAGE_GAP} 2xl:grid-cols-3 2xl:items-start 2xl:*:first:sticky 2xl:*:first:top-24 2xl:*:first:col-start-3 2xl:*:first:row-start-1 2xl:*:nth-2:col-span-2 2xl:*:nth-2:col-start-1 2xl:*:nth-2:row-start-1`;
+
 /** The invites tab's place until the roles (its form's choices) are in: the form card with its
  * own text and a pulse for each field and the button, then the list's. */
-/** The invites tab: the form for a new link above the links; from 1536 the links on the left and
- * the form beside them (staying in view while the list scrolls). */
-export const INVITES_LAYOUT =
-  'grid gap-6 2xl:grid-cols-[minmax(0,1fr)_28rem] 2xl:items-start 2xl:*:first:sticky 2xl:*:first:top-24 2xl:*:first:col-start-2 2xl:*:first:row-start-1 2xl:*:nth-2:col-start-1 2xl:*:nth-2:row-start-1';
 
 export function InvitesSkeleton() {
   return (
