@@ -141,14 +141,8 @@
     /* The cookie notice's room while it is open (islands/CookieConsent.tsx). */
     padding-bottom: var(--consent-h, 0);
     }
-  /* The whole interface grows on wide screens: 16px up to 1280px wide, then with the window to
-     24px (18px at 1920, 22px at 2560), so a 1440p or ultrawide screen gets the layout at a size read
-     from a desk's distance, not a laptop's in a corner. Everything sized in rem (type, spacing,
-     controls, the storm's grid) scales together; hairlines stay px. Breakpoints are unaffected
-     (media queries' rem is the browser's 16px). */
   html {
     @apply font-sans;
-    font-size: clamp(16px, 0.5rem + 0.55vw, 24px);
     scroll-padding-bottom: var(--consent-h, 0);
     }
 }

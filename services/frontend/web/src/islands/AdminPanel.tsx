@@ -193,7 +193,6 @@ function UsersTab({ allRoles, me }: { allRoles: RoleRef[]; me: string | null }) 
       row={(user) => (
         <TableRow role="row" key={user.id} className={STACKED}>
           <TableCell role="cell" className={cn('font-medium', CUT)} title={user.username}>{user.username}</TableCell>
-          <TableCell role="cell" className={cn('text-muted-foreground', CUT)} title={user.email ?? undefined}>{user.email ?? NO_EMAIL}</TableCell>
           <TableCell role="cell" className={FILL_CELL}>
             <Assigned
               owner={user.username}
@@ -211,6 +210,7 @@ function UsersTab({ allRoles, me }: { allRoles: RoleRef[]; me: string | null }) 
               }
             />
           </TableCell>
+          <TableCell role="cell" className={cn('text-muted-foreground', CUT)} title={user.email ?? undefined}>{user.email ?? NO_EMAIL}</TableCell>
         </TableRow>
       )}
     />

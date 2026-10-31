@@ -1,5 +1,7 @@
 import { Card, CardAction, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { ArrowRight } from 'lucide-react';
 import type { CardState, Feature } from '@/lib/features';
+import { THIRDS } from '@/lib/layout';
 import { cn } from '@/lib/utils';
 
 const NOTE: Record<Exclude<CardState, 'open'>, string> = {
@@ -7,16 +9,25 @@ const NOTE: Record<Exclude<CardState, 'open'>, string> = {
   preview: 'For invited accounts.',
 };
 
-/** The start page's cards: a column on a phone, two from `sm`, three from `lg`. A card is as tall
- * as its text, and the cards of a row are as tall as the tallest. */
-export const CARD_GRID = 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3';
+/** The start page's cards, in the site's thirds (THIRDS): the cards of a row are as tall as the
+ * tallest, and their columns are Ark's and Enshrouded's. */
+export const CARD_GRID = THIRDS;
 
-/** The logged-out page's two previews: two cards of at most 28rem each, in the middle under the
- * hero (not stretched across the whole container on a wide screen). */
-export const PREVIEW_GRID = 'mx-auto grid w-full max-w-4xl gap-4 sm:grid-cols-2 4xl:max-w-5xl';
+/** The logged-out page's two previews: from `lg` each one column of the thirds wide, the pair in
+ * the middle under the hero, so they're the size of the logged-in cards. */
+export const PREVIEW_GRID = 'grid gap-4 sm:grid-cols-2 lg:mx-auto lg:w-[calc((200%-2rem)/3)] lg:gap-8';
 
 /** What a card's icon sits in. */
 const ICON_BADGE = 'grid size-9 place-items-center rounded-full bg-muted text-foreground';
+
+/** An open card's footer: where the card leads, on the line where the others have their note. */
+function OpenNote() {
+  return (
+    <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      Open <ArrowRight className="size-4" aria-hidden="true" />
+    </p>
+  );
+}
 
 /** A part of the site, like the demo cards on ui.shadcn.com's front page: a link when it's open
  * to the viewer (over the whole card, which answers the pointer and the keyboard), a description
@@ -29,7 +40,7 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
   return (
     <Card
       className={cn(
-        'relative h-full',
+        'relative h-full lg:min-h-40',
         open &&
           'transition-colors hover:bg-muted/50 hover:ring-foreground/20 has-[a:focus-visible]:ring-3 has-[a:focus-visible]:ring-ring/50',
         state === 'locked' && 'border border-dashed ring-0',
@@ -65,11 +76,9 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
           </span>
         </CardAction>
       </CardHeader>
-      {!open && (
-        <CardFooter className="mt-auto">
-          <p className="text-xs text-muted-foreground">{NOTE[state]}</p>
-        </CardFooter>
-      )}
+      <CardFooter className="mt-auto">
+        {open ? <OpenNote /> : <p className="text-xs text-muted-foreground">{NOTE[state]}</p>}
+      </CardFooter>
       {id && (
         // Over the whole card, named by its title and described by its text. Not wrapped around
         // the title: the header is a container, so a stretched link would cover only the header.
@@ -90,7 +99,7 @@ export function FeatureCard({ feature, state }: { feature: Feature; state: CardS
 export function FeatureCardPlaceholder({ feature, state }: { feature: Feature; state: CardState }) {
   const pulse = 'animate-pulse rounded-md bg-muted text-transparent select-none box-decoration-clone';
   return (
-    <Card className={cn('h-full', state === 'locked' && 'border border-dashed ring-0')} aria-hidden="true">
+    <Card className={cn('h-full lg:min-h-40', state === 'locked' && 'border border-dashed ring-0')} aria-hidden="true">
       <CardHeader>
         <CardTitle>
           <span className={pulse}>{feature.title}</span>
@@ -102,13 +111,15 @@ export function FeatureCardPlaceholder({ feature, state }: { feature: Feature; s
           <span className={cn(ICON_BADGE, 'animate-pulse')} />
         </CardAction>
       </CardHeader>
-      {state !== 'open' && (
-        <CardFooter className="mt-auto">
+      <CardFooter className="mt-auto">
+        {state === 'open' ? (
+          <OpenNote />
+        ) : (
           <p className="text-xs text-muted-foreground">
             <span className={pulse}>{NOTE[state]}</span>
           </p>
-        </CardFooter>
-      )}
+        )}
+      </CardFooter>
     </Card>
   );
 }

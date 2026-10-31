@@ -93,8 +93,8 @@ export function startStorm(root: HTMLElement): () => void {
   let color = '';
   let dotAlpha = 0;
   let dotRadius = 1;
-  // CSS px per storm px: the root font size over 16 (global.css scales it up on wide screens), so
-  // the canvas draws in the still frame's units (rem) and the grid, drops and strikes grow with it.
+  // CSS px per storm px: the root font size over 16 (the reader's text size), so the canvas draws
+  // in the still frame's units (rem) and the grid, drops and strikes follow it.
   let unit = 1;
   // The mask's width over the box's (`--storm-wide`).
   let wide = 1;
@@ -335,11 +335,8 @@ export function startStorm(root: HTMLElement): () => void {
     run();
   });
   seen.observe(root);
-  // A new width can mean a new root size (global.css), so the units are read again.
   const sized = new ResizeObserver(() => {
-    if (!frame) return;
-    readStyle();
-    layout();
+    if (frame) layout();
   });
   sized.observe(canvas);
   // The theme script toggles `.dark` on <html>, and sets `data-motion` for a motion choice.

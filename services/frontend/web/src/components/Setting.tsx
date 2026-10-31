@@ -10,12 +10,12 @@ import { cn } from '@/lib/utils';
 // placeholder (islands/ProfileSkeleton.tsx).
 
 /** The profile's sections, one under the other: at most 64rem wide and flush left with the page
- * title; from `lg` a hairline between them, each section's text beside its card. From 2560 (a
- * column of 64rem would leave half the screen empty) two columns: the first section (Account)
- * on the left, the rest on the right, parted by space instead of hairlines, both tops level; each section's text above
- * its card there (Section), so the cards get the column's width. */
+ * title; from `lg` a hairline between them, each section's text beside its card. From 1536 a grid
+ * of two columns in reading order (Account beside Appearance, Session beside the danger zone),
+ * rows level, parted by space instead of hairlines; each section's text above its card there
+ * (Section), so the cards get the column's width. */
 export const SECTIONS =
-  'flex max-w-5xl flex-col gap-8 lg:gap-0 lg:divide-y lg:*:py-8 lg:*:first:pt-0 lg:*:last:pb-0 4xl:block 4xl:max-w-none 4xl:columns-2 4xl:gap-x-16 4xl:divide-y-0 4xl:*:break-inside-avoid 4xl:*:first:break-after-column 4xl:*:nth-2:pt-0';
+  'flex max-w-5xl flex-col gap-8 lg:gap-0 lg:divide-y lg:*:py-8 lg:*:first:pt-0 lg:*:last:pb-0 2xl:grid 2xl:max-w-none 2xl:grid-cols-2 2xl:items-start 2xl:gap-x-8 2xl:gap-y-10 2xl:divide-y-0 2xl:*:py-0';
 
 /** The rows of one card, with a rule between them. */
 function SettingList({ className, ...props }: React.ComponentProps<'div'>) {
@@ -29,7 +29,7 @@ function SettingList({ className, ...props }: React.ComponentProps<'div'>) {
 
 /** One section of a settings page (GitHub's, Vercel's): from `lg` its title and one line on the
  * left as plain text and its card of rows on the right (a third and two thirds); below, the text
- * above the card (and again from 2560, where the sections are in two columns: SECTIONS). `danger`
+ * above the card (and again from 1920, where the sections are in two columns: SECTIONS). `danger`
  * edges the card in a faint red, no louder than that. */
 export function Section({
   title,
@@ -44,8 +44,8 @@ export function Section({
 }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:gap-x-8 4xl:grid-cols-1">
-      <div className="flex flex-col gap-1 lg:pt-1 lg:pr-4 4xl:p-0">
+    <section aria-labelledby={id} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:gap-x-8 2xl:grid-cols-1">
+      <div className="flex flex-col gap-1 lg:pt-1 lg:pr-4 2xl:p-0">
         <h2 id={id} className="text-base font-medium">
           {title}
         </h2>

@@ -20,7 +20,7 @@ export const HomeCards = island('HomeCards', function HomeCards() {
   return (
     <div className="flex flex-col gap-4">
       <section className={HERO_SECTION}>
-        <Storm glow="name" />
+        <Storm />
         <p className={cn(badgeVariants({ variant: 'secondary' }), 'mb-2 h-6 px-2.5')}>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M13 2 4 14h7l-1 8 9-12h-7z" />
@@ -33,7 +33,7 @@ export const HomeCards = island('HomeCards', function HomeCards() {
             alt=""
             width={56}
             height={56}
-            className="size-12 shrink-0 rounded-full object-cover ring-2 ring-border md:size-14"
+            className="size-12 shrink-0 rounded-full object-cover ring-2 ring-border md:size-14 3xl:size-16"
           />
           {/* One line, beside the picture: a name too long for it ends in an ellipsis (the whole of it
               in the tooltip) instead of breaking mid-word away from the picture. */}
