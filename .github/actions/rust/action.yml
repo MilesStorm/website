@@ -1,0 +1,100 @@
+name: Rust
+description: >-
+  The C compiler and libraries a workspace's build needs, the stable toolchain with clippy, and,
+  when the workflow sets SCCACHE_WEBDAV_ENDPOINT, the job's last target/ and sccache in front of
+  rustc.
+
+# The cluster's runner image (ci/runner/Dockerfile) has all of it, so every job of a push compiles
+# with the rustc its image was built with; GitHub's runners have the compiler and a toolchain.
+# Whatever a runner lacks (GitHub's runner image, before the cluster runs ours) is installed here.
+#
+# Two caches on one WebDAV server on gamma (homelab repo, ci-runners/manifests/sccache.yaml; past
+# 30 GB it drops the entries read longest ago):
+# - The job's target/ and crate downloads from an earlier run (snapshot.sh), as GitHub's
+#   rust-cache kept them: cargo then compiles only the workspace's own crates. Stored by a run
+#   that didn't find one for its exact rustc, Cargo.lock and build settings; a run that doesn't
+#   find one starts from main's. The job stores it with snapshot.sh save once its checks passed.
+# - Every compile, through sccache, for what the snapshot doesn't hold. An entry is one file named
+# by the hash of everything that went into the compile, written whole with one PUT, so any number
+# of jobs can use it at once. A job finds what the same job compiled before, on either node; the
+# image builds keep entries of their own (other profile, paths and rustc). When the cache can't be
+# reached, a lookup is a miss and rustc compiles as usual (SCCACHE_SKIP_CACHE_CHECK).
+
+inputs:
+  job:
+    description: The job's name, which its snapshots are stored under.
+    required: true
+  workspace:
+    description: The Cargo workspace's directory.
+    required: true
+  packages:
+    description: Debian packages the build needs besides a C compiler.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: C compiler and libraries
+      shell: bash
+      env:
+        PACKAGES: gcc libc6-dev zstd ${{ inputs.packages }}
+      run: |
+        missing=$(for p in $PACKAGES; do dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || echo "$p"; done)
+        [ -z "$missing" ] && exit 0
+        sudo apt-get update -qq
+        # Without dpkg's fsync after every file: on gamma's SATA disk, shared with the node's
+        # pods, those took minutes while other jobs wrote. A crash loses only this pod.
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+          -o DPkg::Options::=--force-unsafe-io $missing >/dev/null
+
+    # Downloads, temporary files and an installed toolchain go on the job's scratch disk: on the
+    # cluster's runners, the container's own files are on the node's nearly full root disk.
+    # Dependencies build without debug info: only our own crates' lines matter in a backtrace,
+    # and it shrinks the BFF's target/ snapshot from 3.4 to 2.4 GB.
+    - name: Toolchain
+      id: toolchain
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/cargo" "$RUNNER_TEMP/tmp"
+        printf '[profile.dev.package."*"]\ndebug = false\n' > "$RUNNER_TEMP/cargo/config.toml"
+        { echo "CARGO_HOME=$RUNNER_TEMP/cargo"; echo "TMPDIR=$RUNNER_TEMP/tmp"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
+        if cargo clippy --version >/dev/null 2>&1; then
+          rustc --version
+        else
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+          echo "install=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - uses: dtolnay/rust-toolchain@stable
+      if: steps.toolchain.outputs.install == 'true'
+      with:
+        components: clippy
+
+    # sccache can't cache incremental compiles (CARGO_INCREMENTAL above). Its own socket, not
+    # 127.0.0.1:4226, which jobs sharing a network would share.
+    - name: Compile cache
+      shell: bash
+      run: |
+        if [ -z "$SCCACHE_WEBDAV_ENDPOINT" ]; then
+          echo "No compile cache for this run."
+          exit 0
+        fi
+        if ! command -v sccache >/dev/null; then
+          # Checked against the SHA-256 published with the release.
+          SCCACHE_VERSION=v0.19.0
+          url=https://github.com/mozilla/sccache/releases/download/$SCCACHE_VERSION/sccache-$SCCACHE_VERSION-x86_64-unknown-linux-musl.tar.gz
+          mkdir -p "$RUNNER_TEMP/sccache"
+          curl -sSfL -o "$RUNNER_TEMP/sccache.tgz" "$url"
+          echo "$(curl -sSfL "$url.sha256")  $RUNNER_TEMP/sccache.tgz" | sha256sum -c --quiet
+          tar -xzf "$RUNNER_TEMP/sccache.tgz" -C "$RUNNER_TEMP/sccache" --strip-components=1 --wildcards '*/sccache'
+          echo "$RUNNER_TEMP/sccache" >> "$GITHUB_PATH"
+        fi
+        # cc-rs also compiles C through sccache when it is the RUSTC_WRAPPER.
+        { echo "RUSTC_WRAPPER=sccache"; echo "SCCACHE_SERVER_UDS=$RUNNER_TEMP/sccache.sock"; } >> "$GITHUB_ENV"
+
+    - name: The job's last build
+      shell: bash
+      env:
+        JOB: ${{ inputs.job }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: bash "$GITHUB_ACTION_PATH/snapshot.sh" restore "$JOB" "$WORKSPACE"
