@@ -203,27 +203,27 @@ jobs:
           grep -E '^(max|oom_kill) ' /sys/fs/cgroup/memory.events || true
           cat /sys/fs/cgroup/memory.pressure || true
 
-  # Books (services/media): the world's format and the world builder, clippy and tests. The
-  # tests build the fixture world (services/media/fixtures, no download, no GPU) through every
+  # Kindred (services/kindred): the world's format and the world builder, clippy and tests. The
+  # tests build the fixture world (services/kindred/fixtures, no download, no GPU) through every
   # stage and run the search acceptance list against it. DuckDB is compiled from its bundled
   # C++ sources, hence g++; the first build of a cold cache takes a while.
-  media:
-    name: media
+  kindred:
+    name: kindred
     runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
     timeout-minutes: 40
-    # For memory, not CPU, as in services/media/Dockerfile: DuckDB's C++ compiles take about
+    # For memory, not CPU, as in services/kindred/Dockerfile: DuckDB's C++ compiles take about
     # 0.65 GiB each, so the default of one per core (12) passes the runner's 6 GiB limit.
     env:
       CARGO_BUILD_JOBS: 4
     defaults:
       run:
-        working-directory: services/media
+        working-directory: services/kindred
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/rust
         with:
-          job: media
-          workspace: services/media
+          job: kindred
+          workspace: services/kindred
           packages: g++
       - name: Crate downloads
         run: cargo fetch --offline || cargo fetch
