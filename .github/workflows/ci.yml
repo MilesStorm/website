@@ -211,6 +211,10 @@ jobs:
     name: media
     runs-on: ${{ startsWith(github.ref_name, 'renovate/') && 'ubuntu-latest' || 'homelab' }}
     timeout-minutes: 40
+    # For memory, not CPU, as in services/media/Dockerfile: DuckDB's C++ compiles take about
+    # 0.65 GiB each, so the default of one per core (12) passes the runner's 6 GiB limit.
+    env:
+      CARGO_BUILD_JOBS: 4
     defaults:
       run:
         working-directory: services/media
