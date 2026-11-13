@@ -1,0 +1,66 @@
+# Queries search must answer (02-world-data.md §6). The verify stage runs every case against
+# the new world and refuses to publish it if one fails; the fixture world's test does the same.
+# Add a row when a search answered wrongly. `top` (default 1): the expected work must be among
+# the first `top` hits. `title` is compared whole, `author` and `series` as "contains"; all
+# case- and accent-insensitive.
+
+[[case]]
+query = "proj hail"
+title = "Project Hail Mary"
+
+[[case]]
+query = "project hail marry"
+title = "Project Hail Mary"
+
+[[case]]
+query = "name of the wind"
+title = "The Name of the Wind"
+
+[[case]]
+query = "rothfuss"
+author = "Patrick Rothfuss"
+top = 3
+
+[[case]]
+query = "way of kings sanderson"
+title = "The Way of Kings"
+
+[[case]]
+query = "dune"
+title = "Dune"
+author = "Frank Herbert"
+
+[[case]]
+query = "1984"
+title = "Nineteen Eighty-Four"
+author = "George Orwell"
+top = 3
+
+[[case]]
+query = "hobbit"
+title = "The Hobbit"
+
+[[case]]
+query = "pride and prej"
+title = "Pride and Prejudice"
+
+[[case]]
+query = "piranesi"
+title = "Piranesi"
+
+[[case]]
+query = "el nombre del viento"
+title = "The Name of the Wind"
+
+[[case]]
+query = "hitchhikers guide"
+title = "The Hitchhiker's Guide to the Galaxy"
+
+[[case]]
+query = "iron flame"
+title = "Iron Flame"
+
+[[case]]
+query = "stormlight"
+series = "Stormlight Archive"
+top = 3

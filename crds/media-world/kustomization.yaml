@@ -1,0 +1,8 @@
+# The monthly book-world build (services/media, binary media-world). Production only: staging
+# reads the production world (05-service-and-infra.md §7). Homelab app argo/apps/media-world.yaml
+# deploys this into namespace media; Image Updater pins the production build of the image there.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- scratch.yaml
+- cronjob.yaml

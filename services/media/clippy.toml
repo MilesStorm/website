@@ -1,0 +1,44 @@
+# Untraced I/O and background work can't be written by accident: the raw APIs are banned, and
+# crates/world-build/src/trace.rs has the traced one for each (TRACING.md). A use that has to
+# stay raw carries `#[allow(clippy::disallowed_.., reason = "..")]` and is listed in
+# allowed_raw_io.toml; crates/world-build/tests/allowed_raw_io.rs fails on an allow that isn't.
+
+disallowed-types = [
+  { path = "reqwest::Client", reason = "use a client from world_build::trace::client: a plain one makes no span" },
+  { path = "reqwest::ClientBuilder", reason = "build clients with world_build::trace::client" },
+  { path = "object_store::aws::AmazonS3Builder", reason = "use world_build::trace::Bucket, whose calls are CLIENT spans" },
+]
+
+disallowed-methods = [
+  # Outbound HTTP
+  { path = "reqwest::Client::new", reason = "use world_build::trace::client" },
+  { path = "reqwest::Client::builder", reason = "use world_build::trace::client" },
+  { path = "reqwest::ClientBuilder::new", reason = "use world_build::trace::client" },
+  { path = "reqwest::get", reason = "use a client from world_build::trace::client" },
+  # DuckDB: statements run through world_build::trace::Duck (a span per batch)
+  { path = "duckdb::Connection::open", reason = "use world_build::trace::Duck::open" },
+  { path = "duckdb::Connection::open_in_memory", reason = "use world_build::trace::Duck" },
+  { path = "duckdb::Connection::open_with_flags", reason = "use world_build::trace::Duck::open" },
+  # Background work
+  { path = "tokio::task::spawn", reason = "media-world runs its stages in order; blocking work goes through world_build::trace::spawn_blocking" },
+  { path = "tokio::task::spawn_local", reason = "use world_build::trace::spawn_blocking" },
+  { path = "tokio::task::spawn_blocking", reason = "use world_build::trace::spawn_blocking" },
+  { path = "tokio::runtime::Handle::spawn", reason = "use world_build::trace::spawn_blocking" },
+  { path = "tokio::runtime::Handle::spawn_blocking", reason = "use world_build::trace::spawn_blocking" },
+  { path = "tokio::runtime::Runtime::spawn", reason = "use world_build::trace::spawn_blocking" },
+  { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use world_build::trace::spawn_blocking" },
+  { path = "tokio::task::JoinSet::spawn", reason = "use world_build::trace::spawn_blocking" },
+  { path = "tokio::task::JoinSet::spawn_blocking", reason = "use world_build::trace::spawn_blocking" },
+  { path = "std::thread::spawn", reason = "use world_build::trace::spawn_blocking" },
+  { path = "std::thread::Builder::spawn", reason = "use world_build::trace::spawn_blocking" },
+  # Queues: a message has to carry its sender's trace context. media-world has none.
+  { path = "tokio::sync::mpsc::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::mpsc::unbounded_channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::broadcast::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::watch::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "tokio::sync::oneshot::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "std::sync::mpsc::channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  { path = "std::sync::mpsc::sync_channel", reason = "a queued message must carry its trace context (TRACING.md)" },
+  # Exits without flushing spans and logs
+  { path = "std::process::exit", reason = "return from main, which flushes the tracer and logger first" },
+]
