@@ -24,12 +24,16 @@ name: release
 
 env:
   REGISTRY: ghcr.io
-  # name:directory:Cargo.toml (for the version tag). A new service only needs a line here
-  # (and its Argo apps in the homelab repo); its approval box appears on its first release.
+  # name:directory:Cargo.toml (for the version tag)[:Dockerfile target]. A new service only
+  # needs a line here (and its Argo apps in the homelab repo); its approval box appears on its
+  # first release. The target picks one final stage when a directory's Dockerfile builds more
+  # than one image (services/media: the world builder now, the media service from M3); without
+  # it the Dockerfile's last stage is built, as before.
   SERVICES: >-
     frontend:services/frontend:crates/bff/Cargo.toml
     auth:services/auth:Cargo.toml
     ai-pipeline:services/ai_pipeline:Cargo.toml
+    media-world:services/media:crates/world-build/Cargo.toml:world
   # The cluster's compile cache (.github/actions/rust), which the builds reach from BuildKit: a
   # build on either node reuses what an earlier build of the same Dockerfile compiled.
   SCCACHE_WEBDAV_ENDPOINT: "http://sccache.arc-runners.svc.cluster.local"
@@ -64,12 +68,12 @@ jobs:
         run: |
           matrix=
           for entry in $SERVICES; do
-            IFS=: read -r name dir cargo <<<"$entry"
+            IFS=: read -r name dir cargo target <<<"$entry"
             # A manual run, or a push with no earlier commit to compare against, builds everything,
             # as does a change to this workflow.
             if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null \
               || ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- "$dir" .github/workflows/release.yml; then
-              matrix+="${matrix:+,}{\"name\":\"$name\",\"dir\":\"$dir\",\"cargo\":\"$dir/$cargo\"}"
+              matrix+="${matrix:+,}{\"name\":\"$name\",\"dir\":\"$dir\",\"cargo\":\"$dir/$cargo\",\"target\":\"$target\"}"
               echo "build: $name"
             fi
           done
@@ -133,6 +137,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.dir }}
+          # Empty for a single-image Dockerfile: no --target, the last stage.
+          target: ${{ matrix.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

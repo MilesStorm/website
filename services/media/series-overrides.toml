@@ -1,0 +1,7 @@
+# Manual series fixes (02-world-data.md §5), applied after both sources are merged. A work listed
+# here gets exactly this series and position, whatever the data says. In git; anyone may add one.
+#
+# [[work]]
+# key = "OL15358691W"          # Open Library work key
+# series = "The Stormlight Archive"
+# position = 1                 # optional; decimals allowed (2.5)

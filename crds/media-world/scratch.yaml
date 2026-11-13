@@ -1,0 +1,16 @@
+# The build's scratch volume, kept between runs: the downloaded inputs (Open Library's monthly
+# dumps, ~18 GB; the Goodreads files, ~2 GB, kept for good), the DuckDB database (spills
+# included) and the stages' done-markers, so a failed run resumes where it stopped.
+# StorageClass ssd (Longhorn, one copy): Longhorn no longer schedules on the HDDs, and gamma's
+# NVMe is the disk with room. A Longhorn volume attaches on either node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-world-scratch
+  namespace: media
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ssd
+  resources:
+    requests:
+      storage: 150Gi

@@ -1,0 +1,21 @@
+# Every `#[allow(clippy::disallowed_..)]` in this workspace: the places that use a raw I/O or task
+# API banned in clippy.toml. crates/world-build/tests/allowed_raw_io.rs fails when the code and
+# this list differ, so a new exception is a reviewed change to this file. `count` is the number
+# of allowed lints in the file (an attribute that allows two lints counts twice).
+#
+# DuckDB and object_store do their own I/O beneath these wrappers: DuckDB reads and writes its
+# database file and the downloads in-process (each statement batch is a `duckdb.exec` span),
+# object_store makes its own HTTP requests to Garage (each call is an `S3 <operation>` CLIENT
+# span with peer.service=garage).
+
+[[allow]]
+file = "crates/world-build/src/trace.rs"
+lint = "disallowed_methods"
+count = 4
+reason = "the traced wrappers themselves: client (reqwest::Client::builder), spawn_blocking (tokio's), Duck::open and the tests' Duck::memory (DuckDB's constructors)"
+
+[[allow]]
+file = "crates/world-build/src/trace.rs"
+lint = "disallowed_types"
+count = 2
+reason = "client builds the reqwest::Client it wraps; Bucket::garage builds the S3 store it wraps"
