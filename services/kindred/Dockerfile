@@ -43,7 +43,9 @@ RUN cargo build --release --locked && \
 # One final stage per binary; the release workflow picks one with `target` (release.yml,
 # SERVICES). kindred-world: the monthly world build (crds/kindred-world). Nothing from the datasets
 # is in the image (PLAN.md rule 13): it downloads them onto its scratch volume at run time.
-FROM debian:bookworm-slim AS world
+# The same Debian release as the builder (cargo-chef:latest is trixie): the binary links that
+# release's glibc and libstdc++ (GLIBC_2.38, CXXABI_1.3.15), which bookworm lacks.
+FROM debian:trixie-slim AS world
 # The commit this image is built from (CI passes github.sha): `service.version` on traces and
 # logs, and the second half of a world's version name. Declared in this stage only, so a new
 # commit doesn't invalidate the build cache.
