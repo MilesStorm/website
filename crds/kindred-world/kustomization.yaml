@@ -1,0 +1,8 @@
+# The monthly book-world build (services/kindred, binary kindred-world). Production only: staging
+# reads the production world (05-service-and-infra.md §7). Homelab app argo/apps/kindred-world.yaml
+# deploys this into namespace kindred; Image Updater pins the production build of the image there.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- scratch.yaml
+- cronjob.yaml

@@ -338,39 +338,39 @@ service = "frontend"
 name = "GET /arcane/"
 reason = "a redirect to the page without the slash: nothing of ours inside"
 
-# media-world, the monthly book-world build (services/media): a batch job whose stages are
+# kindred-world, the monthly book-world build (services/kindred): a batch job whose stages are
 # in-process DuckDB and tantivy work, not calls to anything traced.
 [[leaf]]
-service = "media-world"
+service = "kindred-world"
 name = "duckdb *"
 reason = "one SQL stage run inside DuckDB (in-process): the work is in its engine, which makes no spans"
 
 [[leaf]]
-service = "media-world"
+service = "kindred-world"
 name = "pack.search_index"
 reason = "writes the tantivy search index from DuckDB rows: in-process CPU and disk work"
 
 [[leaf]]
-service = "media-world"
+service = "kindred-world"
 name = "verify"
 reason = "the gates and the search acceptance list against the new world: in-process searches"
 
 [[cpu]]
-service = "media-world"
+service = "kindred-world"
 name = "download.file"
 reason = "streams a multi-GB dump to disk and hashes it; the GET span ends when the headers arrive"
 
 [[cpu]]
-service = "media-world"
+service = "kindred-world"
 name = "world.assemble"
 reason = "between stages: computing the build report (DuckDB queries) and hashing every world file"
 
 [[cpu]]
-service = "media-world"
+service = "kindred-world"
 name = "world.verify"
 reason = "opening the world checks every file's SHA-256 before verify runs"
 
 [[cpu]]
-service = "media-world"
+service = "kindred-world"
 name = "stage *"
 reason = "a stage's setup (DuckDB macros and variables, the Goodreads field check) around its SQL"

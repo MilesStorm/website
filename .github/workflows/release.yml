@@ -27,13 +27,13 @@ env:
   # name:directory:Cargo.toml (for the version tag)[:Dockerfile target]. A new service only
   # needs a line here (and its Argo apps in the homelab repo); its approval box appears on its
   # first release. The target picks one final stage when a directory's Dockerfile builds more
-  # than one image (services/media: the world builder now, the media service from M3); without
+  # than one image (services/kindred: the world builder now, the kindred service from M3); without
   # it the Dockerfile's last stage is built, as before.
   SERVICES: >-
     frontend:services/frontend:crates/bff/Cargo.toml
     auth:services/auth:Cargo.toml
     ai-pipeline:services/ai_pipeline:Cargo.toml
-    media-world:services/media:crates/world-build/Cargo.toml:world
+    kindred-world:services/kindred:crates/world-build/Cargo.toml:world
   # The cluster's compile cache (.github/actions/rust), which the builds reach from BuildKit: a
   # build on either node reuses what an earlier build of the same Dockerfile compiled.
   SCCACHE_WEBDAV_ENDPOINT: "http://sccache.arc-runners.svc.cluster.local"
