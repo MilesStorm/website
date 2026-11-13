@@ -142,6 +142,7 @@ impl Duck {
         temp_dir: &std::path::Path,
     ) -> anyhow::Result<Duck> {
         let conn = duckdb::Connection::open(path)?;
+        conn.execute_batch(OFFLINE)?;
         conn.execute_batch(&format!(
             "SET memory_limit = '{}'; SET threads = {threads}; SET temp_directory = '{}'; SET preserve_insertion_order = false;",
             sql_text(memory_limit),
@@ -156,7 +157,9 @@ impl Duck {
     )]
     #[cfg(test)]
     pub fn memory() -> Duck {
-        Duck(duckdb::Connection::open_in_memory().expect("in-memory DuckDB"))
+        let conn = duckdb::Connection::open_in_memory().expect("in-memory DuckDB");
+        conn.execute_batch(OFFLINE).expect("extension settings");
+        Duck(conn)
     }
 
     /// Runs a batch of statements (one stage's SQL) in a span named after it.
@@ -170,7 +173,7 @@ impl Duck {
         self.0
             .execute_batch(sql)
             .inspect_err(|_| fail(&span, "duckdb"))
-            .map_err(|e| anyhow::anyhow!("{name}: {e}"))
+            .map_err(|e| anyhow::anyhow!("{name}: {}", duckdb_error(&e)))
     }
 
     /// Sets a session variable for `getvariable(name)`.
@@ -189,6 +192,46 @@ impl Duck {
     pub fn conn(&self) -> &duckdb::Connection {
         &self.0
     }
+}
+
+/// DuckDB never installs or loads an extension by itself: JSON is compiled in (Cargo.toml),
+/// and nothing is fetched from extensions.duckdb.org into `$HOME/.duckdb` at run time.
+const OFFLINE: &str =
+    "SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;";
+
+/// DuckDB error classes whose text is about our SQL, never the data: shown whole.
+const SQL_ERRORS: [&str; 4] = [
+    "Parser Error",
+    "Binder Error",
+    "Catalog Error",
+    "Not implemented Error",
+];
+
+/// A DuckDB error as it may be logged (PLAN.md rule 14). Errors about the data (conversion,
+/// invalid input, CSV and JSON reading) quote input lines, which hold book titles: only their
+/// class is kept.
+pub fn duckdb_error(e: &duckdb::Error) -> String {
+    let text = e.to_string();
+    let class = text
+        .split_once(": ")
+        .map(|(c, _)| c)
+        .filter(|c| c.ends_with("Error"));
+    match class {
+        Some(c) if SQL_ERRORS.contains(&c) => text.lines().next().unwrap_or_default().to_owned(),
+        Some(c) => format!("{c} (details withheld: they may quote input data)"),
+        None => "DuckDB error (details withheld: they may quote input data)".to_owned(),
+    }
+}
+
+/// An error chain as it may be logged: DuckDB errors in it go through [`duckdb_error`].
+pub fn loggable(e: &anyhow::Error) -> String {
+    e.chain()
+        .map(|cause| match cause.downcast_ref::<duckdb::Error>() {
+            Some(d) => duckdb_error(d),
+            None => cause.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 /// A value for [`Duck::set`].
@@ -265,5 +308,56 @@ impl Bucket {
             Err(_) => fail(&span, "_OTHER"),
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rule 14: a stage failing on a malformed input line logs no text from that line.
+    #[test]
+    fn duckdb_errors_about_data_quote_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("bad.csv");
+        std::fs::write(
+            &csv,
+            "work,rating\n1,5\nThe Secret Title Of A Book,not a number\n",
+        )
+        .unwrap();
+        let duck = Duck::memory();
+        let sql = format!(
+            "CREATE TABLE t AS SELECT * FROM read_csv('{}', header = true, columns = {{'work': 'BIGINT', 'rating': 'INTEGER'}});",
+            csv.display()
+        );
+        let err = duck.exec("ingest", &sql).unwrap_err().to_string();
+        assert!(err.starts_with("ingest: "), "{err}");
+        assert!(
+            !err.contains("Secret") && !err.contains("not a number"),
+            "{err}"
+        );
+
+        // Raw DuckDB errors that reach main through `?` are cleaned when logged.
+        let raw = duck
+            .conn()
+            .query_row("SELECT CAST('The Secret Title' AS INTEGER)", [], |r| {
+                r.get::<_, i32>(0)
+            })
+            .unwrap_err();
+        let logged = loggable(&anyhow::Error::from(raw).context("pack"));
+        assert!(
+            logged.starts_with("pack: ") && !logged.contains("Secret"),
+            "{logged}"
+        );
+
+        // Errors about our SQL stay readable.
+        let err = duck
+            .exec("series", "SELECT no_such_column FROM range(1)")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Binder Error") && err.contains("no_such_column"),
+            "{err}"
+        );
     }
 }

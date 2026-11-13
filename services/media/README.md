@@ -86,6 +86,12 @@ After changing `fixtures/works.toml`, download the records again (one request a 
 cargo run -p world-build -- fixture-refresh
 ```
 
+## Searching a world by hand
+
+`media-world search --world <dir> "<query>"` prints the hits, titles included, to the
+terminal. Use it on the fixture world or a local copy only, never in the cluster: there its
+output is the pod's log, and logs must not hold titles or search text.
+
 ## Checks
 
 ```sh

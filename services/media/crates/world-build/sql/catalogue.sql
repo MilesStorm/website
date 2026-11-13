@@ -2,11 +2,18 @@
 -- Variables: min_goodreads_ratings, max_other_titles, min_description_chars, not_a_book_titles,
 -- not_a_book_subjects (one case-insensitive regular expression each).
 
+-- Edition titles, most editions first, then alphabetical: the same world from the same inputs,
+-- and the titles most readers know are the ones kept.
+CREATE OR REPLACE TABLE edition_titles AS
+SELECT work, list(title ORDER BY editions DESC, title) AS titles
+FROM (SELECT work, title, count(*) AS editions FROM ol_editions
+      WHERE work IS NOT NULL AND title IS NOT NULL GROUP BY work, title)
+GROUP BY work;
+
 CREATE OR REPLACE TABLE edition_facts AS
 SELECT
     work,
     bool_or(len(isbns) > 0) AS has_isbn,
-    list_distinct(list(title) FILTER (WHERE title IS NOT NULL)) AS edition_titles,
     median(pages) FILTER (WHERE pages BETWEEN 1 AND 20000) AS pages,
     list_sort(list_distinct(flatten(list(languages)))) AS languages,
     min(publish_year) AS first_edition_year,
@@ -38,7 +45,7 @@ SELECT
     w.title,
     w.subtitle,
     wa.authors,
-    list_slice(list_filter(e.edition_titles, lambda t: lower(t) <> lower(w.title)), 1, getvariable('max_other_titles')) AS other_titles,
+    list_slice(list_filter(coalesce(et.titles, []), lambda t: lower(t) <> lower(w.title)), 1, getvariable('max_other_titles')) AS other_titles,
     -- The work's own date when it has one; editions and Goodreads otherwise.
     coalesce(w.first_publish_year, least(e.first_edition_year, g.gr_year)) AS year,
     CAST(e.pages AS INTEGER) AS pages,
@@ -58,6 +65,7 @@ SELECT
 FROM ol_works w
 JOIN work_authors wa ON wa.work = w.work
 JOIN edition_facts e ON e.work = w.work AND e.has_isbn
+LEFT JOIN edition_titles et ON et.work = w.work
 LEFT JOIN reader_signs r ON r.work = w.work
 LEFT JOIN gr_per_work g ON g.work = w.work
 WHERE w.title IS NOT NULL

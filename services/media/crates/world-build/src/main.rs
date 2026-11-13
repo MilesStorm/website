@@ -89,7 +89,10 @@ async fn main() -> ExitCode {
     };
     let result = run(cli).await;
     if let Err(e) = &result {
-        tracing::error!(error = format!("{e:#}"), "media-world failed");
+        tracing::error!(
+            error = world_build::trace::loggable(e),
+            "media-world failed"
+        );
     }
     // Flush spans and logs before exit; the tracer first, the logger still carries its failure.
     if let Some((spans, logs)) = providers {

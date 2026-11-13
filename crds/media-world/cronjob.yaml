@@ -18,12 +18,18 @@ spec:
     spec:
       # One retry; the stages already done are skipped.
       backoffLimit: 1
+      # A hung run fails after 2 days: the alert fires and next month's run isn't blocked
+      # (concurrencyPolicy Forbid).
+      activeDeadlineSeconds: 172800
       template:
         metadata:
           labels:
             app: media-world
         spec:
           restartPolicy: Never
+          # The scratch volume's only copy is on gamma's NVMe (scratch.yaml): run beside it.
+          nodeSelector:
+            kubernetes.io/hostname: gamma
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000

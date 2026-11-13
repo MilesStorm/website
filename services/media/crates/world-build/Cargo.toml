@@ -19,8 +19,9 @@ hex.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 clap = { version = "4", features = ["derive", "env"] }
-# The data joins (sql/). Bundled: no system library, the same DuckDB everywhere.
-duckdb = { version = "~1.20000.1", features = ["bundled"] }
+# The data joins (sql/). Bundled, with the JSON extension compiled in: no system library and
+# nothing fetched from extensions.duckdb.org at run time (trace::Duck turns autoloading off).
+duckdb = { version = "~1.20000.1", features = ["bundled", "json"] }
 flate2 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "fs", "io-util", "time"] }
@@ -46,5 +47,5 @@ opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
 
 [dev-dependencies]
-# Reads allowed_raw_io.toml in tests/allowed_raw_io.rs
+# Reads allowed_raw_io.toml in tests/allowed_raw_io.rs, Cargo.toml in tests/fixture.rs
 toml.workspace = true

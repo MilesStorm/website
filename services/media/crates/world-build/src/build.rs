@@ -13,6 +13,18 @@ use crate::download::{self, Source};
 use crate::trace::{self, Bucket, Duck, Peer};
 use crate::{pack, publish, report, stages, verify};
 
+/// Every environment variable media-world reads (directly or through the OpenTelemetry SDK).
+/// Nothing else: in particular no database credentials (02-world-data.md §1 invariant 1).
+/// tests/fixture.rs checks the code and the CronJob against this list.
+pub const ENVIRONMENT: [&str; 6] = [
+    "GIT_SHA",
+    "RUST_LOG",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_RESOURCE_ATTRIBUTES",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+];
+
 /// The commit media-world was built from (the image's `GIT_SHA`).
 pub fn builder() -> String {
     std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".into())
@@ -118,6 +130,27 @@ pub fn bucket(config: &Config) -> anyhow::Result<Bucket> {
     )
 }
 
+/// Verify, then (with a bucket) publish as version `base`: the change gates compare with the
+/// version being served. A failed verify returns before anything is uploaded, so
+/// `current.json` stays where it was (02-world-data.md §1 invariant 3).
+pub async fn verify_then_publish(
+    world: &Path,
+    config: &Config,
+    acceptance: &Acceptance,
+    bucket: Option<&Bucket>,
+    base: &str,
+) -> anyhow::Result<Option<String>> {
+    let previous = match bucket {
+        Some(bucket) => publish::current_report(bucket).await?,
+        None => None,
+    };
+    verify(world, config, acceptance, previous).await?;
+    match bucket {
+        Some(bucket) => Ok(Some(publish::publish(bucket, world, base).await?)),
+        None => Ok(None),
+    }
+}
+
 /// `media-world build`.
 #[tracing::instrument(name = "world.build", skip_all)]
 pub async fn run(
@@ -130,10 +163,9 @@ pub async fn run(
     let paths = Paths::new(scratch);
     // Before the long part: a wrong key fails in seconds, not hours.
     let bucket = if publish { Some(bucket(config)?) } else { None };
-    let previous = match &bucket {
-        Some(bucket) => publish::current_report(bucket).await?,
-        None => None,
-    };
+    if let Some(bucket) = &bucket {
+        publish::current(bucket).await?;
+    }
 
     let client = trace::client(
         Peer {
@@ -147,19 +179,14 @@ pub async fn run(
     let inputs = download::fetch_all(&client, &paths.downloads, &sources).await?;
 
     assemble(scratch, &paths.world, config, overrides, &sources, &inputs).await?;
-    verify(&paths.world, config, acceptance, previous).await?;
-
-    match bucket {
-        Some(bucket) => {
-            let sha = builder();
-            let base = format!(
-                "{}-{}",
-                chrono::Utc::now().format("%Y%m%d"),
-                &sha[..sha.len().min(7)]
-            );
-            let version = publish::publish(&bucket, &paths.world, &base).await?;
-            tracing::info!(version, "world published");
-        }
+    let sha = builder();
+    let base = format!(
+        "{}-{}",
+        chrono::Utc::now().format("%Y%m%d"),
+        &sha[..sha.len().min(7)]
+    );
+    match verify_then_publish(&paths.world, config, acceptance, bucket.as_ref(), &base).await? {
+        Some(version) => tracing::info!(version, "world published"),
         None => {
             tracing::info!(world = %paths.world.display(), "built and verified; not published (--no-publish)")
         }
