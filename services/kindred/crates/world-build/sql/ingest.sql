@@ -2,12 +2,13 @@
 -- Variables (set by kindred-world): the downloaded file of each input, ol_* and gr_*.
 
 -- An Open Library dump: type, key, revision, last_modified, JSON; tab-separated, no header,
--- no quoting. Some records are long (descriptions, tables of contents).
+-- no quoting. Some records are long (descriptions, tables of contents). buffer_size is explicit:
+-- by default it is 16 x max_line_size, a 2 GiB block per buffer, past memory_limit.
 CREATE OR REPLACE MACRO ol_dump(path, wanted) AS TABLE
     SELECT key, CAST(json AS JSON) AS j
     FROM read_csv(path, delim = '\t', quote = '', escape = '', header = false, auto_detect = false,
                   columns = {'type': 'VARCHAR', 'key': 'VARCHAR', 'revision': 'BIGINT', 'modified': 'VARCHAR', 'json': 'VARCHAR'},
-                  max_line_size = 134217728, compression = 'gzip')
+                  max_line_size = 134217728, buffer_size = 268435456, compression = 'gzip')
     WHERE type = wanted;
 
 CREATE OR REPLACE TABLE ol_works AS
