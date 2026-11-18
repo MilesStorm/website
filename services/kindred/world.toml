@@ -69,9 +69,9 @@ prior_weight = 50.0
 [search]
 # A hit's score: text relevance, plus this times popularity (ln(1 + ratings)), plus
 # whole_title_bonus when the query is a whole title of the work (last word possibly unfinished).
-popularity_weight = 1.0
-title_boost = 3.0
-other_titles_boost = 1.5
+popularity_weight = 3.0
+title_boost = 2.0
+other_titles_boost = 1.0
 authors_boost = 2.0
 series_boost = 1.5
 whole_title_bonus = 10.0

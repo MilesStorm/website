@@ -90,6 +90,18 @@ fn cached(dir: &Path, source: &Source) -> Option<Meta> {
     (size == meta.size && meta.url == source.url).then_some(meta)
 }
 
+/// The size a response announces. Read from the header: `Response::content_length` describes the
+/// body received, which for a HEAD response is empty.
+fn announced_size(headers: &http::HeaderMap) -> Option<u64> {
+    headers
+        .get(http::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
+        .filter(|&n| n > 0)
+}
+
 #[tracing::instrument(name = "download.all", skip_all)]
 pub async fn fetch_all(
     client: &TracedClient,
@@ -117,7 +129,7 @@ async fn fetch(client: &TracedClient, dir: &Path, source: &Source) -> anyhow::Re
         return Ok(meta.input(source));
     }
     let head = client.head(&source.url).send().await?.error_for_status()?;
-    let remote_size = head.content_length().filter(|&n| n > 0);
+    let remote_size = announced_size(head.headers());
     let last_modified = head
         .headers()
         .get(http::header::LAST_MODIFIED)
@@ -183,4 +195,23 @@ pub fn register_local(dir: &Path, source: &Source) -> anyhow::Result<InputFile> 
     };
     std::fs::write(meta_path(dir, source), serde_json::to_vec_pretty(&meta)?)?;
     Ok(meta.input(source))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(length: &str) -> http::HeaderMap {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(http::header::CONTENT_LENGTH, length.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn the_announced_size_comes_from_the_header() {
+        assert_eq!(announced_size(&headers("4078855962")), Some(4_078_855_962));
+        assert_eq!(announced_size(&headers("0")), None);
+        assert_eq!(announced_size(&headers("many")), None);
+        assert_eq!(announced_size(&http::HeaderMap::new()), None);
+    }
 }
