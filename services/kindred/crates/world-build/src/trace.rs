@@ -199,12 +199,14 @@ impl Duck {
 const OFFLINE: &str =
     "SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;";
 
-/// DuckDB error classes whose text is about our SQL, never the data: shown whole.
-const SQL_ERRORS: [&str; 4] = [
+/// DuckDB error classes whose first line is about our SQL or the engine, never the data: shown
+/// whole. An out-of-memory error gives the failed allocation and the memory in use.
+const ENGINE_ERRORS: [&str; 5] = [
     "Parser Error",
     "Binder Error",
     "Catalog Error",
     "Not implemented Error",
+    "Out of Memory Error",
 ];
 
 /// A DuckDB error as it may be logged (PLAN.md rule 14). Errors about the data (conversion,
@@ -217,7 +219,7 @@ pub fn duckdb_error(e: &duckdb::Error) -> String {
         .map(|(c, _)| c)
         .filter(|c| c.ends_with("Error"));
     match class {
-        Some(c) if SQL_ERRORS.contains(&c) => text.lines().next().unwrap_or_default().to_owned(),
+        Some(c) if ENGINE_ERRORS.contains(&c) => text.lines().next().unwrap_or_default().to_owned(),
         Some(c) => format!("{c} (details withheld: they may quote input data)"),
         None => "DuckDB error (details withheld: they may quote input data)".to_owned(),
     }
@@ -359,5 +361,22 @@ mod tests {
             err.contains("Binder Error") && err.contains("no_such_column"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn out_of_memory_errors_keep_their_numbers() {
+        let duck = Duck::memory();
+        duck.conn()
+            .execute_batch("SET memory_limit = '10MB'; SET temp_directory = '';")
+            .unwrap();
+        let err = duck
+            .exec(
+                "ingest",
+                "CREATE TABLE t AS SELECT repeat('x', 1000) || i AS v FROM range(1000000) r(i);",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("ingest: Out of Memory Error: "), "{err}");
+        assert!(err.contains("used") && !err.contains("withheld"), "{err}");
     }
 }
