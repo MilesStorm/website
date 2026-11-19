@@ -42,9 +42,7 @@ impl Space {
         // Popularity is the meta block's second number.
         let pop = layout.m().start + 1;
         let mut order: Vec<u32> = cand.clone();
-        order.sort_by(|&a, &b| {
-            v.phi.row(b as usize)[pop].total_cmp(&v.phi.row(a as usize)[pop])
-        });
+        order.sort_by(|&a, &b| v.phi.row(b as usize)[pop].total_cmp(&v.phi.row(a as usize)[pop]));
         let mut pop_pct = vec![0.0f32; v.phi.len()];
         for (rank, &r) in order.iter().enumerate() {
             pop_pct[r as usize] = 1.0 - rank as f32 / order.len().max(1) as f32;

@@ -126,6 +126,9 @@ pub struct Embed {
     pub dimensions: usize,
     pub max_tokens: usize,
     pub batch: usize,
+    /// At most this many tokens (texts × padded length) in one forward pass: long texts go
+    /// through in smaller batches, so the GPU memory a pass needs is bounded (the card is shared).
+    pub batch_tokens: usize,
     pub max_subjects: usize,
     pub max_description_chars: usize,
 }
@@ -239,9 +242,21 @@ impl Aspects {
         for a in &self.aspect {
             anyhow::ensure!(!a.id.is_empty(), "aspects.toml: an aspect without an id");
             anyhow::ensure!(seen.insert(&a.id), "aspects.toml: {} twice", a.id);
-            anyhow::ensure!(!a.shelves.is_empty() || !a.subjects.is_empty(), "aspects.toml: {} matches nothing", a.id);
-            anyhow::ensure!(!a.chip || !a.label.is_empty(), "aspects.toml: chip {} has no label", a.id);
-            anyhow::ensure!(["", "light", "dark"].contains(&a.steer.as_str()), "aspects.toml: {}: steer is light, dark or empty", a.id);
+            anyhow::ensure!(
+                !a.shelves.is_empty() || !a.subjects.is_empty(),
+                "aspects.toml: {} matches nothing",
+                a.id
+            );
+            anyhow::ensure!(
+                !a.chip || !a.label.is_empty(),
+                "aspects.toml: chip {} has no label",
+                a.id
+            );
+            anyhow::ensure!(
+                ["", "light", "dark"].contains(&a.steer.as_str()),
+                "aspects.toml: {}: steer is light, dark or empty",
+                a.id
+            );
         }
         Ok(())
     }

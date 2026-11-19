@@ -23,11 +23,19 @@ pub fn aspects_path(model: &Path) -> PathBuf {
 }
 
 pub fn c_text_path(model: &Path, cold: bool) -> PathBuf {
-    model.join(if cold { "c-text-cold.bin" } else { "c-text.bin" })
+    model.join(if cold {
+        "c-text-cold.bin"
+    } else {
+        "c-text.bin"
+    })
 }
 
 pub fn a_text_path(model: &Path, cold: bool) -> PathBuf {
-    model.join(if cold { "a-text-cold.bin" } else { "a-text.bin" })
+    model.join(if cold {
+        "a-text-cold.bin"
+    } else {
+        "a-text.bin"
+    })
 }
 
 pub fn run(run: &Run) -> anyhow::Result<()> {
@@ -40,8 +48,15 @@ pub fn run(run: &Run) -> anyhow::Result<()> {
         let raw_c = Matrix::read(&factors::path(&run.model, variant))?;
         let excluded = |key: u64| variant && cold.contains(&key);
         let (c_map, c_fit) = fit(&embeddings, &raw_c, &excluded, &run.config.text_maps.ridge)?;
-        let (a_map, a_fit) = fit(&embeddings, &aspects, &excluded, &run.config.text_maps.ridge)?;
-        c_map.apply(&embeddings).write(&c_text_path(&run.model, variant))?;
+        let (a_map, a_fit) = fit(
+            &embeddings,
+            &aspects,
+            &excluded,
+            &run.config.text_maps.ridge,
+        )?;
+        c_map
+            .apply(&embeddings)
+            .write(&c_text_path(&run.model, variant))?;
         let mut a = a_map.apply(&embeddings);
         a.data.iter_mut().for_each(|x| *x = x.clamp(-3.0, 3.0));
         a.write(&a_text_path(&run.model, variant))?;
@@ -93,10 +108,10 @@ pub fn cold_works(run: &Run) -> anyhow::Result<HashSet<u64>> {
         .duck
         .conn()
         .prepare("SELECT work FROM catalogue WHERE year >= ?")?;
-    let rows = statement.query_map([run.config.factors.cold_from_year], |r| {
-        r.get::<_, i64>(0)
-    })?;
-    Ok(rows.map(|r| r.map(|k| k as u64)).collect::<Result<_, _>>()?)
+    let rows = statement.query_map([run.config.factors.cold_from_year], |r| r.get::<_, i64>(0))?;
+    Ok(rows
+        .map(|r| r.map(|k| k as u64))
+        .collect::<Result<_, _>>()?)
 }
 
 /// How well a map predicts on its held-out tenth.
@@ -262,7 +277,11 @@ pub fn fit(
         FitQuality {
             trained_on: train.len() + test.len(),
             ridge,
-            held_out_r2: if total > 0.0 { 1.0 - residual / total } else { 0.0 },
+            held_out_r2: if total > 0.0 {
+                1.0 - residual / total
+            } else {
+                0.0
+            },
         },
     ))
 }
@@ -281,8 +300,10 @@ mod tests {
         for key in 1..2000u64 {
             let xi: Vec<f32> = (0..p).map(|_| rng.random_range(-1.0..1.0)).collect();
             let yi: Vec<f32> = (0..q)
-                .map(|j| 0.5 + (0..p).map(|i| xi[i] * truth[i * q + j]).sum::<f32>()
-                    + rng.random_range(-0.01..0.01))
+                .map(|j| {
+                    0.5 + (0..p).map(|i| xi[i] * truth[i * q + j]).sum::<f32>()
+                        + rng.random_range(-0.01..0.01)
+                })
                 .collect();
             x.push(key, &xi);
             y.push(key, &yi);

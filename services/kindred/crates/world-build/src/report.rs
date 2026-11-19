@@ -16,7 +16,11 @@ pub const COMPARED: [&str; 6] = [
     "vector_c_from_text",
 ];
 
-pub fn compute(duck: &Duck, durations: &Durations, model: &std::path::Path) -> anyhow::Result<Value> {
+pub fn compute(
+    duck: &Duck,
+    durations: &Durations,
+    model: &std::path::Path,
+) -> anyhow::Result<Value> {
     let count =
         |sql: &str| -> anyhow::Result<i64> { Ok(duck.conn().query_row(sql, [], |r| r.get(0))?) };
     let mut report = Map::new();
@@ -112,7 +116,10 @@ pub fn compute(duck: &Duck, durations: &Durations, model: &std::path::Path) -> a
         "rating_users",
         json!(count("SELECT count(DISTINCT user) FROM ratings")?),
     );
-    put("train_likes", json!(count("SELECT count(*) FROM train_likes")?));
+    put(
+        "train_likes",
+        json!(count("SELECT count(*) FROM train_likes")?),
+    );
     put(
         "train_works",
         json!(count("SELECT count(DISTINCT work) FROM train_likes")?),
@@ -125,10 +132,14 @@ pub fn compute(duck: &Duck, durations: &Durations, model: &std::path::Path) -> a
         "searchable_with_shelf_aspects",
         json!(count("SELECT count(DISTINCT work) FROM work_aspects")?),
     );
-    let counts: Value = serde_json::from_slice(&std::fs::read(crate::vectors::report_path(model))?)?;
+    let counts: Value =
+        serde_json::from_slice(&std::fs::read(crate::vectors::report_path(model))?)?;
     let normal = &counts["normal"];
     put("vector_works", normal["with_vector"].clone());
-    put("vector_c_from_interactions", normal["c_from_interactions"].clone());
+    put(
+        "vector_c_from_interactions",
+        normal["c_from_interactions"].clone(),
+    );
     put("vector_c_from_text", normal["c_from_text"].clone());
     put("vector_a_from_shelves", normal["a_from_shelves"].clone());
     put("vector_a_from_text", normal["a_from_text"].clone());

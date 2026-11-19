@@ -134,18 +134,33 @@ async fn the_benchmark_recovers_the_planted_model() {
     assert!(model.confidence_cuts[0] > 0.0 && model.confidence_cuts[0] <= model.confidence_cuts[1]);
     // The synthetic readers' stars don't depend on quality or popularity, so the fitted prior
     // mean of the meta block stays near zero here (on real data it is what P measures).
-    assert!(model.prior.m0_meta.iter().all(|m| m.is_finite() && m.abs() < 0.5), "{:?}", model.prior);
+    assert!(
+        model
+            .prior
+            .m0_meta
+            .iter()
+            .all(|m| m.is_finite() && m.abs() < 0.5),
+        "{:?}",
+        model.prior
+    );
     let report = &manifest.report;
     let recommendable = report["recommendable_works"].as_u64().unwrap();
     assert!(recommendable >= 100, "{report}");
-    assert!(report["searchable_with_shelf_aspects"].as_u64().unwrap() >= 100, "{report}");
+    assert!(
+        report["searchable_with_shelf_aspects"].as_u64().unwrap() >= 100,
+        "{report}"
+    );
     let mut with_vector = 0;
     let mut flagged = 0;
     for row in (0..world.len() as u32).map(world::reader::Row) {
         if let Some(v) = world.vector(row) {
             with_vector += 1;
             assert_eq!(v[model.layout.bias()], 1.0);
-            let c: f32 = v[model.layout.c()].iter().map(|x| x * x).sum::<f32>().sqrt();
+            let c: f32 = v[model.layout.c()]
+                .iter()
+                .map(|x| x * x)
+                .sum::<f32>()
+                .sqrt();
             assert!(c <= 1.0 + 1e-4, "c is at most unit length");
         }
         if world.flags(row) & flags::RECOMMENDABLE != 0 {
@@ -154,11 +169,15 @@ async fn the_benchmark_recovers_the_planted_model() {
         }
     }
     assert_eq!(flagged as u64, recommendable);
-    assert_eq!(with_vector, report["vector_works"].as_u64().unwrap() as usize);
+    assert_eq!(
+        with_vector,
+        report["vector_works"].as_u64().unwrap() as usize
+    );
 
     let settings = fixture::settings(&config, &overrides, &aspects());
     let paths = build::Paths::new(&scratch);
-    let duck = world_build::trace::Duck::open(&paths.database, "2GB", 2, &paths.duckdb_temp).unwrap();
+    let duck =
+        world_build::trace::Duck::open(&paths.database, "2GB", 2, &paths.duckdb_temp).unwrap();
     let markdown = bench::run_full(
         &duck,
         &settings.config,
@@ -169,19 +188,33 @@ async fn the_benchmark_recovers_the_planted_model() {
     .unwrap();
     assert!(markdown.contains("| G1 |"), "{markdown}");
     let full: bench::Report =
-        serde_json::from_slice(&std::fs::read(paths.model.join("bench-test.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(paths.model.join("bench-test.json")).unwrap())
+            .unwrap();
     let ndcg = &full.tables["ndcg@10"];
     let at = |method: &str, n: usize| {
         let i = full.revealed.iter().position(|&x| x == n).unwrap();
         ndcg[method][i].as_f64().unwrap()
     };
-    let (f, p, c) = (at("FULL", 20), at("P (prior only)", 20), at("C (content nearest)", 20));
-    assert!(f > 1.2 * p && f > 1.2 * c, "FULL {f}, P {p}, C {c}\n{markdown}");
+    let (f, p, c) = (
+        at("FULL", 20),
+        at("P (prior only)", 20),
+        at("C (content nearest)", 20),
+    );
+    assert!(
+        f > 1.2 * p && f > 1.2 * c,
+        "FULL {f}, P {p}, C {c}\n{markdown}"
+    );
     // With a few hundred works, few unread ones are left at n = 50 and every method's NDCG falls
     // (G5 is for the real world); what must grow is FULL's lead over the prior.
-    assert!(at("FULL", 50) / at("P (prior only)", 50) > at("FULL", 5) / at("P (prior only)", 5), "{markdown}");
+    assert!(
+        at("FULL", 50) / at("P (prior only)", 50) > at("FULL", 5) / at("P (prior only)", 5),
+        "{markdown}"
+    );
     let gate = |id: &str| full.gates.iter().find(|g| g.id == id).unwrap().passed;
-    assert!(gate("G1") && gate("G2") && gate("G4") && gate("G6"), "{markdown}");
+    assert!(
+        gate("G1") && gate("G2") && gate("G4") && gate("G6"),
+        "{markdown}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -319,11 +319,17 @@ impl Run<'_> {
             std::fs::create_dir_all(&self.model)?;
             // The Rust stages hold their own data (the factorization's pairs, the embeddings):
             // DuckDB gives back its buffer pool first, so the two never add up.
-            self.duck.exec("release memory", &format!("SET memory_limit = '{RUST_STAGE_DUCKDB}';"))?;
+            self.duck.exec(
+                "release memory",
+                &format!("SET memory_limit = '{RUST_STAGE_DUCKDB}';"),
+            )?;
             let result = rust(self);
             self.duck.exec(
                 "restore memory",
-                &format!("SET memory_limit = '{}';", self.config.duckdb.memory_limit.replace('\'', "")),
+                &format!(
+                    "SET memory_limit = '{}';",
+                    self.config.duckdb.memory_limit.replace('\'', "")
+                ),
             )?;
             result?;
         }

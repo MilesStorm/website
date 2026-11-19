@@ -70,9 +70,8 @@ impl Matrix {
     }
 
     pub fn read(path: &Path) -> anyhow::Result<Matrix> {
-        let mut input = BufReader::new(
-            std::fs::File::open(path).with_context(|| path.display().to_string())?,
-        );
+        let mut input =
+            BufReader::new(std::fs::File::open(path).with_context(|| path.display().to_string())?);
         let mut head = [0u8; 24];
         input.read_exact(&mut head)?;
         if &head[..8] != MAGIC {

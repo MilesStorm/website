@@ -62,7 +62,13 @@ pub fn report_unmatched(run: &Run) -> anyhow::Result<()> {
         .conn()
         .prepare("SELECT shelf, n FROM unmatched_shelves ORDER BY n DESC, shelf")?;
     let rows = statement
-        .query_map([], |r| Ok(format!("{}:{}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .query_map([], |r| {
+            Ok(format!(
+                "{}:{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?
+            ))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     let (works, with_aspects): (i64, i64) = run.duck.conn().query_row(
         "SELECT (SELECT count(*) FROM aspect_totals), (SELECT count(DISTINCT work) FROM work_aspects)",
@@ -85,7 +91,10 @@ mod tests {
 
     #[test]
     fn subject_phrases_are_escaped() {
-        assert_eq!(regex_escape("children's (fiction)"), "children's \\(fiction\\)");
+        assert_eq!(
+            regex_escape("children's (fiction)"),
+            "children's \\(fiction\\)"
+        );
         assert_eq!(regex_escape("sci-fi"), "sci-fi");
     }
 }

@@ -110,6 +110,9 @@ model_id = "BAAI/bge-small-en-v1.5"
 dimensions = 384
 max_tokens = 512
 batch = 64
+# At most this many tokens in one forward pass (texts × padded length): a bounded share of eta's
+# shared 6 GB GPU. 8192 is 16 texts at max_tokens.
+batch_tokens = 8192
 # The text given to the model: title, authors, this many subjects, the description's first
 # characters.
 max_subjects = 10

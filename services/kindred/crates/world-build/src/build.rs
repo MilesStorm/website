@@ -122,8 +122,14 @@ pub async fn assemble(
             bench: serde_json::to_value(&gate)?,
         };
         let built_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let manifest =
-            writer.finish(built_at, builder(), inputs, config.search.params(), report, model)?;
+        let manifest = writer.finish(
+            built_at,
+            builder(),
+            inputs,
+            config.search.params(),
+            report,
+            model,
+        )?;
         // One log line with every number (no titles, PLAN.md rule 14).
         tracing::info!(report = %manifest.report, "build report");
         Ok(manifest)

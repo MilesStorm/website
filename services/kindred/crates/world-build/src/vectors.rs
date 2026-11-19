@@ -23,11 +23,19 @@ pub const A_FROM_TEXT: u8 = world::reader::source::A_FROM_TEXT;
 pub const RECOMMENDABLE: u8 = 4;
 
 pub fn path(model: &Path, cold: bool) -> PathBuf {
-    model.join(if cold { "vectors-cold.bin" } else { "vectors.bin" })
+    model.join(if cold {
+        "vectors-cold.bin"
+    } else {
+        "vectors.bin"
+    })
 }
 
 fn flags_path(model: &Path, cold: bool) -> PathBuf {
-    model.join(if cold { "vectors-flags-cold.bin" } else { "vectors-flags.bin" })
+    model.join(if cold {
+        "vectors-flags-cold.bin"
+    } else {
+        "vectors-flags.bin"
+    })
 }
 
 pub fn report_path(model: &Path) -> PathBuf {
@@ -144,7 +152,10 @@ fn facts(run: &Run) -> anyhow::Result<Vec<Facts>> {
             work: r.get::<_, i64>(0)? as u64,
             popularity: r.get(1)?,
             quality: r.get(2)?,
-            pages: r.get::<_, Option<i64>>(3)?.filter(|&p| p > 0).map(|p| p as f64),
+            pages: r
+                .get::<_, Option<i64>>(3)?
+                .filter(|&p| p > 0)
+                .map(|p| p as f64),
             year: r.get::<_, Option<i64>>(4)?.map(|y| y as f64),
             cover: r.get(5)?,
             not_a_book: r.get(6)?,
@@ -199,7 +210,10 @@ fn assemble(
             (None, Some(c)) => (unit(c, text_shrink as f32), C_FROM_TEXT),
             (None, None) => continue,
         };
-        let a = match (aspects.get(f.work).filter(|_| !excluded(f.work)), a_text.get(f.work)) {
+        let a = match (
+            aspects.get(f.work).filter(|_| !excluded(f.work)),
+            a_text.get(f.work),
+        ) {
             (Some(a), _) => {
                 counts.a_from_shelves += 1;
                 a.to_vec()
@@ -306,7 +320,17 @@ mod tests {
         let c_text = matrix(2, &[(2, vec![1.0, 0.0]), (3, vec![0.0, 5.0])]);
         let aspects = matrix(1, &[(1, vec![2.0]), (3, vec![1.5])]);
         let a_text = matrix(1, &[(2, vec![-1.0]), (3, vec![0.2])]);
-        let (v, n) = assemble(layout, &facts, &raw_c, &c_text, &aspects, &a_text, &|k| k == 3, 0.5, 3.0);
+        let (v, n) = assemble(
+            layout,
+            &facts,
+            &raw_c,
+            &c_text,
+            &aspects,
+            &a_text,
+            &|k| k == 3,
+            0.5,
+            3.0,
+        );
         assert_eq!(v.phi.keys, vec![1, 2, 3, 4]);
         // Work 1: unit factors, its own aspects; popularity 2 < 3: not recommendable.
         assert_eq!(&v.phi.row(0)[..4], &[1.0, 0.6, 0.8, 2.0]);

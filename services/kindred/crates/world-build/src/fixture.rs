@@ -230,11 +230,12 @@ pub fn goodreads(
             (Some(s), Some(p)) => format!("{} ({s}, #{p})", w.title),
             _ => w.title.clone(),
         };
-        let latent: [f64; PLANTED_DIMS] =
-            std::array::from_fn(|_| rng.random_range(-1.0..1.0));
+        let latent: [f64; PLANTED_DIMS] = std::array::from_fn(|_| rng.random_range(-1.0..1.0));
         // Readers shelve a work by its planted traits, and everyone files it as read.
-        let mut shelves = vec![json!({"count": (ratings * 3).to_string(), "name": "to-read"}),
-                               json!({"count": ratings.to_string(), "name": "read"})];
+        let mut shelves = vec![
+            json!({"count": (ratings * 3).to_string(), "name": "to-read"}),
+            json!({"count": ratings.to_string(), "name": "read"}),
+        ];
         for (dim, pair) in PLANTED_SHELVES.iter().enumerate() {
             let strength = latent[dim].abs();
             if strength > 0.3 {
@@ -409,11 +410,23 @@ pub async fn build(
     acceptance: &crate::config::Acceptance,
 ) -> anyhow::Result<world::Manifest> {
     let scratch = tempfile::tempdir()?;
-    build_in(scratch.path(), fixtures, out, config, overrides, aspects, acceptance).await
+    build_in(
+        scratch.path(),
+        fixtures,
+        out,
+        config,
+        overrides,
+        aspects,
+        acceptance,
+    )
+    .await
 }
 
 /// [`build`] with a scratch directory the caller keeps (the benchmark's tests read it after).
-#[allow(clippy::too_many_arguments, reason = "build's inputs and where to keep the scratch")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "build's inputs and where to keep the scratch"
+)]
 pub async fn build_in(
     scratch: &Path,
     fixtures: &Path,

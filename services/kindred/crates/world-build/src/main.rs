@@ -136,7 +136,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         config::ACCEPTANCE_TOML,
         "search-acceptance.toml",
     )?;
-    let aspects: Aspects = config::read(cli.aspects.as_deref(), config::ASPECTS_TOML, "aspects.toml")?;
+    let aspects: Aspects =
+        config::read(cli.aspects.as_deref(), config::ASPECTS_TOML, "aspects.toml")?;
     aspects.check()?;
     match cli.command {
         Command::Build {
@@ -175,7 +176,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::EmbedCheck => {
             let worst = world_build::embed::check(&config.embed)?;
-            tracing::info!(worst = f64::from(worst), "the embedding matches the reference");
+            tracing::info!(
+                worst = f64::from(worst),
+                "the embedding matches the reference"
+            );
             Ok(())
         }
         Command::Publish { version } => {

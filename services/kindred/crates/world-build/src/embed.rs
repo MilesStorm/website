@@ -38,9 +38,16 @@ pub fn run(run: &Run) -> anyhow::Result<()> {
         Embedder::load(config)?
     };
     let texts = texts(run, config)?;
-    let cache_dir = run.model.parent().expect("model/ is in the scratch volume").join("embed-cache");
+    let cache_dir = run
+        .model
+        .parent()
+        .expect("model/ is in the scratch volume")
+        .join("embed-cache");
     std::fs::create_dir_all(&cache_dir)?;
-    let mut cache = Cache::open(&cache_dir.join(cache_name(&embedder.id())), config.dimensions)?;
+    let mut cache = Cache::open(
+        &cache_dir.join(cache_name(&embedder.id())),
+        config.dimensions,
+    )?;
 
     let keyed: Vec<(u64, [u8; 32])> = texts
         .iter()
@@ -90,7 +97,10 @@ fn texts(run: &Run, config: &Embed) -> anyhow::Result<Vec<(u64, String)>> {
          FROM catalogue WHERE has_description ORDER BY work",
     )?;
     let rows = statement.query_map(
-        duckdb::params![config.max_subjects as i64, config.max_description_chars as i64],
+        duckdb::params![
+            config.max_subjects as i64,
+            config.max_description_chars as i64
+        ],
         |r| {
             let work = r.get::<_, i64>(0)? as u64;
             let parts: [Option<String>; 4] = [r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?];
@@ -122,7 +132,13 @@ fn text_hash(model_id: &str, text: &str) -> [u8; 32] {
 fn cache_name(model_id: &str) -> String {
     let safe: String = model_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("{safe}.bin")
 }
@@ -145,7 +161,11 @@ impl Cache {
             data: Vec::new(),
             pending: Vec::new(),
         };
-        let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(path) else {
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+        else {
             return Ok(cache);
         };
         let record = 32 + 4 * dim;
@@ -272,9 +292,17 @@ impl Embedder {
             .map_err(|e| context("execution providers", &e))?
             .commit_from_file(&model)
             .map_err(|e| context("loading the embedding model", &e))?;
-        let token_types = session.inputs().iter().any(|i| i.name() == "token_type_ids");
+        let token_types = session
+            .inputs()
+            .iter()
+            .any(|i| i.name() == "token_type_ids");
         let (_, model_sha) = world::writer::hash_file(&model)?;
-        let fingerprint = format!("{}@{}:{}", config.model_id, &model_sha[..16], config.max_tokens);
+        let fingerprint = format!(
+            "{}@{}:{}",
+            config.model_id,
+            &model_sha[..16],
+            config.max_tokens
+        );
         let mut tokenizer = tokenizers::Tokenizer::from_file(&tokenizer)
             .map_err(|e| context("loading the tokenizer", &e))?;
         tokenizer
@@ -316,42 +344,50 @@ impl Embedder {
                 let encodings = tokenizer
                     .encode_batch(texts.to_vec(), true)
                     .map_err(|e| anyhow::anyhow!("tokenizing: {e}"))?;
-                let batch = encodings.len();
-                let len = encodings.first().map_or(0, |e| e.get_ids().len());
-                let column = |f: &dyn Fn(&tokenizers::Encoding) -> &[u32]| -> Vec<i64> {
-                    encodings
-                        .iter()
-                        .flat_map(|e| f(e).iter().map(|&v| i64::from(v)))
-                        .collect()
-                };
-                let tensor = |values: Vec<i64>| {
-                    ort::value::Tensor::from_array(([batch, len], values))
-                        .map_err(|e| anyhow::anyhow!("input tensor: {e}"))
-                };
-                let ids = tensor(column(&|e| e.get_ids()))?;
-                let mask = tensor(column(&|e| e.get_attention_mask()))?;
-                let outputs = if *token_types {
-                    let types = tensor(column(&|e| e.get_type_ids()))?;
-                    session.run(ort::inputs![
-                        "input_ids" => ids,
-                        "attention_mask" => mask,
-                        "token_type_ids" => types
-                    ])
-                } else {
-                    session.run(ort::inputs!["input_ids" => ids, "attention_mask" => mask])
+                // The batch is padded to its longest text; split it so that no forward pass has
+                // more than `batch_tokens` tokens.
+                let len = encodings.first().map_or(1, |e| e.get_ids().len().max(1));
+                let per_pass = (config.batch_tokens / len).max(1);
+                let mut out = Vec::with_capacity(encodings.len() * dim);
+                for encodings in encodings.chunks(per_pass) {
+                    let batch = encodings.len();
+                    let len = encodings.first().map_or(0, |e| e.get_ids().len());
+                    let column = |f: &dyn Fn(&tokenizers::Encoding) -> &[u32]| -> Vec<i64> {
+                        encodings
+                            .iter()
+                            .flat_map(|e| f(e).iter().map(|&v| i64::from(v)))
+                            .collect()
+                    };
+                    let tensor = |values: Vec<i64>| {
+                        ort::value::Tensor::from_array(([batch, len], values))
+                            .map_err(|e| anyhow::anyhow!("input tensor: {e}"))
+                    };
+                    let ids = tensor(column(&|e| e.get_ids()))?;
+                    let mask = tensor(column(&|e| e.get_attention_mask()))?;
+                    let outputs = if *token_types {
+                        let types = tensor(column(&|e| e.get_type_ids()))?;
+                        session.run(ort::inputs![
+                            "input_ids" => ids,
+                            "attention_mask" => mask,
+                            "token_type_ids" => types
+                        ])
+                    } else {
+                        session.run(ort::inputs!["input_ids" => ids, "attention_mask" => mask])
+                    }
+                    .map_err(|e| anyhow::anyhow!("embedding forward pass: {e}"))?;
+                    let (shape, hidden) = outputs[0]
+                        .try_extract_tensor::<f32>()
+                        .map_err(|e| anyhow::anyhow!("embedding output: {e}"))?;
+                    if shape.len() != 3 || shape[2] as usize != dim || shape[0] as usize != batch {
+                        bail!("embedding output has shape {shape:?}");
+                    }
+                    let seq = shape[1] as usize;
+                    // CLS pooling: the first token's hidden state (the model card's pooling).
+                    for b in 0..batch {
+                        out.extend_from_slice(&hidden[b * seq * dim..b * seq * dim + dim]);
+                    }
                 }
-                .map_err(|e| anyhow::anyhow!("embedding forward pass: {e}"))?;
-                let (shape, hidden) = outputs[0]
-                    .try_extract_tensor::<f32>()
-                    .map_err(|e| anyhow::anyhow!("embedding output: {e}"))?;
-                if shape.len() != 3 || shape[2] as usize != dim || shape[0] as usize != batch {
-                    bail!("embedding output has shape {shape:?}");
-                }
-                let seq = shape[1] as usize;
-                // CLS pooling: the first token's hidden state (the model card's pooling).
-                (0..batch)
-                    .flat_map(|b| hidden[b * seq * dim..b * seq * dim + dim].to_vec())
-                    .collect::<Vec<f32>>()
+                out
             }
         };
         for v in out.chunks_mut(dim) {
@@ -389,7 +425,11 @@ pub fn check(config: &Embed) -> anyhow::Result<f32> {
     let texts: Vec<&str> = reference.texts.iter().map(String::as_str).collect();
     let got = embedder.embed(&texts, config)?;
     let mut worst = 0f32;
-    for (want, got) in reference.embeddings.iter().zip(got.chunks(config.dimensions)) {
+    for (want, got) in reference
+        .embeddings
+        .iter()
+        .zip(got.chunks(config.dimensions))
+    {
         anyhow::ensure!(want.len() == got.len(), "reference dimensions differ");
         for (a, b) in want.iter().zip(got) {
             worst = worst.max((a - b).abs());
@@ -438,7 +478,10 @@ mod tests {
             dim: config.embed.dimensions,
         };
         let v = e
-            .embed(&["dragons and magic", "magic and dragons", "tax law"], &config.embed)
+            .embed(
+                &["dragons and magic", "magic and dragons", "tax law"],
+                &config.embed,
+            )
             .unwrap();
         let d = config.embed.dimensions;
         let (a, b, c) = (&v[..d], &v[d..2 * d], &v[2 * d..]);
@@ -489,7 +532,12 @@ mod tests {
 
     #[test]
     fn text_skips_empty_parts() {
-        let t = text_of(&[Some("Dune".into()), None, Some(" ".into()), Some("Spice.".into())]);
+        let t = text_of(&[
+            Some("Dune".into()),
+            None,
+            Some(" ".into()),
+            Some("Spice.".into()),
+        ]);
         assert_eq!(t, "Dune\nSpice.");
     }
 }

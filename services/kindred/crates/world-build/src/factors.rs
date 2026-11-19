@@ -13,7 +13,11 @@ use crate::stages::Run;
 use crate::trace::Duck;
 
 pub fn path(model: &Path, cold: bool) -> PathBuf {
-    model.join(if cold { "factors-cold.bin" } else { "factors.bin" })
+    model.join(if cold {
+        "factors-cold.bin"
+    } else {
+        "factors.bin"
+    })
 }
 
 pub fn run(run: &Run) -> anyhow::Result<()> {
@@ -34,18 +38,26 @@ pub fn run(run: &Run) -> anyhow::Result<()> {
 /// Factorizes one table of (user, work) liked pairs. Pairs are streamed from DuckDB into the
 /// factorization, which keeps them once per side.
 #[tracing::instrument(name = "factors.fit", skip(duck), fields(pairs, works))]
-pub fn fit(duck: &Duck, table: &str, k: usize, iterations: u32, seed: u64) -> anyhow::Result<Matrix> {
+pub fn fit(
+    duck: &Duck,
+    table: &str,
+    k: usize,
+    iterations: u32,
+    seed: u64,
+) -> anyhow::Result<Matrix> {
     let span = tracing::Span::current();
     let pairs: i64 = duck
         .conn()
         .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
     span.record("pairs", pairs);
-    let mut statement = duck
-        .conn()
-        .prepare(&format!("SELECT user, work FROM {table} ORDER BY user, work"))?;
+    let mut statement = duck.conn().prepare(&format!(
+        "SELECT user, work FROM {table} ORDER BY user, work"
+    ))?;
     let mut failure = None;
     let rows = statement
-        .query_map([], |r| Ok((r.get::<_, i32>(0)? as u32, r.get::<_, i64>(1)? as u64)))?
+        .query_map([], |r| {
+            Ok((r.get::<_, i32>(0)? as u32, r.get::<_, i64>(1)? as u64))
+        })?
         .map_while(|r| match r {
             Ok((user, work)) => Some((user, work, 1.0f32)),
             Err(e) => {

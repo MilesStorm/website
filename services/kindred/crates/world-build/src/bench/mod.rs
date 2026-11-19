@@ -184,7 +184,18 @@ fn replay(
             continue;
         }
         for _ in 0..QUESTIONS_PER_LOG {
-            if !ask(space, hyper, prior, &mut events, &mut asked, *item, &revealed[..i], rule, now, rng) {
+            if !ask(
+                space,
+                hyper,
+                prior,
+                &mut events,
+                &mut asked,
+                *item,
+                &revealed[..i],
+                rule,
+                now,
+                rng,
+            ) {
                 break;
             }
         }
@@ -206,7 +217,10 @@ fn ask_after(
     now: f64,
     rng: &mut ChaCha8Rng,
 ) -> Vec<Event> {
-    let mut events: Vec<Event> = revealed.iter().map(|(row, r)| read_event(*row, r, now)).collect();
+    let mut events: Vec<Event> = revealed
+        .iter()
+        .map(|(row, r)| read_event(*row, r, now))
+        .collect();
     let mut asked = HashSet::new();
     let mut done = 0;
     while done < count {
@@ -215,7 +229,18 @@ fn ask_after(
             if done >= count {
                 break;
             }
-            if ask(space, hyper, prior, &mut events, &mut asked, revealed[i], &revealed[..i], rule, now, rng) {
+            if ask(
+                space,
+                hyper,
+                prior,
+                &mut events,
+                &mut asked,
+                revealed[i],
+                &revealed[..i],
+                rule,
+                now,
+                rng,
+            ) {
                 done += 1;
             }
         }
@@ -515,29 +540,73 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
         for &method in methods {
             let mut g = rng(setup.seed, &[user.id as u64, n as u64, method as u64]);
             let scorer = match method {
-                Method::P => Scorer::Fit(Box::new(taste::fit(&[], space, &setup.hyper, &setup.prior))),
+                Method::P => {
+                    Scorer::Fit(Box::new(taste::fit(&[], space, &setup.hyper, &setup.prior)))
+                }
                 Method::Full | Method::FullWithoutCollaborative | Method::FullWithoutAspects => {
                     let view = setup.view(method);
-                    let events = replay(view, &setup.hyper, &setup.prior, &shown, Rule::Model, now, &mut g);
-                    Scorer::Fit(Box::new(taste::fit(&events, view, &setup.hyper, &setup.prior)))
+                    let events = replay(
+                        view,
+                        &setup.hyper,
+                        &setup.prior,
+                        &shown,
+                        Rule::Model,
+                        now,
+                        &mut g,
+                    );
+                    Scorer::Fit(Box::new(taste::fit(
+                        &events,
+                        view,
+                        &setup.hyper,
+                        &setup.prior,
+                    )))
                 }
                 Method::FullWithoutComparisons => {
-                    let events = replay(space, &setup.hyper, &setup.prior, &shown, Rule::None, now, &mut g);
-                    Scorer::Fit(Box::new(taste::fit(&events, space, &setup.hyper, &setup.prior)))
+                    let events = replay(
+                        space,
+                        &setup.hyper,
+                        &setup.prior,
+                        &shown,
+                        Rule::None,
+                        now,
+                        &mut g,
+                    );
+                    Scorer::Fit(Box::new(taste::fit(
+                        &events,
+                        space,
+                        &setup.hyper,
+                        &setup.prior,
+                    )))
                 }
                 Method::C => {
-                    let liked: Vec<u32> = shown.iter().filter(|p| p.1.stars >= 4).map(|p| p.0).collect();
+                    let liked: Vec<u32> = shown
+                        .iter()
+                        .filter(|p| p.1.stars >= 4)
+                        .map(|p| p.0)
+                        .collect();
                     Scorer::Content(content.query(&liked))
                 }
                 Method::I => {
-                    let liked: Vec<u64> = revealed.iter().filter(|r| r.stars >= 4).map(|r| r.work).collect();
-                    let disliked: Vec<u64> = revealed.iter().filter(|r| r.stars <= 2).map(|r| r.work).collect();
-                    Scorer::Sparse(setup.neighbours.as_ref().map_or_else(HashMap::new, |nb| {
-                        nb.scores(space, &liked, &disliked)
-                    }))
+                    let liked: Vec<u64> = revealed
+                        .iter()
+                        .filter(|r| r.stars >= 4)
+                        .map(|r| r.work)
+                        .collect();
+                    let disliked: Vec<u64> = revealed
+                        .iter()
+                        .filter(|r| r.stars <= 2)
+                        .map(|r| r.work)
+                        .collect();
+                    Scorer::Sparse(
+                        setup
+                            .neighbours
+                            .as_ref()
+                            .map_or_else(HashMap::new, |nb| nb.scores(space, &liked, &disliked)),
+                    )
                 }
                 Method::MF => {
-                    let items: Vec<(u32, bool)> = shown.iter().map(|p| (p.0, p.1.stars >= 4)).collect();
+                    let items: Vec<(u32, bool)> =
+                        shown.iter().map(|p| (p.0, p.1.stars >= 4)).collect();
                     Scorer::Factor(methods::fold_in(space, &items, FOLD_IN_RIDGE))
                 }
             };
@@ -566,7 +635,10 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             }
             let ten = &ranked[..ranked.len().min(10)];
             if !ten.is_empty() {
-                acc.novelty += ten.iter().map(|&r| f64::from(space.pop_pct[r as usize])).sum::<f64>()
+                acc.novelty += ten
+                    .iter()
+                    .map(|&r| f64::from(space.pop_pct[r as usize]))
+                    .sum::<f64>()
                     / ten.len() as f64;
                 let mut d = 0.0;
                 let mut pairs = 0.0;
@@ -590,7 +662,11 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
         // Band calibration: each future work with a vector, in its band.
         let bands = sums.bands.entry(ni).or_default();
         for &(row, stars) in &future_rows {
-            let (_, band) = fit.band(space.vector(row), taste::Vectors::text_sourced(space, Row(row)), &setup.hyper);
+            let (_, band) = fit.band(
+                space.vector(row),
+                taste::Vectors::text_sourced(space, Row(row)),
+                &setup.hyper,
+            );
             let b = match band {
                 taste::Band::StrongFit => 0,
                 taste::Band::GoodFit => 1,
@@ -604,7 +680,11 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             continue;
         }
         // The stretch pick, against a random candidate meeting the same novelty rule.
-        let liked_c: Vec<&[f32]> = shown.iter().filter(|p| p.1.stars >= 4).map(|p| space.c(p.0)).collect();
+        let liked_c: Vec<&[f32]> = shown
+            .iter()
+            .filter(|p| p.1.stars >= 4)
+            .map(|p| space.c(p.0))
+            .collect();
         if !liked_c.is_empty() && !relevant.is_empty() {
             let candidates: Vec<taste::Candidate> = space
                 .cand
@@ -619,7 +699,8 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 })
                 .collect();
             let mut g = rng(setup.seed, &[user.id as u64, n as u64, 100]);
-            if let Some(pick) = taste::stretch(&fit, space, &setup.hyper, &candidates, 0.5, &mut g) {
+            if let Some(pick) = taste::stretch(&fit, space, &setup.hyper, &candidates, 0.5, &mut g)
+            {
                 sums.stretch_users += 1.0;
                 sums.stretch_hits += f64::from(u8::from(relevant.contains(&pick.0)));
                 let mut novelties: Vec<f64> = candidates.iter().map(|c| c.novelty).collect();
@@ -641,8 +722,20 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 if rule == Rule::None && count > 0 {
                     continue;
                 }
-                let mut g = rng(setup.seed, &[user.id as u64, 200 + count as u64, rule as u64]);
-                let events = ask_after(space, &setup.hyper, &setup.prior, &shown, count, rule, now, &mut g);
+                let mut g = rng(
+                    setup.seed,
+                    &[user.id as u64, 200 + count as u64, rule as u64],
+                );
+                let events = ask_after(
+                    space,
+                    &setup.hyper,
+                    &setup.prior,
+                    &shown,
+                    count,
+                    rule,
+                    now,
+                    &mut g,
+                );
                 let fit = taste::fit(&events, space, &setup.hyper, &setup.prior);
                 fit.score_rows(&space.cand_phi, &mut buf);
                 let ranked = top(space, &buf, &revealed_rows, 10);
@@ -679,7 +772,8 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 .filter(|&r| cold_space.row_of(space.phi.keys[r as usize]).is_some())
                 .collect();
             let rank = |score: &dyn Fn(u32) -> f32| -> f64 {
-                let mut items: Vec<(f32, u32)> = cold_cands.iter().map(|&r| (score(r), r)).collect();
+                let mut items: Vec<(f32, u32)> =
+                    cold_cands.iter().map(|&r| (score(r), r)).collect();
                 items.sort_by(|a, b| {
                     b.0.total_cmp(&a.0)
                         .then(space.pop_pct[b.1 as usize].total_cmp(&space.pop_pct[a.1 as usize]))
@@ -691,10 +785,20 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             sums.cold[0][0] += rank(&|r| prior_fit.score(space.vector(r)) as f32);
             let cold_shown = placed(cold_space, revealed);
             let mut g = rng(setup.seed, &[user.id as u64, 300]);
-            let events = replay(cold_space, &setup.hyper, &setup.prior, &cold_shown, Rule::Model, now, &mut g);
+            let events = replay(
+                cold_space,
+                &setup.hyper,
+                &setup.prior,
+                &cold_shown,
+                Rule::Model,
+                now,
+                &mut g,
+            );
             let text_fit = taste::fit(&events, cold_space, &setup.hyper, &setup.prior);
             sums.cold[1][0] += rank(&|r| {
-                let row = cold_space.row_of(space.phi.keys[r as usize]).expect("filtered above");
+                let row = cold_space
+                    .row_of(space.phi.keys[r as usize])
+                    .expect("filtered above");
                 text_fit.score(cold_space.vector(row)) as f32
             });
             sums.cold[2][0] += rank(&|r| fit.score(space.vector(r)) as f32);
@@ -758,11 +862,26 @@ fn report(setup: &Setup, users: usize, sums: &Sums, agreement: Option<f64>) -> R
     let per = |sum: f64, n: f64| (n > 0.0).then(|| sum / n);
     let recommendable = setup.space.cand.len() as f64;
     tables.insert("ndcg@10".into(), metric(&|a| per(a.ndcg, a.ranked_users)));
-    tables.insert("recall@50".into(), metric(&|a| per(a.recall, a.ranked_users)));
-    tables.insert("pairwise accuracy".into(), metric(&|a| per(a.pairwise, a.pairwise_users)));
-    tables.insert("novelty (popularity percentile of the top 10; lower = less obvious)".into(), metric(&|a| per(a.novelty, a.top_users)));
-    tables.insert("diversity".into(), metric(&|a| per(a.diversity, a.top_users)));
-    tables.insert("coverage".into(), metric(&|a| (a.top_users > 0.0).then(|| a.covered.len() as f64 / recommendable)));
+    tables.insert(
+        "recall@50".into(),
+        metric(&|a| per(a.recall, a.ranked_users)),
+    );
+    tables.insert(
+        "pairwise accuracy".into(),
+        metric(&|a| per(a.pairwise, a.pairwise_users)),
+    );
+    tables.insert(
+        "novelty (popularity percentile of the top 10; lower = less obvious)".into(),
+        metric(&|a| per(a.novelty, a.top_users)),
+    );
+    tables.insert(
+        "diversity".into(),
+        metric(&|a| per(a.diversity, a.top_users)),
+    );
+    tables.insert(
+        "coverage".into(),
+        metric(&|a| (a.top_users > 0.0).then(|| a.covered.len() as f64 / recommendable)),
+    );
 
     let bands: Vec<serde_json::Value> = (0..ns.len())
         .map(|ni| {
@@ -794,10 +913,19 @@ fn report(setup: &Setup, users: usize, sums: &Sums, agreement: Option<f64>) -> R
         "users": sums.stretch_users,
     });
 
-    let ndcg_at = |m: Method, n: usize| ns.iter().position(|&x| x == n).map(|ni| get(m, ni).mean_ndcg());
+    let ndcg_at = |m: Method, n: usize| {
+        ns.iter()
+            .position(|&x| x == n)
+            .map(|ni| get(m, ni).mean_ndcg())
+    };
     let mut gates = Vec::new();
     let mut gate = |id: &str, what: &str, passed: bool, detail: String| {
-        gates.push(Gate { id: id.into(), what: what.into(), passed, detail });
+        gates.push(Gate {
+            id: id.into(),
+            what: what.into(),
+            passed,
+            detail,
+        });
     };
     let over = |a: Method, b: Method, from: usize| -> (bool, String) {
         let mut ok = true;
@@ -817,25 +945,70 @@ fn report(setup: &Setup, users: usize, sums: &Sums, agreement: Option<f64>) -> R
     let mut detail = Vec::new();
     for n in [20, 50] {
         let full = ndcg_at(Method::Full, n).unwrap_or(0.0);
-        let best = ndcg_at(Method::I, n).unwrap_or(0.0).max(ndcg_at(Method::MF, n).unwrap_or(0.0));
+        let best = ndcg_at(Method::I, n)
+            .unwrap_or(0.0)
+            .max(ndcg_at(Method::MF, n).unwrap_or(0.0));
         ok &= full >= 0.95 * best;
         detail.push(format!("n={n}: {full:.4} vs 95% of {best:.4}"));
     }
-    gate("G3", "FULL reaches 95% of the better of I and MF on NDCG@10 at n = 20 and 50", ok, detail.join(", "));
-    let pw = |m: Method| ns.iter().position(|&x| x == N_MAIN).and_then(|ni| {
-        let a = get(m, ni);
-        per(a.pairwise, a.pairwise_users)
-    });
-    let (f, p) = (pw(Method::Full).unwrap_or(0.0), pw(Method::P).unwrap_or(0.0));
-    gate("G4", "FULL's pairwise accuracy at n = 20 exceeds P's by 0.03", f >= p + 0.03, format!("{f:.4} vs {p:.4}"));
-    let (a, b) = (ndcg_at(Method::Full, 50).unwrap_or(0.0), ndcg_at(Method::Full, 5).unwrap_or(0.0));
-    gate("G5", "FULL's NDCG@10 at n = 50 is higher than at n = 5", a > b, format!("{a:.4} vs {b:.4}"));
-    let main = ns.iter().position(|&x| x == N_MAIN).and_then(|ni| sums.bands.get(&ni)).copied().unwrap_or_default();
+    gate(
+        "G3",
+        "FULL reaches 95% of the better of I and MF on NDCG@10 at n = 20 and 50",
+        ok,
+        detail.join(", "),
+    );
+    let pw = |m: Method| {
+        ns.iter().position(|&x| x == N_MAIN).and_then(|ni| {
+            let a = get(m, ni);
+            per(a.pairwise, a.pairwise_users)
+        })
+    };
+    let (f, p) = (
+        pw(Method::Full).unwrap_or(0.0),
+        pw(Method::P).unwrap_or(0.0),
+    );
+    gate(
+        "G4",
+        "FULL's pairwise accuracy at n = 20 exceeds P's by 0.03",
+        f >= p + 0.03,
+        format!("{f:.4} vs {p:.4}"),
+    );
+    let (a, b) = (
+        ndcg_at(Method::Full, 50).unwrap_or(0.0),
+        ndcg_at(Method::Full, 5).unwrap_or(0.0),
+    );
+    gate(
+        "G5",
+        "FULL's NDCG@10 at n = 50 is higher than at n = 5",
+        a > b,
+        format!("{a:.4} vs {b:.4}"),
+    );
+    let main = ns
+        .iter()
+        .position(|&x| x == N_MAIN)
+        .and_then(|ni| sums.bands.get(&ni))
+        .copied()
+        .unwrap_or_default();
     let shares: Vec<Option<f64>> = (0..4).rev().map(|b| per(main[b][1], main[b][0])).collect();
-    let rising = shares.windows(2).all(|w| matches!((w[0], w[1]), (Some(x), Some(y)) if y > x));
-    gate("G6", "band calibration rises from Probably not to Strong fit (n = 20)", rising, format!("{shares:?}"));
-    let (t, p) = (per(sums.cold[1][0], sums.cold[1][1]).unwrap_or(0.0), per(sums.cold[0][0], sums.cold[0][1]).unwrap_or(0.0));
-    gate("G7", "on cold works, FULL with text-placed vectors beats P", t > p, format!("{t:.4} vs {p:.4}"));
+    let rising = shares
+        .windows(2)
+        .all(|w| matches!((w[0], w[1]), (Some(x), Some(y)) if y > x));
+    gate(
+        "G6",
+        "band calibration rises from Probably not to Strong fit (n = 20)",
+        rising,
+        format!("{shares:?}"),
+    );
+    let (t, p) = (
+        per(sums.cold[1][0], sums.cold[1][1]).unwrap_or(0.0),
+        per(sums.cold[0][0], sums.cold[0][1]).unwrap_or(0.0),
+    );
+    gate(
+        "G7",
+        "on cold works, FULL with text-placed vectors beats P",
+        t > p,
+        format!("{t:.4} vs {p:.4}"),
+    );
 
     Report {
         users,
@@ -891,8 +1064,14 @@ impl Report {
             }
             out.push('\n');
         }
-        out.push_str(&format!("\n**Question value (n = 20)**: {}\n", self.questions));
-        out.push_str(&format!("\n**Cold books (first published from the cold year on)**: {}\n", self.cold));
+        out.push_str(&format!(
+            "\n**Question value (n = 20)**: {}\n",
+            self.questions
+        ));
+        out.push_str(&format!(
+            "\n**Cold books (first published from the cold year on)**: {}\n",
+            self.cold
+        ));
         out.push_str(&format!("\n**Stretch pick**: {}\n", self.stretch));
         out.push_str("\n**Gates**\n\n| gate | | passed | numbers |\n|---|---|---|---|\n");
         for g in &self.gates {
@@ -915,7 +1094,13 @@ pub fn fit_prior(run: &Run) -> anyhow::Result<()> {
     let layout = vectors::layout(run);
     let space = Space::load(&run.model, false, layout)?;
     let users = data::users(run.duck, Users::Tuning, run.config.interactions.seed)?;
-    let prior = prior_from(&space, &users, &run.config.model, run.config.bench.max_prior_terms, run.config.interactions.seed);
+    let prior = prior_from(
+        &space,
+        &users,
+        &run.config.model,
+        run.config.bench.max_prior_terms,
+        run.config.interactions.seed,
+    );
     tracing::info!(m0 = ?prior.m0_meta, "prior mean of the meta block fitted");
     std::fs::write(prior_path(&run.model), serde_json::to_vec_pretty(&prior)?)?;
     Ok(())
@@ -939,7 +1124,13 @@ impl taste::Vectors for MetaOnly {
     }
 }
 
-pub fn prior_from(space: &Space, users: &[User], hyper: &Hyper, max_terms: usize, seed: u64) -> Prior {
+pub fn prior_from(
+    space: &Space,
+    users: &[User],
+    hyper: &Hyper,
+    max_terms: usize,
+    seed: u64,
+) -> Prior {
     // Only the bias and the meta block: a layout without collaborative and aspect numbers. The
     // fit is the same as on the full vectors with those blocks zero (their weights would stay at
     // the prior mean, uncoupled), at a fraction of the memory.
@@ -1024,7 +1215,10 @@ pub fn gate(run: &Run) -> anyhow::Result<()> {
         seed: run.config.interactions.seed,
     };
     let sums = measure(&setup, &users, Scope::FullAtMain);
-    let ndcg = sums.main.get(&(Method::Full, 0)).map_or(0.0, Acc::mean_ndcg);
+    let ndcg = sums
+        .main
+        .get(&(Method::Full, 0))
+        .map_or(0.0, Acc::mean_ndcg);
     let cuts = confidence_cuts(&setup, &users);
     let result = GateResult {
         ndcg10_n20: ndcg,
@@ -1050,13 +1244,25 @@ fn confidence_cuts(setup: &Setup, users: &[User]) -> [f64; 2] {
             let shown = placed(space, &u.ratings[..N_MAIN]);
             let now = u.ratings[N_MAIN - 1].day;
             let mut g = rng(setup.seed, &[u.id as u64, 500]);
-            let events = replay(space, &setup.hyper, &setup.prior, &shown, Rule::Model, now, &mut g);
+            let events = replay(
+                space,
+                &setup.hyper,
+                &setup.prior,
+                &shown,
+                Rule::Model,
+                now,
+                &mut g,
+            );
             let fit = taste::fit(&events, space, &setup.hyper, &setup.prior);
             (0..CUT_WORKS.min(space.cand.len()))
                 .map(|_| space.cand[g.random_range(0..space.cand.len())])
                 .map(|r| {
-                    fit.variance(space.vector(r), taste::Vectors::text_sourced(space, Row(r)), &setup.hyper)
-                        .sqrt()
+                    fit.variance(
+                        space.vector(r),
+                        taste::Vectors::text_sourced(space, Row(r)),
+                        &setup.hyper,
+                    )
+                    .sqrt()
                 })
                 .collect::<Vec<_>>()
         })
@@ -1070,7 +1276,13 @@ fn confidence_cuts(setup: &Setup, users: &[User]) -> [f64; 2] {
 
 /// `kindred-world bench`: the full report on the test users, or the hyperparameter search on
 /// the tuning users (04-benchmark.md §3). Reads the scratch volume of a finished build.
-pub fn run_full(duck: &Duck, config: &Config, aspects: usize, model: &Path, which: Users) -> anyhow::Result<String> {
+pub fn run_full(
+    duck: &Duck,
+    config: &Config,
+    aspects: usize,
+    model: &Path,
+    which: Users,
+) -> anyhow::Result<String> {
     let layout = taste::Layout {
         k: config.factors.k,
         a: aspects,
@@ -1086,7 +1298,14 @@ pub fn run_full(duck: &Duck, config: &Config, aspects: usize, model: &Path, whic
     let embeddings = Matrix::read(&crate::embed::path(model))?;
     let mut queries: HashSet<u64> = HashSet::new();
     for u in &users {
-        let n = config.bench.revealed.iter().copied().max().unwrap_or(0).min(u.ratings.len());
+        let n = config
+            .bench
+            .revealed
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .min(u.ratings.len());
         queries.extend(u.ratings[..n].iter().map(|r| r.work));
     }
     let likes = data::likes(duck)?;
@@ -1094,9 +1313,12 @@ pub fn run_full(duck: &Duck, config: &Config, aspects: usize, model: &Path, whic
     drop(likes);
     tracing::info!(works = neighbours.of.len(), "item-to-item neighbours built");
     let cold_years: HashSet<u64> = {
-        let mut statement = duck.conn().prepare("SELECT work FROM catalogue WHERE year >= ?")?;
+        let mut statement = duck
+            .conn()
+            .prepare("SELECT work FROM catalogue WHERE year >= ?")?;
         let rows = statement.query_map([config.factors.cold_from_year], |r| r.get::<_, i64>(0))?;
-        rows.map(|r| r.map(|k| k as u64)).collect::<Result<_, _>>()?
+        rows.map(|r| r.map(|k| k as u64))
+            .collect::<Result<_, _>>()?
     };
     let cold_rows: HashSet<u32> = cold_years.iter().filter_map(|&k| space.row_of(k)).collect();
     let agreement = {
@@ -1128,7 +1350,10 @@ pub fn run_full(duck: &Duck, config: &Config, aspects: usize, model: &Path, whic
     };
     let sums = measure(&setup, &users, Scope::Report);
     let report = report(&setup, users.len(), &sums, agreement);
-    std::fs::write(model.join(format!("bench-{which:?}.json").to_lowercase()), serde_json::to_vec_pretty(&report)?)?;
+    std::fs::write(
+        model.join(format!("bench-{which:?}.json").to_lowercase()),
+        serde_json::to_vec_pretty(&report)?,
+    )?;
     Ok(report.markdown())
 }
 

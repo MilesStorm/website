@@ -114,7 +114,9 @@ impl Neighbours {
                     }
                     touched.clear();
                     if sims.len() > keep {
-                        sims.select_nth_unstable_by(keep - 1, |a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+                        sims.select_nth_unstable_by(keep - 1, |a, b| {
+                            b.1.total_cmp(&a.1).then(a.0.cmp(&b.0))
+                        });
                         sims.truncate(keep);
                     }
                     (q, sims)
