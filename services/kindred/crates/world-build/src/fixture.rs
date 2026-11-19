@@ -12,7 +12,7 @@ use rand::{Rng as _, SeedableRng as _};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::Config;
+use crate::config::{Aspects, Config};
 use crate::download::{self, Source};
 
 /// `fixtures/works.toml`.
@@ -79,10 +79,12 @@ pub fn stage_inputs(fixtures: &Path, downloads: &Path, sources: &[Source]) -> an
         )
     };
     let synthetic = goodreads(&works, &ol("ol_editions"), &ol("ol_reading_log"))?;
+    let interactions = interactions(&synthetic.planted);
     for (name, lines) in [
         ("gr_books", synthetic.books),
         ("gr_works", synthetic.works),
         ("gr_series", synthetic.series),
+        ("gr_interactions", interactions),
     ] {
         write_gz(&download::path(downloads, source(name)), &lines)?;
     }
@@ -117,7 +119,26 @@ pub struct Synthetic {
     pub books: Vec<Value>,
     pub works: Vec<Value>,
     pub series: Vec<Value>,
+    /// Each synthetic Goodreads work's planted taste vector, and its books' ids.
+    pub planted: Vec<Planted>,
 }
+
+/// Dimensions of the planted taste model of the synthetic readers.
+pub const PLANTED_DIMS: usize = 4;
+
+pub struct Planted {
+    pub latent: [f64; PLANTED_DIMS],
+    pub books: Vec<u64>,
+}
+
+/// Shelves the synthetic books carry: for each planted dimension a pair of aspect shelves (one
+/// for each sign), and organisational ones every book has.
+const PLANTED_SHELVES: [[&str; 2]; PLANTED_DIMS] = [
+    ["fantasy", "historical-fiction"],
+    ["dark", "cozy"],
+    ["fast-paced", "slow-burn"],
+    ["romance", "war"],
+];
 
 /// Synthetic Goodreads books, works and series for the fixture works: each work gets one to
 /// three books on its real editions' ISBNs (some as ISBN-10 only, some through the edition's
@@ -160,6 +181,7 @@ pub fn goodreads(
     let text = |v: &Value| v.as_str().map(str::to_owned);
     let mut books = Vec::new();
     let mut gr_works = Vec::new();
+    let mut planted = Vec::new();
     let mut next_book = 9_000_000u64;
     let book = |id: u64,
                 work: u64,
@@ -208,6 +230,20 @@ pub fn goodreads(
             (Some(s), Some(p)) => format!("{} ({s}, #{p})", w.title),
             _ => w.title.clone(),
         };
+        let latent: [f64; PLANTED_DIMS] =
+            std::array::from_fn(|_| rng.random_range(-1.0..1.0));
+        // Readers shelve a work by its planted traits, and everyone files it as read.
+        let mut shelves = vec![json!({"count": (ratings * 3).to_string(), "name": "to-read"}),
+                               json!({"count": ratings.to_string(), "name": "read"})];
+        for (dim, pair) in PLANTED_SHELVES.iter().enumerate() {
+            let strength = latent[dim].abs();
+            if strength > 0.3 {
+                let name = pair[usize::from(latent[dim] < 0.0)];
+                let count = ((ratings as f64) * strength * 0.5).round().max(1.0) as u64;
+                shelves.push(json!({"count": count.to_string(), "name": name}));
+            }
+        }
+        let mut work_books = Vec::new();
         let shares = [0.7, 0.2, 0.1];
         for (j, edition) in editions.iter().take(3).enumerate() {
             let isbn13 = edition["isbn_13"][0].as_str().unwrap_or("");
@@ -232,7 +268,7 @@ pub fn goodreads(
             };
             let count = (ratings as f64 * shares[j]).round() as u64;
             let plain = text(&edition["title"]).unwrap_or_else(|| w.title.clone());
-            books.push(book(
+            let mut b = book(
                 id,
                 gr_work,
                 isbn,
@@ -241,8 +277,15 @@ pub fn goodreads(
                 series.clone(),
                 title.clone(),
                 &plain,
-            ));
+            );
+            b["popular_shelves"] = json!(shelves);
+            books.push(b);
+            work_books.push(id);
         }
+        planted.push(Planted {
+            latent,
+            books: work_books,
+        });
     }
     // Goodreads works that match nothing in Open Library (about 2% of ratings).
     let mapped: u64 = gr_works
@@ -274,7 +317,86 @@ pub fn goodreads(
         books,
         works: gr_works,
         series,
+        planted,
     })
+}
+
+/// Synthetic readers of the fixture works, from a seeded low-rank model (02-world-data.md §10):
+/// each reader has a taste vector, rates a random subset of works in random order, and gives
+/// stars by how well the work's planted vector matches theirs. The benchmark must recover this
+/// model on the fixture world.
+pub fn interactions(planted: &[Planted]) -> Vec<Value> {
+    const READERS: u64 = 1500;
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(2018);
+    let mut out = Vec::new();
+    let start = 1_400_000_000i64; // 2014-05
+    for reader in 0..READERS {
+        let taste: [f64; PLANTED_DIMS] = std::array::from_fn(|_| rng.random_range(-1.0..1.0));
+        let count = rng.random_range(60..=110).min(planted.len());
+        let mut order: Vec<usize> = (0..planted.len()).collect();
+        for i in 0..count {
+            let j = rng.random_range(i..order.len());
+            order.swap(i, j);
+        }
+        let mut time = start + rng.random_range(0..50_000_000i64);
+        for &w in &order[..count] {
+            let work = &planted[w];
+            let fit: f64 = taste
+                .iter()
+                .zip(&work.latent)
+                .map(|(a, b)| a * b)
+                .sum::<f64>()
+                + rng.random_range(-0.3..0.3);
+            let stars = match fit {
+                f if f > 0.6 => 5,
+                f if f > 0.15 => 4,
+                f if f > -0.25 => 3,
+                f if f > -0.6 => 2,
+                _ => 1,
+            };
+            time += rng.random_range(86_400..30 * 86_400i64);
+            let date = chrono::DateTime::from_timestamp(time, 0)
+                .expect("a valid time")
+                .format("%a %b %d %H:%M:%S +0000 %Y")
+                .to_string();
+            let book = work.books[rng.random_range(0..work.books.len())];
+            out.push(json!({
+                "user_id": format!("{reader:032x}"), "book_id": book.to_string(),
+                "review_id": format!("{:032x}", reader * 1000 + w as u64), "is_read": true,
+                "rating": stars, "review_text_incomplete": "", "date_added": date,
+                "date_updated": date, "read_at": "", "started_at": ""
+            }));
+        }
+        // Shelved but unrated: not a rating.
+        out.push(json!({"user_id": format!("{reader:032x}"), "book_id": "1", "review_id": "",
+            "is_read": false, "rating": 0, "review_text_incomplete": "",
+            "date_added": "Fri Sep 08 10:44:24 -0700 2017", "date_updated": "", "read_at": "", "started_at": ""}));
+    }
+    out
+}
+
+/// The build settings of the fixture world: the real configuration with the embedding stand-in
+/// and the counts scaled to a few hundred works and synthetic readers.
+pub fn settings(
+    config: &Config,
+    overrides: &crate::config::SeriesOverrides,
+    aspects: &Aspects,
+) -> crate::build::Settings {
+    let mut config = config.clone();
+    config.interactions.test_users = 300;
+    config.interactions.gate_users = 100;
+    config.interactions.tuning_users = 300;
+    config.factors.k = 8;
+    config.factors.cold_from_year = 2012;
+    config.vectors.min_popularity = 1.0;
+    config.verify.recommendable = (50, u64::MAX);
+    config.bench.accepted_ndcg10_n20 = None;
+    crate::build::Settings {
+        config,
+        overrides: overrides.clone(),
+        aspects: aspects.clone(),
+        fixture: true,
+    }
 }
 
 /// Builds the fixture world into `out` and verifies it like a real one.
@@ -283,18 +405,34 @@ pub async fn build(
     out: &Path,
     config: &Config,
     overrides: &crate::config::SeriesOverrides,
+    aspects: &Aspects,
     acceptance: &crate::config::Acceptance,
 ) -> anyhow::Result<world::Manifest> {
     let scratch = tempfile::tempdir()?;
+    build_in(scratch.path(), fixtures, out, config, overrides, aspects, acceptance).await
+}
+
+/// [`build`] with a scratch directory the caller keeps (the benchmark's tests read it after).
+#[allow(clippy::too_many_arguments, reason = "build's inputs and where to keep the scratch")]
+pub async fn build_in(
+    scratch: &Path,
+    fixtures: &Path,
+    out: &Path,
+    config: &Config,
+    overrides: &crate::config::SeriesOverrides,
+    aspects: &Aspects,
+    acceptance: &crate::config::Acceptance,
+) -> anyhow::Result<world::Manifest> {
+    let settings = settings(config, overrides, aspects);
+    let config = &settings.config;
     let sources = download::sources(config);
-    let downloads = scratch.path().join("downloads");
+    let downloads = scratch.join("downloads");
     stage_inputs(fixtures, &downloads, &sources)?;
     let inputs = sources
         .iter()
         .map(|s| download::register_local(&downloads, s))
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let manifest =
-        crate::build::assemble(scratch.path(), out, config, overrides, &sources, &inputs).await?;
+    let manifest = crate::build::assemble(scratch, out, &settings, &sources, &inputs).await?;
     crate::build::verify(out, config, acceptance, None).await?;
     Ok(manifest)
 }

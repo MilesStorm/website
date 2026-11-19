@@ -52,6 +52,7 @@ pub fn sources(config: &Config) -> Vec<Source> {
         once("gr_books", &gr.books),
         once("gr_works", &gr.works),
         once("gr_series", &gr.series),
+        once("gr_interactions", &gr.interactions),
     ]
 }
 

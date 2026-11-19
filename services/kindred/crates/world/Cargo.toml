@@ -6,16 +6,17 @@ edition.workspace = true
 # The world's on-disk format: its types, the writer the build uses, and the reader the kindred
 # service uses (memory-mapped columns and the search index).
 [dependencies]
+taste = { path = "../taste" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 hex.workspace = true
-tracing.workspace = true
 tantivy.workspace = true
 memmap2.workspace = true
 bytemuck.workspace = true
 
 [dev-dependencies]
 proptest = "1"
+taste = { path = "../taste" }
 tempfile = "3"

@@ -10,6 +10,19 @@ path = "src/main.rs"
 
 [dependencies]
 world = { path = "../world" }
+# The taste model: the benchmark measures exactly the code the service runs (04-benchmark.md §1)
+taste = { path = "../taste" }
+# Matrix factorization for the collaborative block (03-engine.md §2)
+discorec = "0.3"
+# Ridge regressions of the text maps
+nalgebra = "0.34"
+# The benchmark's users in parallel
+rayon = "1"
+# The text embedding model: ONNX Runtime loaded at run time (the image ships Microsoft's CUDA
+# build, as services/ai_pipeline does), and its tokenizer in pure Rust
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "cuda", "api-22"] }
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+bytemuck.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

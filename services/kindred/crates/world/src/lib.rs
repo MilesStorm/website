@@ -18,10 +18,10 @@ pub mod search;
 pub mod writer;
 
 pub use key::{KeyError, WorkKey};
-pub use manifest::{FORMAT_VERSION, FileEntry, InputFile, Manifest, SearchParams};
+pub use manifest::{Aspect, FORMAT_VERSION, FileEntry, InputFile, Manifest, Model, SearchParams};
 pub use reader::World;
 pub use search::Hit;
-pub use writer::{BookDoc, WorkRow, WorldWriter};
+pub use writer::{BookDoc, VectorTable, WorkRow, WorldWriter};
 
 /// Names of the files in a world version, relative to its directory.
 pub mod files {
@@ -44,6 +44,12 @@ pub mod files {
     pub const SERIES_NAME_TEXT: &str = "series_names.utf8";
     /// Redirected work numbers: (old, current) pairs of `u64`, ascending by old.
     pub const REDIRECTS: &str = "redirects.u64";
+    /// Per work: its row in the vector table, `u32::MAX` when it has no vector.
+    pub const VECTOR_ROWS: &str = "vector_rows.u32";
+    /// The book vectors (03-engine.md §2): `d` `f32` numbers per vector row, row-major.
+    pub const VECTORS: &str = "vectors.f32";
+    /// Per vector row: where its blocks came from, see [`crate::reader::source`].
+    pub const VECTOR_SOURCE: &str = "vector_source.u8";
     /// The tantivy search index directory.
     pub const SEARCH_DIR: &str = "search";
 }

@@ -25,6 +25,8 @@ base = "https://mcauleylab.ucsd.edu/public_datasets/gdrive/goodreads"
 books = "goodreads_books.json.gz"
 works = "goodreads_book_works.json.gz"
 series = "goodreads_book_series.json.gz"
+# Who shelved and rated what, with dates (M2: the collaborative block and the benchmark).
+interactions = "goodreads_interactions_dedup.json.gz"
 
 [duckdb]
 # DuckDB spills to the scratch volume above this.
@@ -66,6 +68,94 @@ not_a_book_subjects = [
 # Prior weight `m` of the smoothed average rating (`quality`).
 prior_weight = 50.0
 
+[interactions]
+# Benchmark users (04-benchmark.md §2). Eligible: at least this many works rated 1-5 stars after
+# mapping to Open Library works. Test users are removed before anything is trained; the gate
+# subset (the first of the test users) is measured by every monthly build; tuning users stay in
+# factor training and fit the prior mean and the hyperparameters.
+min_eligible_ratings = 60
+test_users = 5000
+gate_users = 500
+tuning_users = 5000
+# Orders the eligible users for the split (and every other draw of the benchmark).
+seed = 2017
+
+[factors]
+# The collaborative block (03-engine.md §2): implicit matrix factorization on liked pairs
+# (4 or 5 stars). Users and works below these counts are dropped, twice.
+k = 64
+iterations = 20
+min_user_likes = 10
+min_work_likes = 20
+# The cold-book test (04-benchmark.md §4): works first published in this year or later are left
+# out of a second factorization and placed by their text instead.
+cold_from_year = 2015
+
+[aspects]
+# 03-engine.md §2, aspect block: smoothing toward the global share, the weight of one matching
+# Open Library subject in shelvings, and the shelvings a work needs for its own aspect numbers
+# (fewer: placed by its text).
+alpha = 20.0
+subject_weight = 5.0
+min_shelvings = 20.0
+# Unmatched shelf names printed by the stage, to extend aspects.toml with evidence.
+report_unmatched = 500
+
+[embed]
+# Text embeddings for the text maps (03-engine.md §3). The model directory holds model.onnx and
+# tokenizer.json (in the image, services/kindred/Dockerfile). Without it only the fixture world
+# builds, with a seeded stand-in.
+model_dir = "/opt/kindred/bge-small-en-v1.5"
+model_id = "BAAI/bge-small-en-v1.5"
+dimensions = 384
+max_tokens = 512
+batch = 64
+# The text given to the model: title, authors, this many subjects, the description's first
+# characters.
+max_subjects = 10
+max_description_chars = 1500
+
+[text_maps]
+# Ridge strengths tried for each map; the best on a held-out tenth is used.
+ridge = [0.1, 1.0, 10.0, 100.0, 1000.0]
+
+[vectors]
+# Popularity (ln(1 + ratings)) a work needs to be picked (02-world-data.md §4): set so that about
+# 300,000 works are recommendable.
+min_popularity = 4.0
+
+[model]
+# The taste model's hyperparameters (03-engine.md). Defaults from the engine document until the
+# benchmark's search on the tuning users (kindred-world bench --users tuning) sets them.
+var_bias = 4.0
+var_c = 2.25
+var_a = 0.0225
+var_m = 0.25
+tau_v = 1.0
+tau_c = 0.5
+omega_v = 0.5
+omega_h = 0.5
+text_var = 0.25
+# Length of a text-placed collaborative block (03-engine.md §3).
+text_shrink = 0.7
+# Smallest information worth a comparison question (03-engine.md §7).
+ask_min = 0.05
+beta = 0.5
+b1 = -1.0
+b2 = 0.0
+b3 = 1.0
+
+[bench]
+# The values of n (revealed ratings per user) measured.
+revealed = [0, 5, 10, 20, 50]
+# Neighbours kept per work by the item-to-item baseline.
+neighbours = 200
+# Verdict terms sampled at most when fitting the prior mean of the meta block.
+max_prior_terms = 2000000
+# NDCG@10 at n = 20 on the gate subset when M2 was accepted; every monthly build must reach
+# min_share of it. Absent until the benchmark was accepted.
+min_share = 0.9
+
 [search]
 # A hit's score: text relevance, plus this times popularity (ln(1 + ratings)), plus
 # whole_title_bonus when the query is a whole title of the work (last word possibly unfinished).
@@ -85,6 +175,8 @@ p95_ms = 30
 [verify]
 # Counts that may not move more than this between versions (skipped on the first run).
 max_change = 0.20
+# The recommendable works must number within this range.
+recommendable = [150000, 600000]
 
 [publish]
 endpoint = "http://garage.garage.svc.cluster.local:3900"

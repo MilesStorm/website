@@ -1,12 +1,14 @@
 //! Stages search-index and pack: the searchable works from DuckDB into a world directory
-//! (crate `world`): the tantivy index, the per-work columns, series names and redirects.
+//! (crate `world`): the tantivy index, the per-work columns, series names, redirects, and the
+//! book vectors from the model stages.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use world::{BookDoc, WorkKey, WorkRow, WorldWriter};
+use world::{BookDoc, VectorTable, WorkKey, WorkRow, WorldWriter};
 
 use crate::trace::Duck;
+use crate::vectors::{self, Vectors};
 
 /// Unit separator: joins list values in SQL, split here.
 const SEP: char = '\u{1f}';
@@ -22,7 +24,7 @@ fn split(s: Option<String>) -> Vec<String> {
 }
 
 /// Writes the world's data files into `dir` (empty); the caller finishes the manifest.
-pub fn write(duck: &Duck, dir: &Path) -> anyhow::Result<WorldWriter> {
+pub fn write(duck: &Duck, dir: &Path, vectors: &Vectors) -> anyhow::Result<WorldWriter> {
     let mut writer = WorldWriter::create(dir)?;
     let mut rows = Vec::new();
     let mut series_rows: HashMap<String, u32> = HashMap::new();
@@ -84,6 +86,10 @@ pub fn write(duck: &Duck, dir: &Path) -> anyhow::Result<WorldWriter> {
             year,
             not_a_book: r.get(7)?,
             has_description: r.get(8)?,
+            recommendable: vectors
+                .phi
+                .find(key.0)
+                .is_some_and(|i| vectors.recommendable(i)),
             series,
         });
     }
@@ -94,7 +100,23 @@ pub fn write(duck: &Duck, dir: &Path) -> anyhow::Result<WorldWriter> {
         "search index written"
     );
 
+    let recommendable: Vec<WorkKey> = rows
+        .iter()
+        .filter(|r| r.recommendable)
+        .map(|r| r.key)
+        .collect();
     writer.write_works(rows, &series_names)?;
+    let table = VectorTable {
+        d: vectors.layout.d(),
+        keys: vectors.phi.keys.iter().map(|&k| WorkKey(k)).collect(),
+        data: vectors.phi.data.clone(),
+        source: vectors
+            .flags
+            .iter()
+            .map(|f| f & (vectors::C_FROM_TEXT | vectors::A_FROM_TEXT))
+            .collect(),
+    };
+    writer.write_vectors(&table, &recommendable)?;
     let mut redirects = Vec::new();
     let mut statement = duck.conn().prepare("SELECT old, new FROM ol_redirects")?;
     let mut result = statement.query([])?;

@@ -9,7 +9,11 @@ use world::{World, files};
 
 use world_build::config::{self, Acceptance, Config, SeriesOverrides};
 use world_build::trace::Bucket;
-use world_build::{build, fixture, publish, verify};
+use world_build::{bench, build, fixture, publish, verify};
+
+fn aspects() -> config::Aspects {
+    config::parse("aspects.toml", config::ASPECTS_TOML).unwrap()
+}
 
 fn configs() -> (Config, SeriesOverrides, Acceptance) {
     (
@@ -29,6 +33,7 @@ async fn fixture_world_builds_and_passes_verify() {
         &out,
         &config,
         &overrides,
+        &aspects(),
         &acceptance,
     )
     .await
@@ -88,6 +93,9 @@ async fn fixture_world_builds_and_passes_verify() {
         files::SERIES_NAME_OFFSETS,
         files::SERIES_NAME_TEXT,
         files::REDIRECTS,
+        files::VECTOR_ROWS,
+        files::VECTORS,
+        files::VECTOR_SOURCE,
     ];
     for entry in &manifest.files {
         assert!(
@@ -97,6 +105,83 @@ async fn fixture_world_builds_and_passes_verify() {
             entry.path
         );
     }
+}
+
+/// M2 on the fixture world: every searchable work with reading data has a vector, the model
+/// constants are in the manifest, and the benchmark recovers the synthetic readers' planted taste
+/// (02-world-data.md §10, 04-benchmark.md §7): FULL beats P and C by a wide margin.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_benchmark_recovers_the_planted_model() {
+    let (config, overrides, acceptance) = configs();
+    let tmp = tempfile::tempdir().unwrap();
+    let scratch = tmp.path().join("scratch");
+    let out = tmp.path().join("world");
+    let manifest = fixture::build_in(
+        &scratch,
+        &fixture::default_dir(),
+        &out,
+        &config,
+        &overrides,
+        &aspects(),
+        &acceptance,
+    )
+    .await
+    .unwrap();
+    let world = World::open(&out).unwrap();
+    let model = &manifest.model;
+    assert_eq!(model.aspects.len(), aspects().aspect.len());
+    assert_eq!(model.layout.a, model.aspects.len());
+    assert!(model.confidence_cuts[0] > 0.0 && model.confidence_cuts[0] <= model.confidence_cuts[1]);
+    // The synthetic readers' stars don't depend on quality or popularity, so the fitted prior
+    // mean of the meta block stays near zero here (on real data it is what P measures).
+    assert!(model.prior.m0_meta.iter().all(|m| m.is_finite() && m.abs() < 0.5), "{:?}", model.prior);
+    let report = &manifest.report;
+    let recommendable = report["recommendable_works"].as_u64().unwrap();
+    assert!(recommendable >= 100, "{report}");
+    assert!(report["searchable_with_shelf_aspects"].as_u64().unwrap() >= 100, "{report}");
+    let mut with_vector = 0;
+    let mut flagged = 0;
+    for row in (0..world.len() as u32).map(world::reader::Row) {
+        if let Some(v) = world.vector(row) {
+            with_vector += 1;
+            assert_eq!(v[model.layout.bias()], 1.0);
+            let c: f32 = v[model.layout.c()].iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(c <= 1.0 + 1e-4, "c is at most unit length");
+        }
+        if world.flags(row) & flags::RECOMMENDABLE != 0 {
+            flagged += 1;
+            assert!(world.vector(row).is_some());
+        }
+    }
+    assert_eq!(flagged as u64, recommendable);
+    assert_eq!(with_vector, report["vector_works"].as_u64().unwrap() as usize);
+
+    let settings = fixture::settings(&config, &overrides, &aspects());
+    let paths = build::Paths::new(&scratch);
+    let duck = world_build::trace::Duck::open(&paths.database, "2GB", 2, &paths.duckdb_temp).unwrap();
+    let markdown = bench::run_full(
+        &duck,
+        &settings.config,
+        aspects().aspect.len(),
+        &paths.model,
+        bench::data::Users::Test,
+    )
+    .unwrap();
+    assert!(markdown.contains("| G1 |"), "{markdown}");
+    let full: bench::Report =
+        serde_json::from_slice(&std::fs::read(paths.model.join("bench-test.json")).unwrap()).unwrap();
+    let ndcg = &full.tables["ndcg@10"];
+    let at = |method: &str, n: usize| {
+        let i = full.revealed.iter().position(|&x| x == n).unwrap();
+        ndcg[method][i].as_f64().unwrap()
+    };
+    let (f, p, c) = (at("FULL", 20), at("P (prior only)", 20), at("C (content nearest)", 20));
+    assert!(f > 1.2 * p && f > 1.2 * c, "FULL {f}, P {p}, C {c}\n{markdown}");
+    // With a few hundred works, few unread ones are left at n = 50 and every method's NDCG falls
+    // (G5 is for the real world); what must grow is FULL's lead over the prior.
+    assert!(at("FULL", 50) / at("P (prior only)", 50) > at("FULL", 5) / at("P (prior only)", 5), "{markdown}");
+    let gate = |id: &str| full.gates.iter().find(|g| g.id == id).unwrap().passed;
+    assert!(gate("G1") && gate("G2") && gate("G4") && gate("G6"), "{markdown}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -113,6 +198,7 @@ async fn a_failed_acceptance_case_stops_the_build() {
         &tmp.path().join("w"),
         &config,
         &overrides,
+        &aspects(),
         &impossible,
     )
     .await
@@ -206,12 +292,14 @@ async fn gates_stop_a_world_and_nothing_is_published_after_a_failed_verify() {
         &out,
         &config,
         &overrides,
+        &aspects(),
         &acceptance,
     )
     .await
     .unwrap();
 
-    // The gates, directly.
+    // The gates, directly, with the fixture world's settings.
+    let config = fixture::settings(&config, &overrides, &aspects()).config;
     let world = World::open(&out).unwrap();
     verify::verify(&world, &config, &acceptance, Some(&manifest.report)).unwrap();
     let mut grown = manifest.report.clone();
@@ -229,6 +317,22 @@ async fn gates_stop_a_world_and_nothing_is_published_after_a_failed_verify() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("mapped"), "{err}");
+    // M2: the recommendable range and the benchmark gate.
+    let mut strict = config.clone();
+    strict.verify.recommendable = (1_000_000, 2_000_000);
+    let err = verify::verify(&world, &strict, &acceptance, None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("recommendable"), "{err}");
+    let mut strict = config.clone();
+    let measured = manifest.report["bench_gate_ndcg10_n20"].as_f64().unwrap();
+    strict.bench.accepted_ndcg10_n20 = Some(measured / 0.95);
+    verify::verify(&world, &strict, &acceptance, None).unwrap();
+    strict.bench.accepted_ndcg10_n20 = Some(measured / 0.85);
+    let err = verify::verify(&world, &strict, &acceptance, None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("benchmark gate"), "{err}");
     drop(world);
 
     // A served world, then a build that fails verify: nothing changes in the bucket.

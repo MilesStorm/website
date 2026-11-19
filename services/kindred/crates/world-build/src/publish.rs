@@ -61,6 +61,16 @@ pub async fn current(bucket: &Bucket) -> anyhow::Result<Option<Current>> {
     }
 }
 
+/// The parts of a stored manifest the bucket operations read. Not the whole `Manifest`: a
+/// version written by an older format (an M1 world has no model constants) must still give its
+/// report to the change gates and stay a rollback target.
+#[derive(serde::Deserialize)]
+struct Stored {
+    files: Vec<world::FileEntry>,
+    #[serde(default)]
+    report: serde_json::Value,
+}
+
 /// The report of the version being served, for the change gates.
 pub async fn current_report(bucket: &Bucket) -> anyhow::Result<Option<serde_json::Value>> {
     let Some(current) = current(bucket).await? else {
@@ -74,8 +84,8 @@ pub async fn current_report(bucket: &Bucket) -> anyhow::Result<Option<serde_json
                 current.version
             )
         })?;
-    let manifest: Manifest = serde_json::from_slice(&bytes)?;
-    Ok(Some(manifest.report))
+    let stored: Stored = serde_json::from_slice(&bytes)?;
+    Ok(Some(stored.report))
 }
 
 /// Uploads the world in `dir` as a new version and makes it current. `base` is
@@ -132,7 +142,7 @@ pub async fn rollback(bucket: &Bucket, version: &str) -> anyhow::Result<()> {
         .with_context(|| {
             format!("version {version} is not in the bucket (`kindred-world versions` lists them)")
         })?;
-    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)?;
+    let manifest: Stored = serde_json::from_slice(&manifest_bytes)?;
     let store = bucket.store().clone();
     for entry in &manifest.files {
         let meta = bucket
@@ -264,6 +274,14 @@ mod tests {
                 typo_min_len: 5,
             },
             report: serde_json::json!({"searchable_works": name.len()}),
+            model: world::Model {
+                layout: taste::Layout { k: 1, a: 0 },
+                aspects: vec![],
+                hyper: taste::Hyper::default(),
+                prior: taste::Prior::default(),
+                confidence_cuts: [0.0, 0.0],
+                bench: serde_json::json!({}),
+            },
         };
         std::fs::write(
             dir.join(files::MANIFEST),

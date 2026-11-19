@@ -1,0 +1,610 @@
+# The aspects: readable traits of a book, one number each in the book vector (03-engine.md §2, §5).
+# Miles may edit this file; a change takes effect at the next world build. `id` is stored in the
+# kindred database: never rename one, add a new id instead. The shelf names are exact Goodreads
+# shelf names; `subjects` are lower-case phrases found as whole words in Open Library subjects. The world build's
+# aspects stage logs the most-used shelves that match nothing here, to extend it with evidence.
+#
+# label: the chip text, read after "What made it work?". phrase: used inside reason sentences.
+# chip = false: never offered as a chip (genres, forms, reception). steer: "light" or "dark" for
+# the Lighter steer. Group reception: shares of all readers (organisational shelves included).
+
+[[aspect]]
+id = "fast_paced"
+group = "pace"
+label = "the pace"
+phrase = "a fast pace"
+shelves = ["fast-paced", "page-turner", "unputdownable", "action-packed"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "slow_burn"
+group = "pace"
+label = "the slow build"
+phrase = "a slow build"
+shelves = ["slow-burn", "slow", "slow-paced"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "dark"
+group = "tone"
+label = "how dark it is"
+phrase = "a dark tone"
+shelves = ["dark", "grimdark", "disturbing", "bleak", "gritty"]
+subjects = []
+chip = true
+steer = "dark"
+
+[[aspect]]
+id = "funny"
+group = "tone"
+label = "the humour"
+phrase = "humour"
+shelves = ["humor", "humour", "funny", "comedy", "satire"]
+subjects = ["humor", "humorous"]
+chip = true
+steer = "light"
+
+[[aspect]]
+id = "cozy"
+group = "tone"
+label = "the warmth"
+phrase = "warmth"
+shelves = ["cozy", "cosy", "comfort-reads", "feel-good", "heartwarming"]
+subjects = []
+chip = true
+steer = "light"
+
+[[aspect]]
+id = "sad"
+group = "tone"
+label = "the heartbreak"
+phrase = "heartbreak"
+shelves = ["tearjerker", "made-me-cry", "heartbreaking", "sad", "emotional"]
+subjects = []
+chip = true
+steer = "dark"
+
+[[aspect]]
+id = "tense"
+group = "tone"
+label = "the tension"
+phrase = "tension"
+shelves = ["suspense", "creepy", "scary", "tense"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "lyrical"
+group = "style"
+label = "the writing"
+phrase = "lyrical writing"
+shelves = ["beautiful-writing", "beautifully-written", "lyrical", "poetic"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "thought_provoking"
+group = "style"
+label = "the ideas"
+phrase = "big ideas"
+shelves = ["thought-provoking", "philosophical", "philosophy", "mind-blowing"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "twisty"
+group = "style"
+label = "the twists"
+phrase = "twists"
+shelves = ["plot-twist", "twists", "unreliable-narrator"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "demanding"
+group = "style"
+label = "how demanding it is"
+phrase = "demanding prose"
+shelves = ["challenging", "dense", "difficult"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "easy_read"
+group = "style"
+label = "how easily it reads"
+phrase = "an easy read"
+shelves = ["easy-read", "light-read", "quick-read", "beach-read"]
+subjects = []
+chip = true
+steer = "light"
+
+[[aspect]]
+id = "character_driven"
+group = "story"
+label = "the characters"
+phrase = "strong characters"
+shelves = ["character-driven", "great-characters", "character-development", "strong-female-lead"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "world_building"
+group = "story"
+label = "the world"
+phrase = "rich world-building"
+shelves = ["world-building", "worldbuilding"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "romance_plot"
+group = "story"
+label = "the romance"
+phrase = "a romance"
+shelves = ["romance", "love-story", "enemies-to-lovers", "friends-to-lovers", "love-triangle"]
+subjects = ["love stories", "romance"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "found_family"
+group = "story"
+label = "the found family"
+phrase = "a found family"
+shelves = ["found-family", "friendship"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "coming_of_age"
+group = "story"
+label = "the coming-of-age story"
+phrase = "a coming-of-age story"
+shelves = ["coming-of-age", "bildungsroman"]
+subjects = ["coming of age", "bildungsroman"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "mystery_plot"
+group = "story"
+label = "the mystery"
+phrase = "a mystery"
+shelves = ["mystery", "whodunit", "detective"]
+subjects = ["detective and mystery", "mystery"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "adventure"
+group = "story"
+label = "the adventure"
+phrase = "an adventure"
+shelves = ["adventure", "quest", "survival"]
+subjects = ["adventure stories", "adventure and adventurers"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "politics"
+group = "story"
+label = "the politics and scheming"
+phrase = "politics and scheming"
+shelves = ["political", "politics", "court-intrigue", "intrigue"]
+subjects = ["politics and government"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "war"
+group = "story"
+label = "the war story"
+phrase = "a war story"
+shelves = ["war", "military", "wwii", "world-war-ii"]
+subjects = ["war stories", "world war"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "family_saga"
+group = "story"
+label = "the family story"
+phrase = "a family story"
+shelves = ["family", "family-saga", "family-drama"]
+subjects = ["family life", "family sagas"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "hard_science"
+group = "theme"
+label = "the science"
+phrase = "hard science"
+shelves = ["hard-sci-fi", "hard-science-fiction"]
+subjects = []
+chip = true
+steer = ""
+
+[[aspect]]
+id = "space"
+group = "theme"
+label = "the space setting"
+phrase = "a space setting"
+shelves = ["space", "space-opera", "aliens"]
+subjects = ["outer space", "space flight"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "magic"
+group = "theme"
+label = "the magic"
+phrase = "magic"
+shelves = ["magic", "magic-system", "wizards", "witches"]
+subjects = ["magic"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "creatures"
+group = "theme"
+label = "the creatures"
+phrase = "fantastic creatures"
+shelves = ["dragons", "vampires", "werewolves", "fae", "faeries", "zombies"]
+subjects = ["dragons", "vampires"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "dystopia"
+group = "theme"
+label = "the broken world"
+phrase = "a broken world"
+shelves = ["dystopia", "dystopian", "post-apocalyptic", "apocalyptic"]
+subjects = ["dystopia"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "time_travel"
+group = "theme"
+label = "the time travel"
+phrase = "time travel"
+shelves = ["time-travel", "alternate-history"]
+subjects = ["time travel"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "historical"
+group = "theme"
+label = "the historical setting"
+phrase = "a historical setting"
+shelves = ["historical", "historical-fiction", "medieval", "victorian", "regency"]
+subjects = ["historical fiction"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "mythology"
+group = "theme"
+label = "the myth and retelling"
+phrase = "myth and retelling"
+shelves = ["mythology", "retellings", "fairy-tales", "fairy-tale-retellings", "folklore"]
+subjects = ["mythology", "folklore", "fairy tales"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "faith"
+group = "theme"
+label = "the faith themes"
+phrase = "themes of faith"
+shelves = ["religion", "spirituality", "christian", "faith"]
+subjects = ["religion", "christian"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "queer"
+group = "theme"
+label = "the queer story"
+phrase = "a queer story"
+shelves = ["lgbt", "lgbtq", "queer"]
+subjects = ["lgbt", "gay", "lesbian"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "nature"
+group = "theme"
+label = "the natural world"
+phrase = "the natural world"
+shelves = ["nature", "environment", "animals"]
+subjects = ["nature stories", "natural history"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "travel"
+group = "theme"
+label = "the journey"
+phrase = "a journey"
+shelves = ["travel", "travelogue"]
+subjects = ["travel"]
+chip = true
+steer = ""
+
+[[aspect]]
+id = "fantasy"
+group = "genre"
+label = ""
+phrase = "fantasy"
+shelves = ["fantasy", "epic-fantasy", "high-fantasy"]
+subjects = ["fantasy fiction", "fantasy"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "urban_fantasy"
+group = "genre"
+label = ""
+phrase = "urban fantasy"
+shelves = ["urban-fantasy", "paranormal", "paranormal-romance", "supernatural"]
+subjects = []
+chip = false
+steer = ""
+
+[[aspect]]
+id = "sci_fi"
+group = "genre"
+label = ""
+phrase = "science fiction"
+shelves = ["sci-fi", "science-fiction", "scifi", "sf"]
+subjects = ["science fiction"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "horror"
+group = "genre"
+label = ""
+phrase = "horror"
+shelves = ["horror", "gothic"]
+subjects = ["horror"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "thriller"
+group = "genre"
+label = ""
+phrase = "a thriller plot"
+shelves = ["thriller", "thrillers", "psychological-thriller"]
+subjects = ["thriller", "suspense fiction"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "crime"
+group = "genre"
+label = ""
+phrase = "crime"
+shelves = ["crime", "noir"]
+subjects = ["crime"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "literary"
+group = "genre"
+label = ""
+phrase = "literary fiction"
+shelves = ["literary-fiction", "literary"]
+subjects = []
+chip = false
+steer = ""
+
+[[aspect]]
+id = "classics"
+group = "genre"
+label = ""
+phrase = "a classic"
+shelves = ["classics", "classic", "classic-literature"]
+subjects = ["classic literature"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "contemporary"
+group = "genre"
+label = ""
+phrase = "a contemporary setting"
+shelves = ["contemporary", "contemporary-fiction", "realistic-fiction", "chick-lit", "womens-fiction"]
+subjects = []
+chip = false
+steer = ""
+
+[[aspect]]
+id = "nonfiction"
+group = "genre"
+label = ""
+phrase = "non-fiction"
+shelves = ["non-fiction", "nonfiction"]
+subjects = []
+chip = false
+steer = ""
+
+[[aspect]]
+id = "memoir"
+group = "genre"
+label = ""
+phrase = "a life story"
+shelves = ["memoir", "memoirs", "biography", "autobiography"]
+subjects = ["biography", "autobiography"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "history"
+group = "genre"
+label = ""
+phrase = "history"
+shelves = ["history", "world-history"]
+subjects = ["history"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "popular_science"
+group = "genre"
+label = ""
+phrase = "popular science"
+shelves = ["science", "popular-science", "physics", "biology"]
+subjects = ["popular science"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "psychology"
+group = "genre"
+label = ""
+phrase = "psychology and self-help"
+shelves = ["psychology", "self-help", "personal-development"]
+subjects = ["psychology", "self-help"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "business"
+group = "genre"
+label = ""
+phrase = "business and economics"
+shelves = ["business", "economics", "finance", "leadership"]
+subjects = ["business", "economics"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "true_crime"
+group = "genre"
+label = ""
+phrase = "true crime"
+shelves = ["true-crime"]
+subjects = ["true crime"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "short_form"
+group = "form"
+label = ""
+phrase = "short pieces"
+shelves = ["short-stories", "essays", "anthologies", "novella"]
+subjects = ["short stories"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "poetry"
+group = "form"
+label = ""
+phrase = "poetry"
+shelves = ["poetry", "poems"]
+subjects = ["poetry"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "graphic"
+group = "form"
+label = ""
+phrase = "pictures and panels"
+shelves = ["graphic-novels", "graphic-novel", "comics", "manga"]
+subjects = ["comic books", "graphic novels", "comics"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "young_adult"
+group = "form"
+label = ""
+phrase = "a young-adult voice"
+shelves = ["young-adult", "ya", "teen"]
+subjects = ["young adult"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "childrens"
+group = "form"
+label = ""
+phrase = "a children's book"
+shelves = ["childrens", "children", "middle-grade", "kids", "picture-books"]
+subjects = ["juvenile", "children's"]
+chip = false
+steer = ""
+
+[[aspect]]
+id = "explicit"
+group = "form"
+label = ""
+phrase = "explicit content"
+shelves = ["erotica", "smut", "steamy"]
+subjects = []
+chip = false
+steer = ""
+
+[[aspect]]
+id = "favourite_rate"
+group = "reception"
+label = ""
+phrase = "many readers' favourite"
+shelves = ["favorites", "favourites", "all-time-favorites", "favorite-books"]
+subjects = []
+chip = false
+steer = ""
+
+[[aspect]]
+id = "abandoned_rate"
+group = "reception"
+label = ""
+phrase = "many readers giving up"
+shelves = ["dnf", "did-not-finish", "abandoned", "unfinished", "gave-up"]
+subjects = []
+chip = false
+steer = ""
+
+[[aspect]]
+id = "reread_rate"
+group = "reception"
+label = ""
+phrase = "many rereads"
+shelves = ["re-read", "reread", "rereads", "re-reads"]
+subjects = []
+chip = false
+steer = ""
+
+# Shelves that say where or when, not what (03-engine.md Appendix A): left out of a work's
+# shelvings, except for the reception group. `organisational_patterns` are whole-name regular
+# expressions.
+[organisational]
+shelves = ["to-read", "currently-reading", "read", "owned", "own", "books-i-own", "i-own",
+    "owned-books", "my-books", "my-library", "library", "kindle", "ebook", "ebooks", "e-book",
+    "e-books", "audiobook", "audiobooks", "audio", "audible", "wish-list", "wishlist", "to-buy",
+    "default", "tbr", "maybe", "on-hold", "borrowed", "book-club", "bookclub", "giveaways", "arc",
+    "netgalley", "signed", "hardcover", "paperback", "series", "standalone", "fiction", "general"]
+patterns = ['read-in-\d{4}', '\d{4}-reads', '\d{4}', '\d-stars?']

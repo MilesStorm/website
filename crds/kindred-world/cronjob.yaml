@@ -1,5 +1,6 @@
-# Builds the world (catalogue and search index) from Open Library's monthly dumps and the
-# Goodreads dataset, verifies it and publishes it to Garage bucket kindred-world
+# Builds the world (catalogue, search index and book vectors) from Open Library's monthly dumps
+# and the Goodreads dataset, measures the taste model on the benchmark's gate users, verifies it
+# and publishes it to Garage bucket kindred-world
 # (services/kindred/README.md). A week into the month, when Open Library's new dumps exist. A
 # failed run moves nothing: the previous world stays current (alert KindredWorldBuildFailed in the
 # homelab repo). Start one by hand: kubectl create job -n kindred --from=cronjob/kindred-world kindred-world-manual-<n>
@@ -27,9 +28,12 @@ spec:
             app: kindred-world
         spec:
           restartPolicy: Never
-          # The scratch volume's only copy is on gamma's NVMe (scratch.yaml): run beside it.
+          # On eta, the node with the GPUs: the text embeddings run there (03-engine.md §3; on
+          # the CPU they would take most of a day the first time). The scratch volume's copy
+          # stays on gamma's NVMe (scratch.yaml); Longhorn attaches it on eta over the network.
           nodeSelector:
-            kubernetes.io/hostname: gamma
+            kubernetes.io/hostname: eta
+          runtimeClassName: nvidia
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
@@ -39,12 +43,17 @@ spec:
             - name: kindred-world
               image: ghcr.io/milesstorm/kindred-world:latest
               args: ["build", "--scratch", "/scratch"]
-              # Requests only, no limits (the repo's convention). DuckDB keeps to its
-              # memory_limit in world.toml (6 GB) and spills to the scratch volume beyond it.
+              # Requests only, no limits (the repo's convention), except the GPU, which can only be
+              # requested as a limit. DuckDB keeps to its memory_limit in world.toml (6 GB) and
+              # spills to the scratch volume beyond it; while the Rust stages run it is held to
+              # 1 GB, and the factorization holds the liked pairs (about 5 GB). The benchmark
+              # gate runs on every core.
               resources:
                 requests:
-                  cpu: "2"
-                  memory: 8Gi
+                  cpu: "4"
+                  memory: 12Gi
+                limits:
+                  nvidia.com/gpu: "1"
               env:
                 # The read-write key of bucket kindred-world (homelab infisical-app/manifests/kindred.yaml).
                 - name: S3_ACCESS_KEY_ID
