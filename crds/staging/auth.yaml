@@ -10,7 +10,7 @@ spec:
         - name: auth
           resources:
             requests: {cpu: 10m, memory: 32Mi}
-            limits: {memory: 256Mi}
+            limits: {memory: 384Mi}
           env:
             - {name: OTEL_RESOURCE_ATTRIBUTES, value: "deployment.environment.name=staging"}
             - {name: BFF_CALLBACK_URL, value: "https://staging.milesstorm.com"}
