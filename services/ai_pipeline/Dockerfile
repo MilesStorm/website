@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04 AS chef
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS chef
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -60,16 +60,19 @@ RUN cargo build --release && \
 RUN strip --strip-debug /app/target/release/dice_detector
 
 
-# ONNX Runtime, which runs YOLO: Microsoft's build for CUDA 12, pinned by SHA-256. It
-# needs a newer CUDA than 12.6 (libcudart's cudaLibrary* functions; 12.9.1 has them): check a new
-# version with `ldd -r libonnxruntime_providers_cuda.so` in the runtime image. The
-# TensorRT provider is left out (unused, and TensorRT itself isn't in the image).
-FROM chef AS onnxruntime
-ADD --checksum=sha256:4e16d2ec66521a24fe917bd848eb8ae3a9107cb8b4aec978fb2b3ab1a640fcb7 \
-    https://github.com/microsoft/onnxruntime/releases/download/v1.28.3/onnxruntime-linux-x64-gpu_cuda12-1.28.3.tgz /tmp/onnxruntime.tgz
-RUN mkdir -p /onnxruntime \
- && tar -xzf /tmp/onnxruntime.tgz -C /onnxruntime --strip-components=1 --wildcards '*/lib/libonnxruntime*' \
- && rm /onnxruntime/lib/libonnxruntime_providers_tensorrt.so
+# ONNX Runtime, which runs YOLO: Microsoft's CUDA 13 build from PyPI (onnxruntime-gpu, the
+# version the models stage uses), pinned by SHA-256. Its CUDA provider needs CUDA 13, so the
+# image is on CUDA 13.0 (the newest eta's 580 driver runs): check a new version with
+# `ldd -r libonnxruntime_providers_cuda.so` in the runtime image. The TensorRT provider is
+# left out (unused, and TensorRT itself isn't in the image).
+FROM python:3.12-slim AS onnxruntime
+ADD --checksum=sha256:b52998a075de27ff30e46a125001822541fa5b03f5d31398ab0e50789d80c51c \
+    https://files.pythonhosted.org/packages/8f/48/6fbfdbce25e5756c7b9ff8f40645d98b166b8022cf00ede58a2bb4571b8e/onnxruntime_gpu-1.31.0-cp312-cp312-manylinux_2_28_x86_64.whl /tmp/onnxruntime.whl
+RUN python -m zipfile -e /tmp/onnxruntime.whl /tmp/whl \
+ && mkdir -p /onnxruntime/lib \
+ && mv /tmp/whl/onnxruntime/capi/libonnxruntime*.so* /onnxruntime/lib/ \
+ && rm /onnxruntime/lib/libonnxruntime_providers_tensorrt.so \
+ && ln -s libonnxruntime.so.1.31.0 /onnxruntime/lib/libonnxruntime.so
 
 
 # The models the image adds to the committed YOLO: the dice head as ONNX, built from its
@@ -92,7 +95,7 @@ RUN python /work/head_onnx.py /work/dice_head_resnet18.safetensors /work/dice_he
 # NVIDIA's runtime image: ONNX Runtime's CUDA provider needs cuDNN, cuBLAS and the
 # other CUDA libraries it ships.
 # The GPU driver itself comes from the host through the NVIDIA container runtime.
-FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04 AS runtime
+FROM nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04 AS runtime
 # The base image's entrypoint only prints a licence banner into the logs.
 ENTRYPOINT []
 # The commit this image is built from (CI passes github.sha): `service.version` on traces and
