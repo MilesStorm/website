@@ -84,7 +84,7 @@ fn has_tensor_cores(model: &str) -> bool {
 /// a frame and the head ~15 ms on a GTX 1660 SUPER (production 2026-10-11).
 ///
 /// ONNX Runtime is loaded at run time from the library ORT_DYLIB_PATH names (the image
-/// ships Microsoft's CUDA 12 build). A model runs on the GPU or not at all: this fails if
+/// ships Microsoft's CUDA 13 build). A model runs on the GPU or not at all: this fails if
 /// the CUDA provider can't load. Only the test build can run one on the CPU (`gpu` false).
 ///
 fn load_session(name: &str, path: &str, gpu: bool) -> anyhow::Result<ort::session::Session> {

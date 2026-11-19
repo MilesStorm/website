@@ -267,9 +267,12 @@ jobs:
       # The YOLO model for real, in ONNX Runtime on the CPU (the image runs it on the GPU).
       - name: YOLO in ONNX Runtime
         run: |
-          curl -sSfL -o $RUNNER_TEMP/onnxruntime.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.28.3/onnxruntime-linux-x64-1.28.3.tgz
-          echo "db14e4863bd37893fc59729d986ab2a0d043d10b7d44da1913c4982b7e3d009c  $RUNNER_TEMP/onnxruntime.tgz" | sha256sum -c
-          mkdir $RUNNER_TEMP/onnxruntime && tar -xzf $RUNNER_TEMP/onnxruntime.tgz -C $RUNNER_TEMP/onnxruntime --strip-components=1
+          # Microsoft's CPU build from PyPI, the version the image's models stage uses.
+          curl -sSfL -o $RUNNER_TEMP/onnxruntime.whl https://files.pythonhosted.org/packages/6c/44/1e9e762b95b7da0a8424913a1ed7c38cdaf88624a3c41ddba24ebac88bc9/onnxruntime-1.31.0-cp312-cp312-manylinux_2_28_x86_64.whl
+          echo "5e129d6c56abd53e659cb70f00a108d6824086470ff99c2e47a82e5786563db3  $RUNNER_TEMP/onnxruntime.whl" | sha256sum -c
+          python3 -m zipfile -e $RUNNER_TEMP/onnxruntime.whl $RUNNER_TEMP/whl
+          mkdir -p $RUNNER_TEMP/onnxruntime/lib && mv $RUNNER_TEMP/whl/onnxruntime/capi/libonnxruntime*.so* $RUNNER_TEMP/onnxruntime/lib/
+          ln -s libonnxruntime.so.1.31.0 $RUNNER_TEMP/onnxruntime/lib/libonnxruntime.so
           ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime/lib/libonnxruntime.so cargo test -- --ignored yolo_runs
       # The dice head for real: its ONNX model built from the released weights, as the image does.
       - name: Dice head in ONNX Runtime
