@@ -124,8 +124,8 @@ ridge = [0.1, 1.0, 10.0, 100.0, 1000.0]
 
 [vectors]
 # Popularity (ln(1 + ratings)) a work needs to be picked (02-world-data.md §4): set so that about
-# 300,000 works are recommendable.
-min_popularity = 4.0
+# 300,000 works are recommendable (4.3: 307,787 on the 2026-11 data).
+min_popularity = 4.3
 
 [model]
 # The taste model's hyperparameters (03-engine.md). Defaults from the engine document until the
