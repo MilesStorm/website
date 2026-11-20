@@ -119,6 +119,9 @@ impl Neighbours {
                         });
                         sims.truncate(keep);
                     }
+                    // `touched` can be most of the works: give back what truncate keeps, or
+                    // every query holds megabytes (tens of GB over the test users' queries).
+                    sims.shrink_to_fit();
                     (q, sims)
                 },
             )
