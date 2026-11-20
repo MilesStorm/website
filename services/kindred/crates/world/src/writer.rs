@@ -219,9 +219,10 @@ impl WorldWriter {
             path: path.into(),
             what,
         };
-        let keys = self.keys.as_ref().ok_or_else(|| {
-            corrupt(files::VECTOR_ROWS, "write_works must come first".into())
-        })?;
+        let keys = self
+            .keys
+            .as_ref()
+            .ok_or_else(|| corrupt(files::VECTOR_ROWS, "write_works must come first".into()))?;
         if table.d == 0
             || table.data.len() != table.keys.len() * table.d
             || table.source.len() != table.keys.len()
@@ -229,10 +230,16 @@ impl WorldWriter {
             return Err(corrupt(files::VECTORS, "sizes do not match".into()));
         }
         if table.keys.windows(2).any(|p| p[0] >= p[1]) {
-            return Err(corrupt(files::VECTORS, "keys not strictly ascending".into()));
+            return Err(corrupt(
+                files::VECTORS,
+                "keys not strictly ascending".into(),
+            ));
         }
         if table.data.iter().any(|x| !x.is_finite()) {
-            return Err(corrupt(files::VECTORS, "a number that is not finite".into()));
+            return Err(corrupt(
+                files::VECTORS,
+                "a number that is not finite".into(),
+            ));
         }
         let mut rows = vec![u32::MAX; keys.len()];
         let mut data = Vec::new();
@@ -248,7 +255,10 @@ impl WorldWriter {
             keys.binary_search(&k.0)
                 .map_or(true, |row| rows[row] == u32::MAX)
         }) {
-            return Err(corrupt(files::VECTOR_ROWS, format!("recommendable {key} has no vector")));
+            return Err(corrupt(
+                files::VECTOR_ROWS,
+                format!("recommendable {key} has no vector"),
+            ));
         }
         let col = |name: &str| self.dir.join(name);
         columns::write(&col(files::VECTOR_ROWS), &rows)?;

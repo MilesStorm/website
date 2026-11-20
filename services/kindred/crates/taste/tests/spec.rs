@@ -434,6 +434,7 @@ fn candidates(world: &World, from: usize, rng: &mut ChaCha8Rng) -> Vec<Candidate
             novelty: rng.random_range(0.0..1.0),
             quality_z: rng.sample(StandardNormal),
             ctx: 0.0,
+            pickup: 0.0,
         })
         .collect()
 }

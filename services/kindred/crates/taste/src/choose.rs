@@ -105,6 +105,8 @@ pub struct Candidate {
     pub novelty: f64,
     pub quality_z: f64,
     pub ctx: f64,
+    /// The pick-up term's addition to the ranking ([`crate::bonus`]); 0 ranks by `mu` alone.
+    pub pickup: f64,
 }
 
 /// The series pick, chosen by the caller (§8 pick 1): the next unread entry of the liked or
@@ -127,9 +129,9 @@ pub struct Picks {
 /// The three picks (§8), reproducible from `seed` ([`seed`]).
 ///
 /// 1. *Series:* `series`, as given.
-/// 2. *Likely fit:* the candidate maximising `mu(i) + ctx(i)` (bias dropped), with an author
-///    not already picked. Without a series pick, a second likely fit maximising
-///    `mu(i) + ctx(i) - 0.5 cos(c(i), c(first))`, again a new author.
+/// 2. *Likely fit:* the candidate maximising `mu(i) + ctx(i) + pickup(i)` (bias dropped), with
+///    an author not already picked. Without a series pick, a second likely fit maximising
+///    `mu(i) + ctx(i) + pickup(i) - 0.5 cos(c(i), c(first))`, again a new author.
 /// 3. *Stretch:* [`stretch`] among the rest, a new author too.
 ///
 /// `novelty_quantile` is the stretch's novelty requirement as a quantile of the candidates'
@@ -167,7 +169,7 @@ pub fn picks(
         usable
             .iter()
             .filter(|(c, _)| c.novelty >= likely_floor && free(c, &taken)),
-        |(c, phi)| fit.score(phi) + c.ctx,
+        |(c, phi)| fit.score(phi) + c.ctx + c.pickup,
     );
     if let Some((c, phi_first)) = first {
         likely.push(c.work);
@@ -179,7 +181,8 @@ pub fn picks(
                     .iter()
                     .filter(|(c, _)| c.novelty >= likely_floor && free(c, &taken)),
                 |(c, phi)| {
-                    fit.score(phi) + c.ctx - SECOND_PICK_SPREAD * cosine(&phi[layout.c()], c_first)
+                    fit.score(phi) + c.ctx + c.pickup
+                        - SECOND_PICK_SPREAD * cosine(&phi[layout.c()], c_first)
                 },
             );
             if let Some((c, _)) = second {

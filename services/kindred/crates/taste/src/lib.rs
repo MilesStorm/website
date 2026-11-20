@@ -17,6 +17,7 @@
 mod choose;
 mod fit;
 mod observe;
+mod pickup;
 
 pub use choose::{
     Candidate, Picks, Rated, SeriesNext, context_aspects, cosine, ctx, have_you_read, lighter,
@@ -24,6 +25,7 @@ pub use choose::{
 };
 pub use fit::{AspectWeight, Band, Breakdown, Fit, Origin, Profile, fit};
 pub use observe::{Event, Feedback, ProfileChoice, StopReason, Verdict};
+pub use pickup::{Lean, Pickup, bonus, popularity_z};
 
 use std::ops::Range;
 
@@ -115,6 +117,10 @@ pub struct Hyper {
     pub b2: f64,
     /// Utility threshold between `liked` and `loved`.
     pub b3: f64,
+    /// Weight of the pick-up term in a ranking (§8, [`Pickup`]); 0 ranks by `mu` alone.
+    pub pickup: f64,
+    /// Weight of popularity inside the pick-up term.
+    pub pickup_pop: f64,
 }
 
 impl Default for Hyper {
@@ -135,6 +141,8 @@ impl Default for Hyper {
             b1: -1.0,
             b2: 0.0,
             b3: 1.0,
+            pickup: 1.0,
+            pickup_pop: 0.5,
         }
     }
 }

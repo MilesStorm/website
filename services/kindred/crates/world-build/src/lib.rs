@@ -10,6 +10,7 @@ pub mod embed;
 pub mod factors;
 pub mod fixture;
 pub mod matrix;
+pub mod neighbours;
 pub mod pack;
 pub mod publish;
 pub mod refresh;

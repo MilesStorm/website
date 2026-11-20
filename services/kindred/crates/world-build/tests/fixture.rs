@@ -184,6 +184,7 @@ async fn the_benchmark_recovers_the_planted_model() {
         aspects().aspect.len(),
         &paths.model,
         bench::data::Users::Test,
+        false,
     )
     .unwrap();
     assert!(markdown.contains("| G1 |"), "{markdown}");

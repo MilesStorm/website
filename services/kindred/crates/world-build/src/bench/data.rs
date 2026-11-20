@@ -210,10 +210,17 @@ pub struct Likes {
     pub by_user: Vec<Vec<u64>>,
 }
 
-pub fn likes(duck: &Duck) -> anyhow::Result<Likes> {
-    let mut statement = duck
-        .conn()
-        .prepare("SELECT user, work FROM train_likes ORDER BY user, work")?;
+/// The training users' likes: `train_likes`, or `train_likes_cold` (without works first published
+/// from the cold year on) when `cold`.
+pub fn likes(duck: &Duck, cold: bool) -> anyhow::Result<Likes> {
+    let table = if cold {
+        "train_likes_cold"
+    } else {
+        "train_likes"
+    };
+    let mut statement = duck.conn().prepare(&format!(
+        "SELECT user, work FROM {table} ORDER BY user, work"
+    ))?;
     let mut rows = statement.query([])?;
     let mut users: HashMap<i32, u32> = HashMap::new();
     let mut by_user: Vec<Vec<u64>> = Vec::new();

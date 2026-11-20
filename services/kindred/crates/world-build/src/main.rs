@@ -66,6 +66,10 @@ enum Command {
         scratch: PathBuf,
         #[arg(long, value_enum, default_value_t = Users::Test)]
         users: Users,
+        /// With `--users tuning`: the full report instead of the search (04-benchmark.md §3,
+        /// "report both sets of numbers").
+        #[arg(long)]
+        report: bool,
     },
     /// Check the text embedding against the reference embeddings (the image runs this when it
     /// is built).
@@ -152,7 +156,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             };
             build::run(&scratch, &settings, &acceptance, !no_publish).await
         }
-        Command::Bench { scratch, users } => {
+        Command::Bench {
+            scratch,
+            users,
+            report,
+        } => {
             let paths = build::Paths::new(&scratch);
             let report = world_build::trace::spawn_blocking("world.bench", move || {
                 let duck = world_build::trace::Duck::open(
@@ -161,7 +169,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     config.duckdb.threads,
                     &paths.duckdb_temp,
                 )?;
-                bench::run_full(&duck, &config, aspects.aspect.len(), &paths.model, users)
+                bench::run_full(
+                    &duck,
+                    &config,
+                    aspects.aspect.len(),
+                    &paths.model,
+                    users,
+                    report,
+                )
             })
             .await?;
             // The report is aggregates only (PLAN.md rule 13); it goes to the terminal.

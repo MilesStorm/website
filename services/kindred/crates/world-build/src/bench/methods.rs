@@ -146,6 +146,29 @@ impl Neighbours {
     }
 }
 
+/// The neighbour lists by row of one space, for the pick-up term (`taste::Pickup`): works
+/// without a row, and neighbours without one, are dropped.
+pub struct RowLists(Vec<Vec<(taste::Row, f32)>>);
+
+impl RowLists {
+    pub fn new(space: &Space, neighbours: &Neighbours) -> RowLists {
+        let mut lists = vec![Vec::new(); space.phi.len()];
+        for (&work, list) in &neighbours.of {
+            if let Some(r) = space.row_of(work) {
+                lists[r as usize] = list
+                    .iter()
+                    .filter_map(|&(other, s)| space.row_of(other).map(|o| (taste::Row(o), s)))
+                    .collect();
+            }
+        }
+        RowLists(lists)
+    }
+
+    pub fn get(&self, row: taste::Row) -> &[(taste::Row, f32)] {
+        self.0.get(row.0 as usize).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// MF: the user's vector in factor space by ridge regression of the revealed works' targets (1
 /// for liked or loved, 0 otherwise) on their collaborative blocks; a work's score is that
 /// vector times its collaborative block.

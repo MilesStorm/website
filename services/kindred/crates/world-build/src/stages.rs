@@ -35,7 +35,7 @@ pub struct Stage {
     pub rust: Option<RustStage>,
 }
 
-pub const STAGES: [Stage; 13] = [
+pub const STAGES: [Stage; 14] = [
     Stage {
         name: "ingest",
         sql: include_str!("../sql/ingest.sql"),
@@ -90,6 +90,11 @@ pub const STAGES: [Stage; 13] = [
         name: "vectors",
         sql: "",
         rust: Some(("1", crate::vectors::run)),
+    },
+    Stage {
+        name: "neighbours",
+        sql: "",
+        rust: Some(("1", crate::neighbours::run)),
     },
     Stage {
         name: "prior",
@@ -240,6 +245,7 @@ impl Run<'_> {
             "embed" => serde_json::to_vec(&(&c.embed, self.fixture))?,
             "text-maps" => serde_json::to_vec(&c.text_maps)?,
             "vectors" => serde_json::to_vec(&(&c.vectors, &c.model))?,
+            "neighbours" => serde_json::to_vec(&c.bench.neighbours)?,
             "prior" | "bench" => serde_json::to_vec(&(&c.model, &c.bench))?,
             _ => Vec::new(),
         })

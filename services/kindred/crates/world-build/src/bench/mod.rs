@@ -31,7 +31,7 @@ use crate::stages::Run;
 use crate::trace::Duck;
 use crate::vectors;
 use data::{Rating, Space, User, Users};
-use methods::{Content, Neighbours};
+use methods::{Content, Neighbours, RowLists};
 
 pub fn prior_path(model: &Path) -> std::path::PathBuf {
     model.join("prior.json")
@@ -292,16 +292,17 @@ impl Method {
 
 /// One method's scores for one user.
 enum Scorer {
-    Fit(Box<taste::Fit>),
+    /// The taste model: `mu(i)` plus the pick-up term (03-engine.md §8).
+    Model(Box<taste::Fit>, taste::Pickup),
     Content(Option<Vec<f32>>),
     Sparse(HashMap<u32, f32>),
     Factor(Option<Vec<f32>>),
 }
 
 impl Scorer {
-    fn score(&self, space: &Space, content: &Content, row: u32) -> f32 {
+    fn score(&self, space: &Space, content: &Content, hyper: &Hyper, row: u32) -> f32 {
         match self {
-            Scorer::Fit(fit) => fit.score(space.vector(row)) as f32,
+            Scorer::Model(fit, pickup) => model_score(fit, pickup, hyper, space, row) as f32,
             Scorer::Content(q) => q.as_ref().map_or(0.0, |q| content.score(q, row)),
             Scorer::Sparse(s) => s.get(&row).copied().unwrap_or(0.0),
             Scorer::Factor(x) => x.as_ref().map_or(0.0, |x| methods::dot(x, space.c(row))),
@@ -309,16 +310,73 @@ impl Scorer {
     }
 
     /// Scores of every recommendable row, in `space.cand` order.
-    fn fill(&self, space: &Space, content: &Content, out: &mut [f32]) {
+    fn fill(&self, space: &Space, content: &Content, hyper: &Hyper, out: &mut [f32]) {
         match self {
-            Scorer::Fit(fit) => fit.score_rows(&space.cand_phi, out),
+            Scorer::Model(fit, pickup) => model_rank(fit, pickup, hyper, space, out),
             _ => {
                 for (o, &row) in out.iter_mut().zip(&space.cand) {
-                    *o = self.score(space, content, row);
+                    *o = self.score(space, content, hyper, row);
                 }
             }
         }
     }
+}
+
+/// The taste model's ranking score of one work: `mu(i)` (bias dropped) plus the pick-up term.
+fn model_score(
+    fit: &taste::Fit,
+    pickup: &taste::Pickup,
+    hyper: &Hyper,
+    space: &Space,
+    row: u32,
+) -> f64 {
+    let phi = space.vector(row);
+    fit.score(phi)
+        + taste::bonus(
+            hyper,
+            pickup.get(Row(row)),
+            taste::popularity_z(space.layout, phi),
+        )
+}
+
+/// [`model_score`] of every recommendable row, in `space.cand` order.
+fn model_rank(
+    fit: &taste::Fit,
+    pickup: &taste::Pickup,
+    hyper: &Hyper,
+    space: &Space,
+    out: &mut [f32],
+) {
+    fit.score_rows(&space.cand_phi, out);
+    if hyper.pickup == 0.0 {
+        return;
+    }
+    let d = space.layout.d();
+    for (o, phi) in out.iter_mut().zip(space.cand_phi.chunks_exact(d)) {
+        *o += taste::bonus(hyper, 0.0, taste::popularity_z(space.layout, phi)) as f32;
+    }
+    for (row, p) in pickup.iter() {
+        if let Ok(i) = space.cand.binary_search(&row.0) {
+            out[i] += (hyper.pickup * p) as f32;
+        }
+    }
+}
+
+/// The reader's pick-up neighbour sums from their revealed works: liked or loved count for,
+/// not for me against (03-engine.md §8).
+fn pickup(lists: Option<&RowLists>, shown: &[(u32, Rating)]) -> taste::Pickup {
+    let Some(lists) = lists else {
+        return taste::Pickup::default();
+    };
+    let reads: Vec<(Row, taste::Lean)> = shown
+        .iter()
+        .filter_map(|(row, r)| match r.stars {
+            4 | 5 => Some((Row(*row), taste::Lean::Toward)),
+            1 | 2 => Some((Row(*row), taste::Lean::Away)),
+            _ => None,
+        })
+        .collect();
+    taste::Pickup::new(&reads, |w| lists.get(w))
 }
 
 /// The top `k` recommendable rows by score, excluding `revealed`; ties go to the more popular.
@@ -468,7 +526,11 @@ pub struct Setup<'a> {
     /// Works first published from the cold year on (rows of `space`).
     pub cold_rows: HashSet<u32>,
     pub content: Option<Content<'a>>,
+    /// Method I's neighbour lists (only for the report).
     pub neighbours: Option<Neighbours>,
+    /// The same lists by row, for the pick-up term; and from the cold-book likes.
+    pub lists: Option<&'a RowLists>,
+    pub cold_lists: Option<&'a RowLists>,
     pub hyper: Hyper,
     pub prior: Prior,
     pub revealed: Vec<usize>,
@@ -537,12 +599,14 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             Scope::FullAtMain => &[Method::Full],
         };
         let mut full_fit = None;
+        let full_pickup = pickup(setup.lists, &shown);
         for &method in methods {
             let mut g = rng(setup.seed, &[user.id as u64, n as u64, method as u64]);
             let scorer = match method {
-                Method::P => {
-                    Scorer::Fit(Box::new(taste::fit(&[], space, &setup.hyper, &setup.prior)))
-                }
+                Method::P => Scorer::Model(
+                    Box::new(taste::fit(&[], space, &setup.hyper, &setup.prior)),
+                    taste::Pickup::default(),
+                ),
                 Method::Full | Method::FullWithoutCollaborative | Method::FullWithoutAspects => {
                     let view = setup.view(method);
                     let events = replay(
@@ -554,12 +618,16 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                         now,
                         &mut g,
                     );
-                    Scorer::Fit(Box::new(taste::fit(
-                        &events,
-                        view,
-                        &setup.hyper,
-                        &setup.prior,
-                    )))
+                    // Without the collaborative block there are no co-likes either.
+                    let pickup = if method == Method::FullWithoutCollaborative {
+                        taste::Pickup::default()
+                    } else {
+                        full_pickup.clone()
+                    };
+                    Scorer::Model(
+                        Box::new(taste::fit(&events, view, &setup.hyper, &setup.prior)),
+                        pickup,
+                    )
                 }
                 Method::FullWithoutComparisons => {
                     let events = replay(
@@ -571,12 +639,10 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                         now,
                         &mut g,
                     );
-                    Scorer::Fit(Box::new(taste::fit(
-                        &events,
-                        space,
-                        &setup.hyper,
-                        &setup.prior,
-                    )))
+                    Scorer::Model(
+                        Box::new(taste::fit(&events, space, &setup.hyper, &setup.prior)),
+                        full_pickup.clone(),
+                    )
                 }
                 Method::C => {
                     let liked: Vec<u32> = shown
@@ -613,7 +679,7 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             // An ablation scores on its own view of the vectors; the metrics below read the real
             // ones.
             let view = setup.view(method);
-            scorer.fill(view, content, &mut buf);
+            scorer.fill(view, content, &setup.hyper, &mut buf);
             let ranked = top(space, &buf, &revealed_rows, 50);
             let acc = sums.main.entry((method, ni)).or_default();
             if !relevant.is_empty() {
@@ -627,7 +693,7 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             }
             let scored: Vec<(f32, u8)> = future_rows
                 .iter()
-                .map(|&(row, stars)| (scorer.score(view, content, row), stars))
+                .map(|&(row, stars)| (scorer.score(view, content, &setup.hyper, row), stars))
                 .collect();
             if let Some(p) = pairwise(&scored) {
                 acc.pairwise += p;
@@ -653,7 +719,7 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 acc.covered.extend(ten.iter().copied());
             }
             if method == Method::Full
-                && let Scorer::Fit(fit) = scorer
+                && let Scorer::Model(fit, _) = scorer
             {
                 full_fit = Some(*fit);
             }
@@ -696,6 +762,7 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                     novelty: taste::novelty(space.c(r), &liked_c),
                     quality_z: space.quality_z(r),
                     ctx: 0.0,
+                    pickup: 0.0,
                 })
                 .collect();
             let mut g = rng(setup.seed, &[user.id as u64, n as u64, 100]);
@@ -737,11 +804,14 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                     &mut g,
                 );
                 let fit = taste::fit(&events, space, &setup.hyper, &setup.prior);
-                fit.score_rows(&space.cand_phi, &mut buf);
+                model_rank(&fit, &full_pickup, &setup.hyper, space, &mut buf);
                 let ranked = top(space, &buf, &revealed_rows, 10);
                 let scored: Vec<(f32, u8)> = future_rows
                     .iter()
-                    .map(|&(row, stars)| (fit.score(space.vector(row)) as f32, stars))
+                    .map(|&(row, stars)| {
+                        let s = model_score(&fit, &full_pickup, &setup.hyper, space, row);
+                        (s as f32, stars)
+                    })
                     .collect();
                 let e = sums.questions.entry((rule, count)).or_default();
                 if !relevant.is_empty() {
@@ -782,7 +852,9 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 ndcg(&ranked, &cold_relevant, 10)
             };
             let prior_fit = taste::fit(&[], space, &setup.hyper, &setup.prior);
-            sums.cold[0][0] += rank(&|r| prior_fit.score(space.vector(r)) as f32);
+            let none = taste::Pickup::default();
+            sums.cold[0][0] +=
+                rank(&|r| model_score(&prior_fit, &none, &setup.hyper, space, r) as f32);
             let cold_shown = placed(cold_space, revealed);
             let mut g = rng(setup.seed, &[user.id as u64, 300]);
             let events = replay(
@@ -795,13 +867,16 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 &mut g,
             );
             let text_fit = taste::fit(&events, cold_space, &setup.hyper, &setup.prior);
+            // Co-likes without the cold works: they get no pick-up from them.
+            let cold_pickup = pickup(setup.cold_lists, &cold_shown);
             sums.cold[1][0] += rank(&|r| {
                 let row = cold_space
                     .row_of(space.phi.keys[r as usize])
                     .expect("filtered above");
-                text_fit.score(cold_space.vector(row)) as f32
+                model_score(&text_fit, &cold_pickup, &setup.hyper, cold_space, row) as f32
             });
-            sums.cold[2][0] += rank(&|r| fit.score(space.vector(r)) as f32);
+            sums.cold[2][0] +=
+                rank(&|r| model_score(&fit, &full_pickup, &setup.hyper, space, r) as f32);
             for c in &mut sums.cold {
                 c[1] += 1.0;
             }
@@ -1201,6 +1276,10 @@ pub fn gate(run: &Run) -> anyhow::Result<()> {
     let space = Space::load(&run.model, false, layout)?;
     let prior: Prior = serde_json::from_slice(&std::fs::read(prior_path(&run.model))?)?;
     let users = data::users(run.duck, Users::Gate, run.config.interactions.seed)?;
+    let lists = RowLists::new(
+        &space,
+        &crate::neighbours::read(&crate::neighbours::path(&run.model, false))?,
+    );
     let setup = Setup {
         space: &space,
         without_c: None,
@@ -1209,6 +1288,8 @@ pub fn gate(run: &Run) -> anyhow::Result<()> {
         cold_rows: HashSet::new(),
         content: None,
         neighbours: None,
+        lists: Some(&lists),
+        cold_lists: None,
         hyper: run.config.model.clone(),
         prior,
         revealed: vec![N_MAIN],
@@ -1282,6 +1363,7 @@ pub fn run_full(
     aspects: usize,
     model: &Path,
     which: Users,
+    report_tuning: bool,
 ) -> anyhow::Result<String> {
     let layout = taste::Layout {
         k: config.factors.k,
@@ -1291,27 +1373,17 @@ pub fn run_full(
     let prior: Prior = serde_json::from_slice(&std::fs::read(prior_path(model))?)?;
     let users = data::users(duck, which, config.interactions.seed)?;
     tracing::info!(users = users.len(), which = ?which, "benchmark users loaded");
-    if which == Users::Tuning {
-        return tune(&space, &users, config, prior);
+    let neighbours = crate::neighbours::read(&crate::neighbours::path(model, false))?;
+    let lists = RowLists::new(&space, &neighbours);
+    if which == Users::Tuning && !report_tuning {
+        return tune(&space, &users, config, prior, lists);
     }
     let cold_space = Space::load(model, true, layout)?;
     let embeddings = Matrix::read(&crate::embed::path(model))?;
-    let mut queries: HashSet<u64> = HashSet::new();
-    for u in &users {
-        let n = config
-            .bench
-            .revealed
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .min(u.ratings.len());
-        queries.extend(u.ratings[..n].iter().map(|r| r.work));
-    }
-    let likes = data::likes(duck)?;
-    let neighbours = Neighbours::build(&likes, &queries, config.bench.neighbours);
-    drop(likes);
-    tracing::info!(works = neighbours.of.len(), "item-to-item neighbours built");
+    let cold_lists = RowLists::new(
+        &cold_space,
+        &crate::neighbours::read(&crate::neighbours::path(model, true))?,
+    );
     let cold_years: HashSet<u64> = {
         let mut statement = duck
             .conn()
@@ -1343,6 +1415,8 @@ pub fn run_full(
         cold_rows,
         content: Some(Content::new(&space, &embeddings)),
         neighbours: Some(neighbours),
+        lists: Some(&lists),
+        cold_lists: Some(&cold_lists),
         hyper: config.model.clone(),
         prior,
         revealed: config.bench.revealed.clone(),
@@ -1360,9 +1434,24 @@ pub fn run_full(
 /// The hyperparameter search of 04-benchmark.md §3: one at a time over its grid, keeping the best
 /// FULL NDCG@10 at n = 20 on the tuning users; then one more pass. Returns the chosen values as
 /// the `[model]` section of world.toml.
-fn tune(space: &Space, users: &[User], config: &Config, prior: Prior) -> anyhow::Result<String> {
+fn tune(
+    space: &Space,
+    users: &[User],
+    config: &Config,
+    prior: Prior,
+    lists: RowLists,
+) -> anyhow::Result<String> {
     type Setter = fn(&mut Hyper, f64);
-    let grid: [(&str, &[f64], Setter); 8] = [
+    // The pick-up weights (03-engine.md §8) first: they set the scale the others work against.
+    let grid: [(&str, &[f64], Setter); 10] = [
+        (
+            "pickup",
+            &[0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0],
+            |h, v| h.pickup = v,
+        ),
+        ("pickup_pop", &[0.0, 0.25, 0.5, 1.0, 2.0], |h, v| {
+            h.pickup_pop = v
+        }),
         ("var_c", &[0.5, 1.0, 2.25, 4.0], |h, v| h.var_c = v),
         ("var_a", &[0.005, 0.0225, 0.1], |h, v| h.var_a = v),
         ("var_m", &[0.05, 0.25, 1.0], |h, v| h.var_m = v),
@@ -1389,6 +1478,8 @@ fn tune(space: &Space, users: &[User], config: &Config, prior: Prior) -> anyhow:
             cold_rows: HashSet::new(),
             content: None,
             neighbours: None,
+            lists: Some(&lists),
+            cold_lists: None,
             hyper: h.clone(),
             prior,
             revealed: vec![N_MAIN],

@@ -315,7 +315,9 @@ impl taste::Vectors for World {
     }
 
     fn phi(&self, work: taste::Row) -> Option<&[f32]> {
-        ((work.0 as usize) < self.len()).then(|| self.vector(Row(work.0))).flatten()
+        ((work.0 as usize) < self.len())
+            .then(|| self.vector(Row(work.0)))
+            .flatten()
     }
 
     fn text_sourced(&self, work: taste::Row) -> bool {

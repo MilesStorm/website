@@ -20,7 +20,9 @@ fn model() -> Model {
             steer: "dark".into(),
         }],
         hyper: taste::Hyper::default(),
-        prior: taste::Prior { m0_meta: [0.5, 0.25, 0.0, 0.0] },
+        prior: taste::Prior {
+            m0_meta: [0.5, 0.25, 0.0, 0.0],
+        },
         confidence_cuts: [0.5, 0.8],
         bench: serde_json::json!({"ndcg10_n20": 0.1}),
     }
@@ -216,9 +218,19 @@ fn refuses_unknown_format_and_bad_checksums() {
     writer.write_redirects(vec![]).unwrap();
     let d = model().layout.d();
     // A recommendable work must have a vector.
-    let none = VectorTable { d, keys: vec![], data: vec![], source: vec![] };
+    let none = VectorTable {
+        d,
+        keys: vec![],
+        data: vec![],
+        source: vec![],
+    };
     assert!(writer.write_vectors(&none, &[WorkKey(1)]).is_err());
-    let table = VectorTable { d, keys: vec![WorkKey(1)], data: vec![0.5; d], source: vec![0] };
+    let table = VectorTable {
+        d,
+        keys: vec![WorkKey(1)],
+        data: vec![0.5; d],
+        source: vec![0],
+    };
     writer.write_vectors(&table, &[WorkKey(1)]).unwrap();
     writer
         .finish(
