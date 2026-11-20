@@ -313,7 +313,7 @@ impl Run<'_> {
             _ => {}
         }
         if !stage.sql.is_empty() {
-            self.duck.exec(stage.name, stage.sql)?;
+            self.duck.sql_stage(stage.name, stage.sql)?;
         }
         if let Some((_, rust)) = stage.rust {
             std::fs::create_dir_all(&self.model)?;
