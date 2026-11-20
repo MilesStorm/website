@@ -128,19 +128,20 @@ ridge = [0.1, 1.0, 10.0, 100.0, 1000.0]
 min_popularity = 4.3
 
 [model]
-# The taste model's hyperparameters (03-engine.md). Defaults from the engine document until the
-# benchmark's search on the tuning users (kindred-world bench --users tuning) sets them.
+# The taste model's hyperparameters (03-engine.md), chosen by the search on the 5,000 tuning users
+# (kindred-world bench --users tuning, 04-benchmark.md §3) on the 2026-11 data: NDCG@10 at n = 20
+# 0.1028 there (engine defaults: 0.0215). var_bias, omega_h, ask_min, beta, b1–b3 are not searched.
 var_bias = 4.0
-var_c = 2.25
-var_a = 0.0225
-var_m = 0.25
-tau_v = 1.0
-tau_c = 0.5
-omega_v = 0.5
+var_c = 4.0
+var_a = 0.005
+var_m = 0.05
+tau_v = 2.0
+tau_c = 1.0
+omega_v = 1.0
 omega_h = 0.5
-text_var = 0.25
+text_var = 0.0
 # Length of a text-placed collaborative block (03-engine.md §3).
-text_shrink = 0.7
+text_shrink = 0.5
 # Smallest information worth a comparison question (03-engine.md §7).
 ask_min = 0.05
 beta = 0.5
