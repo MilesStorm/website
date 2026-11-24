@@ -450,6 +450,13 @@ struct Acc {
     diversity: f64,
     top_users: f64,
     covered: HashSet<u32>,
+    /// NDCG@10 against the same future at every n: the relevant works after the largest n,
+    /// ranking without any of the works before it. Separates "more ratings" from "a different,
+    /// later, smaller set of books to find".
+    ndcg_same: f64,
+    same_users: f64,
+    /// Relevant future works per ranked user.
+    relevant: f64,
 }
 
 impl Acc {
@@ -463,6 +470,9 @@ impl Acc {
         self.diversity += o.diversity;
         self.top_users += o.top_users;
         self.covered.extend(o.covered);
+        self.ndcg_same += o.ndcg_same;
+        self.same_users += o.same_users;
+        self.relevant += o.relevant;
     }
 
     fn mean_ndcg(&self) -> f64 {
@@ -590,6 +600,19 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             .filter_map(|r| space.row_of(r.work))
             .filter(|&row| space.recommendable(row) && !revealed_rows.contains(&row))
             .collect();
+        // The same future at every n (Report only): after the largest n.
+        let last = setup.revealed.iter().copied().max().unwrap_or(0);
+        let (before_last, after_last) = user.ratings.split_at(last.min(user.ratings.len()));
+        let before_rows: HashSet<u32> = before_last
+            .iter()
+            .filter_map(|r| space.row_of(r.work))
+            .collect();
+        let relevant_same: HashSet<u32> = after_last
+            .iter()
+            .filter(|r| r.stars >= 4)
+            .filter_map(|r| space.row_of(r.work))
+            .filter(|&row| space.recommendable(row) && !before_rows.contains(&row))
+            .collect();
         let future_rows: Vec<(u32, u8)> = future
             .iter()
             .filter_map(|r| space.row_of(r.work).map(|row| (row, r.stars)))
@@ -687,9 +710,15 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 acc.recall += ranked.iter().filter(|r| relevant.contains(r)).count() as f64
                     / relevant.len() as f64;
                 acc.ranked_users += 1.0;
+                acc.relevant += relevant.len() as f64;
             }
             if scope == Scope::FullAtMain {
                 continue;
+            }
+            if !relevant_same.is_empty() {
+                let ranked_same = top(space, &buf, &before_rows, 10);
+                acc.ndcg_same += ndcg(&ranked_same, &relevant_same, 10);
+                acc.same_users += 1.0;
             }
             let scored: Vec<(f32, u8)> = future_rows
                 .iter()
@@ -937,6 +966,14 @@ fn report(setup: &Setup, users: usize, sums: &Sums, agreement: Option<f64>) -> R
     let per = |sum: f64, n: f64| (n > 0.0).then(|| sum / n);
     let recommendable = setup.space.cand.len() as f64;
     tables.insert("ndcg@10".into(), metric(&|a| per(a.ndcg, a.ranked_users)));
+    tables.insert(
+        "ndcg@10, same future at every n (works after the first 50)".into(),
+        metric(&|a| per(a.ndcg_same, a.same_users)),
+    );
+    tables.insert(
+        "relevant future works per user".into(),
+        metric(&|a| per(a.relevant, a.ranked_users)),
+    );
     tables.insert(
         "recall@50".into(),
         metric(&|a| per(a.recall, a.ranked_users)),
