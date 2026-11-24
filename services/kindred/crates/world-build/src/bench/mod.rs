@@ -376,7 +376,7 @@ fn pickup(lists: Option<&RowLists>, shown: &[(u32, Rating)]) -> taste::Pickup {
             _ => None,
         })
         .collect();
-    taste::Pickup::new(&reads, |w| lists.get(w))
+    taste::Pickup::new(&reads, |w| lists.get(w).iter().copied())
 }
 
 /// The top `k` recommendable rows by score, excluding `revealed`; ties go to the more popular.

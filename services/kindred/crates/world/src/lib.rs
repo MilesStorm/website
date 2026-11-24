@@ -50,6 +50,13 @@ pub mod files {
     pub const VECTORS: &str = "vectors.f32";
     /// Per vector row: where its blocks came from, see [`crate::reader::source`].
     pub const VECTOR_SOURCE: &str = "vector_source.u8";
+    /// The pick-up neighbours (03-engine.md §8), by row: `u64` offsets, one more than there are
+    /// works, into the next two columns.
+    pub const NEIGHBOUR_OFFSETS: &str = "neighbour_offsets.u64";
+    /// Each neighbour's row.
+    pub const NEIGHBOUR_ROWS: &str = "neighbour_rows.u32";
+    /// Each neighbour's similarity (cosine of co-like counts).
+    pub const NEIGHBOUR_SIMS: &str = "neighbour_sims.f32";
     /// The tantivy search index directory.
     pub const SEARCH_DIR: &str = "search";
 }

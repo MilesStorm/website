@@ -24,7 +24,12 @@ fn split(s: Option<String>) -> Vec<String> {
 }
 
 /// Writes the world's data files into `dir` (empty); the caller finishes the manifest.
-pub fn write(duck: &Duck, dir: &Path, vectors: &Vectors) -> anyhow::Result<WorldWriter> {
+pub fn write(
+    duck: &Duck,
+    dir: &Path,
+    vectors: &Vectors,
+    neighbours: &crate::bench::methods::Neighbours,
+) -> anyhow::Result<WorldWriter> {
     let mut writer = WorldWriter::create(dir)?;
     let mut rows = Vec::new();
     let mut series_rows: HashMap<String, u32> = HashMap::new();
@@ -117,6 +122,15 @@ pub fn write(duck: &Duck, dir: &Path, vectors: &Vectors) -> anyhow::Result<World
             .collect(),
     };
     writer.write_vectors(&table, &recommendable)?;
+    let lists: Vec<(WorkKey, Vec<(WorkKey, f32)>)> = neighbours
+        .of
+        .iter()
+        .map(|(&w, list)| {
+            let list = list.iter().map(|&(o, s)| (WorkKey(o), s)).collect();
+            (WorkKey(w), list)
+        })
+        .collect();
+    writer.write_neighbours(&lists)?;
     let mut redirects = Vec::new();
     let mut statement = duck.conn().prepare("SELECT old, new FROM ol_redirects")?;
     let mut result = statement.query([])?;

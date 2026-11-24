@@ -37,14 +37,17 @@ pub struct Pickup {
 impl Pickup {
     /// `reads` are the reader's works with a lean; `neighbours(w)` is `w`'s neighbour list (work,
     /// similarity), empty for a work without one.
-    pub fn new<'a>(reads: &[(Row, Lean)], neighbours: impl Fn(Row) -> &'a [(Row, f32)]) -> Pickup {
+    pub fn new<I: IntoIterator<Item = (Row, f32)>>(
+        reads: &[(Row, Lean)],
+        neighbours: impl Fn(Row) -> I,
+    ) -> Pickup {
         let mut s: HashMap<Row, f64> = HashMap::new();
         for &(work, lean) in reads {
             let sign = match lean {
                 Lean::Toward => 1.0,
                 Lean::Away => -1.0,
             };
-            for &(other, sim) in neighbours(work) {
+            for (other, sim) in neighbours(work) {
                 *s.entry(other).or_default() += sign * f64::from(sim);
             }
         }
@@ -99,7 +102,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let get = |w: Row| lists.get(&w).map_or(&[][..], Vec::as_slice);
+        let get = |w: Row| lists.get(&w).into_iter().flatten().copied();
         let p = Pickup::new(
             &[
                 (Row(1), Lean::Toward),
@@ -118,7 +121,7 @@ mod tests {
 
     #[test]
     fn no_liked_neighbours_means_no_term() {
-        let p = Pickup::new(&[(Row(1), Lean::Away)], |_| &[(Row(5), 0.3)][..]);
+        let p = Pickup::new(&[(Row(1), Lean::Away)], |_| [(Row(5), 0.3)]);
         assert_eq!(p.get(Row(5)), 0.0);
         let h = Hyper {
             pickup: 2.0,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The on-disk format this crate writes and reads. A reader refuses any other.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// `manifest.json`: what a world version contains and how it was made.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

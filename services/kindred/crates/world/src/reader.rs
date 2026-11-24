@@ -48,6 +48,9 @@ pub struct World {
     vector_rows: Column<u32>,
     vectors: Column<f32>,
     vector_source: Column<u8>,
+    neighbour_offsets: Column<u64>,
+    neighbour_rows: Column<u32>,
+    neighbour_sims: Column<f32>,
     fields: Fields,
     search: IndexReader,
 }
@@ -175,6 +178,24 @@ impl World {
             });
         }
 
+        let neighbour_offsets = Column::<u64>::open(&col(files::NEIGHBOUR_OFFSETS))?;
+        let neighbour_rows = Column::<u32>::open(&col(files::NEIGHBOUR_ROWS))?;
+        let neighbour_sims = Column::<f32>::open(&col(files::NEIGHBOUR_SIMS))?;
+        let offsets = neighbour_offsets.as_slice();
+        if offsets.len() != n + 1
+            || offsets.first() != Some(&0)
+            || offsets.last() != Some(&(neighbour_rows.len() as u64))
+            || offsets.windows(2).any(|p| p[0] > p[1])
+            || neighbour_sims.len() != neighbour_rows.len()
+            || neighbour_rows.as_slice().iter().any(|&r| r as usize >= n)
+            || neighbour_sims.as_slice().iter().any(|s| !s.is_finite())
+        {
+            return Err(Error::Corrupt {
+                path: files::NEIGHBOUR_OFFSETS.into(),
+                what: "bad offsets, rows or similarities".into(),
+            });
+        }
+
         let index = Index::open_in_dir(dir.join(files::SEARCH_DIR))?;
         search::register_tokenizer(&index);
         let (_, fields) = search::schema();
@@ -198,6 +219,9 @@ impl World {
             vector_rows,
             vectors,
             vector_source,
+            neighbour_offsets,
+            neighbour_rows,
+            neighbour_sims,
             fields,
             search,
         })
@@ -280,6 +304,17 @@ impl World {
         }
         let d = self.manifest.model.layout.d();
         Some(&self.vectors.as_slice()[v as usize * d..(v as usize + 1) * d])
+    }
+
+    /// The work's pick-up neighbours (03-engine.md §8), nearest first: what readers who liked it
+    /// also liked, with the similarity.
+    pub fn neighbours(&self, row: Row) -> impl Iterator<Item = (Row, f32)> + '_ {
+        let o = self.neighbour_offsets.as_slice();
+        let range = o[row.0 as usize] as usize..o[row.0 as usize + 1] as usize;
+        self.neighbour_rows.as_slice()[range.clone()]
+            .iter()
+            .zip(&self.neighbour_sims.as_slice()[range])
+            .map(|(&r, &s)| (Row(r), s))
     }
 
     /// Where the work's vector blocks came from ([`source`]); 0 without a vector.

@@ -138,6 +138,36 @@ proptest! {
         }
         let recommendable: Vec<WorkKey> = rows.iter().filter(|r| r.recommendable).map(|r| r.key).collect();
         writer.write_vectors(&table, &recommendable).unwrap();
+        // Neighbours for every second work: the first three works (not itself), weakest first,
+        // plus one work that is not in the world; and a list for a work that is not in it.
+        let mut sorted_keys: Vec<WorkKey> = rows.iter().map(|r| r.key).collect();
+        sorted_keys.sort_unstable();
+        let expected_neighbours = |k: WorkKey| -> Vec<(WorkKey, f32)> {
+            if k.0 % 2 != 0 {
+                return vec![];
+            }
+            let mut v: Vec<(WorkKey, f32)> = sorted_keys
+                .iter()
+                .copied()
+                .filter(|&o| o != k)
+                .take(3)
+                .enumerate()
+                .map(|(i, o)| (o, 0.5 / (i as f32 + 1.0)))
+                .collect();
+            v.sort_by(|a, b| b.1.total_cmp(&a.1));
+            v
+        };
+        let mut lists: Vec<(WorkKey, Vec<(WorkKey, f32)>)> = sorted_keys
+            .iter()
+            .map(|&k| {
+                let mut l = expected_neighbours(k);
+                l.reverse();
+                l.push((WorkKey(1_000_003), 0.9));
+                (k, l)
+            })
+            .collect();
+        lists.push((WorkKey(1_000_003), sorted_keys.first().map(|&k| (k, 0.1)).into_iter().collect()));
+        writer.write_neighbours(&lists).unwrap();
         let report = serde_json::json!({"works": rows.len()});
         let manifest = writer.finish("2026-11-13T00:00:00Z".into(), "test".into(), vec![], params(), report, model()).unwrap();
 
@@ -163,6 +193,8 @@ proptest! {
                 }
                 None => prop_assert!(r.key.0 % 3 != 0),
             }
+            let got: Vec<(WorkKey, f32)> = world.neighbours(row).map(|(o, s)| (world.key(o), s)).collect();
+            prop_assert_eq!(got, expected_neighbours(r.key));
             let expected = r.series.map(|(s, p)| (input.series[s as usize].as_str(), p));
             prop_assert_eq!(world.series(row), expected);
         }
@@ -232,6 +264,7 @@ fn refuses_unknown_format_and_bad_checksums() {
         source: vec![0],
     };
     writer.write_vectors(&table, &[WorkKey(1)]).unwrap();
+    writer.write_neighbours(&[]).unwrap();
     writer
         .finish(
             "t".into(),
@@ -264,11 +297,11 @@ fn refuses_unknown_format_and_bad_checksums() {
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(
         &manifest,
-        text.replace("\"format_version\": 2", "\"format_version\": 3"),
+        text.replace("\"format_version\": 3", "\"format_version\": 4"),
     )
     .unwrap();
     assert!(matches!(
         World::open(&path),
-        Err(world::Error::Format { found: 3 })
+        Err(world::Error::Format { found: 4 })
     ));
 }

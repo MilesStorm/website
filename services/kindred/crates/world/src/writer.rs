@@ -68,6 +68,7 @@ pub struct WorldWriter {
     /// The work keys written by `write_works`, ascending.
     keys: Option<Vec<u64>>,
     vectors_written: bool,
+    neighbours_written: bool,
 }
 
 /// The search index writer's memory budget.
@@ -99,6 +100,7 @@ impl WorldWriter {
             index,
             keys: None,
             vectors_written: false,
+            neighbours_written: false,
         })
     }
 
@@ -268,6 +270,50 @@ impl WorldWriter {
         Ok(())
     }
 
+    /// The pick-up neighbours (03-engine.md §8), after [`WorldWriter::write_works`]: per work,
+    /// its nearest works with their similarity, nearest first. Works and neighbours that are not
+    /// in the world are left out.
+    pub fn write_neighbours(&mut self, lists: &[(WorkKey, Vec<(WorkKey, f32)>)]) -> Result<()> {
+        let keys = self.keys.as_ref().ok_or_else(|| Error::Corrupt {
+            path: files::NEIGHBOUR_OFFSETS.into(),
+            what: "write_works must come first".into(),
+        })?;
+        let row = |k: WorkKey| keys.binary_search(&k.0).ok();
+        let mut by_row: Vec<Option<&Vec<(WorkKey, f32)>>> = vec![None; keys.len()];
+        for (work, list) in lists {
+            if let Some(r) = row(*work) {
+                by_row[r] = Some(list);
+            }
+        }
+        let mut offsets = Vec::with_capacity(keys.len() + 1);
+        let mut rows: Vec<u32> = Vec::new();
+        let mut sims: Vec<f32> = Vec::new();
+        offsets.push(0u64);
+        for list in by_row {
+            let mut here: Vec<(u32, f32)> = list
+                .into_iter()
+                .flatten()
+                .filter_map(|&(k, s)| row(k).map(|r| (r as u32, s)))
+                .collect();
+            if here.iter().any(|p| !p.1.is_finite()) {
+                return Err(Error::Corrupt {
+                    path: files::NEIGHBOUR_SIMS.into(),
+                    what: "a similarity that is not finite".into(),
+                });
+            }
+            here.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+            rows.extend(here.iter().map(|p| p.0));
+            sims.extend(here.iter().map(|p| p.1));
+            offsets.push(rows.len() as u64);
+        }
+        let col = |name: &str| self.dir.join(name);
+        columns::write(&col(files::NEIGHBOUR_OFFSETS), &offsets)?;
+        columns::write(&col(files::NEIGHBOUR_ROWS), &rows)?;
+        columns::write(&col(files::NEIGHBOUR_SIMS), &sims)?;
+        self.neighbours_written = true;
+        Ok(())
+    }
+
     /// Old work key → current key. Chains must already be resolved.
     pub fn write_redirects(&self, mut redirects: Vec<(WorkKey, WorkKey)>) -> Result<()> {
         redirects.sort_unstable();
@@ -293,6 +339,12 @@ impl WorldWriter {
         if !self.vectors_written {
             return Err(Error::Corrupt {
                 path: files::VECTORS.into(),
+                what: "was never written".into(),
+            });
+        }
+        if !self.neighbours_written {
+            return Err(Error::Corrupt {
+                path: files::NEIGHBOUR_OFFSETS.into(),
                 what: "was never written".into(),
             });
         }

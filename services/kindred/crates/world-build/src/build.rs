@@ -108,7 +108,9 @@ pub async fn assemble(
         let started = Instant::now();
         let layout = vectors::layout(&run);
         let vectors = vectors::Vectors::read(&paths.model, false, layout)?;
-        let writer = pack::write(&duck, &out, &vectors)?;
+        let neighbours = crate::neighbours::read(&crate::neighbours::path(&paths.model, false))?;
+        let writer = pack::write(&duck, &out, &vectors, &neighbours)?;
+        drop(neighbours);
         durations.push(("pack".into(), Some(started.elapsed().as_secs_f64())));
         let report = report::compute(&duck, &durations, &paths.model)?;
         let gate: bench::GateResult =
