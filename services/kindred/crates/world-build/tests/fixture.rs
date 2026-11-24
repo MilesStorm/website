@@ -96,6 +96,9 @@ async fn fixture_world_builds_and_passes_verify() {
         files::VECTOR_ROWS,
         files::VECTORS,
         files::VECTOR_SOURCE,
+        files::NEIGHBOUR_OFFSETS,
+        files::NEIGHBOUR_ROWS,
+        files::NEIGHBOUR_SIMS,
     ];
     for entry in &manifest.files {
         assert!(
