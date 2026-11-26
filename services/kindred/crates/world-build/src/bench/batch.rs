@@ -724,8 +724,9 @@ fn rank(
             w[start + s.bias] = 0.0;
         }
         let mu = dev.scores(handle, &w);
-        for (s, m) in targets.iter_mut().zip(mu.chunks_exact(space.cand.len())) {
-            s.mu = Some(m.to_vec());
+        let c = space.cand.len();
+        for (k, s) in targets.iter_mut().enumerate() {
+            s.mu = Some(mu[k * c..(k + 1) * c].to_vec());
         }
     }
 }

@@ -577,6 +577,8 @@ impl Device for Cuda {
         );
         let s0inv: Vec<f64> = s0.iter().map(|v| 1.0 / v).collect();
         let w: Vec<f64> = m0.repeat(readers.max(1));
+        // The last group's memory goes first, so at most one group is on the card.
+        self.group = None;
         let group = Group {
             d,
             readers,
@@ -591,8 +593,6 @@ impl Device for Cuda {
             factors: self.zeros(readers * d * d),
             terms: None,
         };
-        // The last group's memory goes first.
-        self.group = None;
         self.group = Some(group);
     }
 
@@ -828,6 +828,9 @@ impl Device for Cuda {
         let (d, c) = (*d, cand.len() / d);
         let rows = w.len() / d;
         let mut out = vec![0.0f32; rows * c];
+        if c == 0 {
+            return out;
+        }
         for (part, dst) in w.chunks(SCORE_ROWS * d).zip(out.chunks_mut(SCORE_ROWS * c)) {
             let n = part.len() / d;
             let wd = self.upload(part);
