@@ -1382,31 +1382,31 @@ fn report(setup: &Setup, users: usize, sums: &Sums, agreement: Option<f64>) -> R
     let pw = |m: Method| {
         ns.iter().position(|&x| x == N_MAIN).and_then(|ni| {
             let a = get(m, ni);
-            per(a.pairwise, a.pairwise_users)
+            (a.pairwise_users > 0.0)
+                .then(|| Estimate::of(a.pairwise, a.pairwise_sq, a.pairwise_users))
         })
     };
+    let none = Estimate { mean: 0.0, se: 0.0 };
     let (f, p) = (
-        pw(Method::Full).unwrap_or(0.0),
-        pw(Method::P).unwrap_or(0.0),
+        pw(Method::Full).unwrap_or(none),
+        pw(Method::P).unwrap_or(none),
     );
+    // Restated 2026-11-26 (04-benchmark §6): "better than the prior" means a margin of more than
+    // two standard errors of the difference, not a fixed 0.03 set before P gained the star bias.
+    let threshold = 2.0 * (f.se * f.se + p.se * p.se).sqrt();
     gate(
         "G4",
-        "FULL's pairwise accuracy at n = 20 exceeds P's by 0.03",
-        f >= p + 0.03,
-        format!("{f:.4} vs {p:.4}"),
+        "FULL's pairwise accuracy at n = 20 exceeds P's by more than two standard errors",
+        f.mean - p.mean > threshold,
+        format!(
+            "{:.4} vs {:.4} (margin {:+.4}, threshold {threshold:.4})",
+            f.mean,
+            p.mean,
+            f.mean - p.mean
+        ),
     );
-    let (a, b) = (
-        ndcg_at(Method::Full, 50).unwrap_or(0.0),
-        ndcg_at(Method::Full, 5).unwrap_or(0.0),
-    );
-    gate(
-        "G5",
-        "FULL's NDCG@10 at n = 50 is higher than at n = 5",
-        a > b,
-        format!("{a:.4} vs {b:.4}"),
-    );
-    // Not a gate: the same check against the same future works at both n (the works after the
-    // 50th), so that only the number of revealed ratings changes.
+    // G5 compares both n against the same future works (those after the 50th rating, the first
+    // 50 out of the candidates), so that only the number of revealed ratings changes.
     let same_at = |m: Method, n: usize| {
         ns.iter().position(|&x| x == n).and_then(|ni| {
             let a = get(m, ni);
@@ -1418,8 +1418,18 @@ fn report(setup: &Setup, users: usize, sums: &Sums, agreement: Option<f64>) -> R
         same_at(Method::Full, 5).unwrap_or(0.0),
     );
     gate(
-        "info: G5, same future",
-        "as G5, against the works after the 50th at both n",
+        "G5",
+        "FULL's NDCG@10 at n = 50 is higher than at n = 5, against the same future works",
+        a > b,
+        format!("{a:.4} vs {b:.4}"),
+    );
+    let (a, b) = (
+        ndcg_at(Method::Full, 50).unwrap_or(0.0),
+        ndcg_at(Method::Full, 5).unwrap_or(0.0),
+    );
+    gate(
+        "info: G5 as first written",
+        "each n against its own future works (the future shrinks and moves later with n)",
         a > b,
         format!("{a:.4} vs {b:.4}"),
     );
