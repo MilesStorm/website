@@ -1862,6 +1862,10 @@ fn open_device(compute: Compute) -> anyhow::Result<Option<Mutex<Box<dyn batch::D
 
 /// `kindred-world bench`: the full report on the test users, or the hyperparameter search on
 /// the tuning users (04-benchmark.md §3). Reads the scratch volume of a finished build.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the bench command's flags, named"
+)]
 pub fn run_full(
     duck: &Duck,
     config: &Config,
@@ -2084,18 +2088,15 @@ fn tune(
             "{:?}",
             [h.b1, h.b2, h.b3, h.omega_v, h.tau_v, h.var_bias, h.var_m]
         );
-        let prior = priors
-            .entry(prior_key)
-            .or_insert_with(|| {
-                prior_from(
-                    space,
-                    users,
-                    h,
-                    config.bench.max_prior_terms,
-                    config.interactions.seed,
-                )
-            })
-            .clone();
+        let prior = *priors.entry(prior_key).or_insert_with(|| {
+            prior_from(
+                space,
+                users,
+                h,
+                config.bench.max_prior_terms,
+                config.interactions.seed,
+            )
+        });
         let setup = Setup {
             space: shrunk.as_ref().unwrap_or(space),
             without_c: None,

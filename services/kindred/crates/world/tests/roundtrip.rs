@@ -143,7 +143,7 @@ proptest! {
         let mut sorted_keys: Vec<WorkKey> = rows.iter().map(|r| r.key).collect();
         sorted_keys.sort_unstable();
         let expected_neighbours = |k: WorkKey| -> Vec<(WorkKey, f32)> {
-            if k.0 % 2 != 0 {
+            if !k.0.is_multiple_of(2) {
                 return vec![];
             }
             let mut v: Vec<(WorkKey, f32)> = sorted_keys
