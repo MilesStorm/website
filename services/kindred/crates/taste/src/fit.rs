@@ -559,7 +559,7 @@ mod tests {
 
     /// Works whose aspect `j % a` is 2.0 and whose collaborative block is a unit axis.
     fn grid(n: usize) -> Grid {
-        let layout = Layout { k: 3, a: 4 };
+        let layout = Layout { k: 3, r: 2, a: 4 };
         let rows = (0..n)
             .map(|j| {
                 let mut phi = vec![0.0f32; layout.d()];

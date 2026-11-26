@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The on-disk format this crate writes and reads. A reader refuses any other.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// `manifest.json`: what a world version contains and how it was made.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,7 +26,8 @@ pub struct Manifest {
 /// The taste model's constants for this world (03-engine.md §2, §6, §8).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Model {
-    /// Block sizes of a book vector.
+    /// Block sizes of a book vector: `k` implicit factors, `r` star factors (`[factors]
+    /// k_stars`), `a` aspects.
     pub layout: taste::Layout,
     /// The aspect block, in order: aspect `k` is number `layout.a().start + k`.
     pub aspects: Vec<Aspect>,

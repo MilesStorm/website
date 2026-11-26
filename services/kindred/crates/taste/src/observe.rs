@@ -16,7 +16,7 @@ pub enum Verdict {
 
 impl Verdict {
     /// How many of the thresholds `b1 < b2 < b3` the verdict lies above.
-    fn level(self) -> usize {
+    pub fn level(self) -> usize {
         match self {
             Verdict::NotForMe => 0,
             Verdict::Okay => 1,
@@ -167,6 +167,7 @@ pub(crate) fn user_prior(
     let mut s0 = vec![0.0; d];
     s0[layout.bias()] = hyper.var_bias;
     s0[layout.c()].fill(hyper.var_c);
+    s0[layout.r()].fill(hyper.var_r);
     s0[layout.a()].fill(hyper.var_a);
     s0[layout.m()].fill(hyper.var_m);
     m0[layout.m()].copy_from_slice(&prior.m0_meta);
@@ -353,7 +354,7 @@ mod tests {
 
     impl Vectors for Tiny {
         fn layout(&self) -> Layout {
-            Layout { k: 2, a: 3 }
+            Layout { k: 2, r: 0, a: 3 }
         }
         fn phi(&self, work: Row) -> Option<&[f32]> {
             self.rows.get(work.0 as usize)?.as_deref()
@@ -364,15 +365,15 @@ mod tests {
     }
 
     fn tiny() -> Tiny {
-        // d = 1 + 2 + 3 + 4 = 10
-        let a: Vec<f32> = (0..10)
+        // d = 1 + 2 + 0 + 3 + 5 = 11
+        let a: Vec<f32> = (0..11)
             .map(|i| if i == 0 { 1.0 } else { i as f32 / 10.0 })
             .collect();
-        let b: Vec<f32> = (0..10)
+        let b: Vec<f32> = (0..11)
             .map(|i| if i == 0 { 1.0 } else { -(i as f32) / 10.0 })
             .collect();
         Tiny {
-            rows: vec![Some(a), Some(b), None, Some(vec![f32::NAN; 10])],
+            rows: vec![Some(a), Some(b), None, Some(vec![f32::NAN; 11])],
         }
     }
 
@@ -552,7 +553,7 @@ mod tests {
         assert!(obs(&dont).is_empty());
         let h = Hyper::default();
         let prior = Prior {
-            m0_meta: [0.3, 0.2, 0.0, -0.1],
+            m0_meta: [0.3, 0.2, 0.0, -0.1, 0.4],
         };
         let p = user_prior(l, &h, &prior, &dont);
         assert_eq!(p.s0[l.aspect(2)], h.var_a / 100.0);
@@ -561,6 +562,7 @@ mod tests {
         assert_eq!(&p.m0[l.m()], &prior.m0_meta);
         assert_eq!(p.s0[0], h.var_bias);
         assert!(p.s0[l.c()].iter().all(|&v| v == h.var_c));
+        assert!(p.s0[l.r()].iter().all(|&v| v == h.var_r));
         assert!(p.s0[l.m()].iter().all(|&v| v == h.var_m));
     }
 

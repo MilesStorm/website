@@ -74,7 +74,7 @@ pub const STAGES: [Stage; 14] = [
     Stage {
         name: "factors",
         sql: "",
-        rust: Some(("1", crate::factors::run)),
+        rust: Some(("2", crate::factors::run)),
     },
     Stage {
         name: "embed",
@@ -89,7 +89,7 @@ pub const STAGES: [Stage; 14] = [
     Stage {
         name: "vectors",
         sql: "",
-        rust: Some(("1", crate::vectors::run)),
+        rust: Some(("2", crate::vectors::run)),
     },
     Stage {
         name: "neighbours",
@@ -99,7 +99,7 @@ pub const STAGES: [Stage; 14] = [
     Stage {
         name: "prior",
         sql: "",
-        rust: Some(("1", crate::bench::fit_prior)),
+        rust: Some(("3", crate::bench::fit_prior)),
     },
     Stage {
         name: "bench",

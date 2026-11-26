@@ -155,6 +155,7 @@ async fn the_benchmark_recovers_the_planted_model() {
     );
     let mut with_vector = 0;
     let mut flagged = 0;
+    let mut with_stars = 0;
     for row in (0..world.len() as u32).map(world::reader::Row) {
         if let Some(v) = world.vector(row) {
             with_vector += 1;
@@ -165,6 +166,7 @@ async fn the_benchmark_recovers_the_planted_model() {
                 .sum::<f32>()
                 .sqrt();
             assert!(c <= 1.0 + 1e-4, "c is at most unit length");
+            with_stars += usize::from(v[model.layout.r()].iter().any(|&x| x != 0.0));
         }
         if world.flags(row) & flags::RECOMMENDABLE != 0 {
             flagged += 1;
@@ -172,6 +174,11 @@ async fn the_benchmark_recovers_the_planted_model() {
         }
     }
     assert_eq!(flagged as u64, recommendable);
+    assert_eq!(model.layout.r, 4);
+    assert!(
+        with_stars > 0,
+        "the star block is filled for works with star ratings"
+    );
     assert_eq!(
         with_vector,
         report["vector_works"].as_u64().unwrap() as usize
@@ -188,6 +195,8 @@ async fn the_benchmark_recovers_the_planted_model() {
         &paths.model,
         bench::data::Users::Test,
         false,
+        false,
+        &[],
     )
     .unwrap();
     assert!(markdown.contains("| G1 |"), "{markdown}");

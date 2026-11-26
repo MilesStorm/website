@@ -12,11 +12,9 @@ path = "src/main.rs"
 world = { path = "../world" }
 # The taste model: the benchmark measures exactly the code the service runs (04-benchmark.md §1)
 taste = { path = "../taste" }
-# Matrix factorization for the collaborative block (03-engine.md §2)
-discorec = "0.3"
-# Ridge regressions of the text maps
+# Ridge regressions of the text maps, the star factorization's row solves
 nalgebra = "0.34"
-# The benchmark's users in parallel
+# The factorizations' rows and the benchmark's users in parallel
 rayon = "1"
 # The text embedding model: ONNX Runtime loaded at run time (the image ships Microsoft's CUDA
 # build, as services/ai_pipeline does), and its tokenizer in pure Rust
@@ -60,5 +58,7 @@ opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
 
 [dev-dependencies]
+# Planted models in the factorization's tests
+rand_distr = "0.5"
 # Reads allowed_raw_io.toml in tests/allowed_raw_io.rs, Cargo.toml in tests/fixture.rs
 toml.workspace = true

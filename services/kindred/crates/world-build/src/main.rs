@@ -70,6 +70,17 @@ enum Command {
         /// "report both sets of numbers").
         #[arg(long)]
         report: bool,
+        /// With `--users tuning`: P, FULL and FULL without comparisons at n = 20 on 2,000 users,
+        /// with the prior refitted (minutes; for development).
+        #[arg(long, conflicts_with = "report")]
+        quick: bool,
+        /// With `--quick`: override a `[model]` setting, `name=value` (repeatable).
+        #[arg(long = "set", requires = "quick", value_name = "NAME=VALUE")]
+        set: Vec<String>,
+        /// With `--users tuning`: search only these settings (comma-separated), from world.toml's
+        /// values for the rest.
+        #[arg(long, value_delimiter = ',', conflicts_with_all = ["report", "quick"])]
+        only: Vec<String>,
     },
     /// Check the text embedding against the reference embeddings (the image runs this when it
     /// is built).
@@ -160,7 +171,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             scratch,
             users,
             report,
+            quick,
+            set,
+            only,
         } => {
+            let mut config = config;
+            config.model = override_model(&config.model, &set)?;
             let paths = build::Paths::new(&scratch);
             let report = world_build::trace::spawn_blocking("world.bench", move || {
                 let duck = world_build::trace::Duck::open(
@@ -176,6 +192,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     &paths.model,
                     users,
                     report,
+                    quick,
+                    &only,
                 )
             })
             .await?;
@@ -292,4 +310,17 @@ fn telemetry() -> anyhow::Result<Providers> {
         .with(bridge)
         .try_init()?;
     Ok(Some((spans, logs)))
+}
+
+/// `[model]` with `name=value` overrides (TOML values); unknown names are refused.
+fn override_model(model: &taste::Hyper, set: &[String]) -> anyhow::Result<taste::Hyper> {
+    let mut table = toml::Table::try_from(model)?;
+    for item in set {
+        let (name, value) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--set {item}: expected name=value"))?;
+        let parsed: toml::Table = toml::from_str(&format!("v = {value}"))?;
+        table.insert(name.trim().to_string(), parsed["v"].clone());
+    }
+    Ok(table.try_into()?)
 }

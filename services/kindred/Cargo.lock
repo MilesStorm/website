@@ -951,12 +951,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "discorec"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83c26497d88d2adefc9b5a220f63a73bbfa66c7653be8a9e0993de66f8936b77"
-
-[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4648,7 +4642,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "discorec",
  "duckdb",
  "flate2",
  "futures-util",
@@ -4663,6 +4656,7 @@ dependencies = [
  "ort",
  "rand 0.9.5",
  "rand_chacha",
+ "rand_distr",
  "rayon",
  "reqwest",
  "reqwest-middleware",

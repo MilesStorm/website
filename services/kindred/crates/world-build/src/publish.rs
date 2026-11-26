@@ -275,7 +275,7 @@ mod tests {
             },
             report: serde_json::json!({"searchable_works": name.len()}),
             model: world::Model {
-                layout: taste::Layout { k: 1, a: 0 },
+                layout: taste::Layout { k: 1, r: 0, a: 0 },
                 aspects: vec![],
                 hyper: taste::Hyper::default(),
                 prior: taste::Prior::default(),

@@ -20,13 +20,11 @@ tantivy = "0.27"
 memmap2 = "0.9"
 bytemuck = "1"
 
-# The taste model's fits and the factorization run thousands of times in the fixture world's
+# The taste model's fits run thousands of times in the fixture world's
 # tests (the benchmark gate): optimised even in test builds.
 [profile.dev.package.taste]
 opt-level = 3
 [profile.dev.package.nalgebra]
-opt-level = 3
-[profile.dev.package.discorec]
 opt-level = 3
 [profile.dev.package.matrixmultiply]
 opt-level = 3

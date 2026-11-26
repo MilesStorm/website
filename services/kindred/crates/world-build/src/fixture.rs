@@ -388,6 +388,7 @@ pub fn settings(
     config.interactions.gate_users = 100;
     config.interactions.tuning_users = 300;
     config.factors.k = 8;
+    config.factors.k_stars = 4;
     config.factors.cold_from_year = 2012;
     config.vectors.min_popularity = 1.0;
     config.verify.recommendable = (50, u64::MAX);

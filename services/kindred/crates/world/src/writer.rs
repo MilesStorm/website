@@ -67,7 +67,8 @@ pub struct WorldWriter {
     index: IndexWriter,
     /// The work keys written by `write_works`, ascending.
     keys: Option<Vec<u64>>,
-    vectors_written: bool,
+    /// The numbers per vector, once the vectors are written.
+    vector_d: Option<usize>,
     neighbours_written: bool,
 }
 
@@ -99,7 +100,7 @@ impl WorldWriter {
             fields,
             index,
             keys: None,
-            vectors_written: false,
+            vector_d: None,
             neighbours_written: false,
         })
     }
@@ -266,7 +267,7 @@ impl WorldWriter {
         columns::write(&col(files::VECTOR_ROWS), &rows)?;
         columns::write(&col(files::VECTORS), &data)?;
         columns::write(&col(files::VECTOR_SOURCE), &source)?;
-        self.vectors_written = true;
+        self.vector_d = Some(table.d);
         Ok(())
     }
 
@@ -336,11 +337,23 @@ impl WorldWriter {
         mut report: serde_json::Value,
         model: crate::Model,
     ) -> Result<Manifest> {
-        if !self.vectors_written {
-            return Err(Error::Corrupt {
-                path: files::VECTORS.into(),
-                what: "was never written".into(),
-            });
+        match self.vector_d {
+            None => {
+                return Err(Error::Corrupt {
+                    path: files::VECTORS.into(),
+                    what: "was never written".into(),
+                });
+            }
+            Some(d) if d != model.layout.d() => {
+                return Err(Error::Corrupt {
+                    path: files::VECTORS.into(),
+                    what: format!(
+                        "{d} numbers per vector, the layout has {}",
+                        model.layout.d()
+                    ),
+                });
+            }
+            Some(_) => {}
         }
         if !self.neighbours_written {
             return Err(Error::Corrupt {

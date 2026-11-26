@@ -32,9 +32,11 @@ pub struct Rated {
     pub recent: bool,
 }
 
-/// Which earlier rated work to compare the newly logged work `new` with (§7), or `None` when no
-/// pair reaches `hyper.ask_min`. For each `B` in `rated` (not `new`, not a pair `excluded` says
-/// was already compared or skipped, and with a vector):
+/// Which earlier rated work to compare the newly logged work `new` (with verdict `verdict`)
+/// with (§7), or `None` when no pair reaches `hyper.ask_min`. Only works with the same verdict
+/// are partners: for two works with different verdicts the verdicts already say which one the
+/// reader liked more, so the answer would count that evidence twice. For each such `B` in `rated`
+/// (not `new`, not a pair `excluded` says was already compared or skipped, and with a vector):
 /// `x = phi(new) - phi(B)`, `p = sigma(x · w_hat / tau_c)`,
 /// `info = p (1 - p) x^T Sigma x`, and `memory` 1.0 for a loved or not-for-me or recent `B`,
 /// else 0.6. The largest `info * memory` wins; the first one on a tie. The caller refits after
@@ -44,6 +46,7 @@ pub fn next_comparison(
     world: &impl Vectors,
     hyper: &Hyper,
     new: Row,
+    verdict: Verdict,
     rated: &[Rated],
     excluded: &dyn Fn(Row, Row) -> bool,
 ) -> Option<Row> {
@@ -52,7 +55,7 @@ pub fn next_comparison(
     let w = DVector::from_column_slice(fit.weights());
     let mut best: Option<(Row, f64)> = None;
     for b in rated {
-        if b.work == new || excluded(new, b.work) {
+        if b.work == new || b.verdict != verdict || excluded(new, b.work) {
             continue;
         }
         let Some(phi_b) = vector(world, layout, b.work) else {
@@ -472,12 +475,12 @@ mod tests {
         assert_eq!(shorter_page_limit(None), 250.0);
         assert_eq!(shorter_page_limit(Some(300.0)), 250.0);
         assert!((shorter_page_limit(Some(500.0)) - 350.0).abs() < 1e-9);
-        let layout = Layout { k: 2, a: 3 };
+        let layout = Layout { k: 2, r: 0, a: 3 };
         // bias, c = (1, 0), a = (3, -1, 0.5), meta
-        let phi = [1.0f32, 1.0, 0.0, 3.0, -1.0, 0.5, 0.0, 0.0, 0.0, 0.0];
+        let phi = [1.0f32, 1.0, 0.0, 3.0, -1.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0];
         assert!((lighter(layout, &phi, &[0], &[1, 2], 0.5) - 0.5 * (3.0 - (-0.25))).abs() < 1e-9);
         // positive aspect 0 capped at 2; negative aspects 1 (clamped to 0) and 2 (0.5).
-        let last = [1.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let last = [1.0f32, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         let v = ctx(layout, &phi, &[0], &[1, 2], Some(&last), 1.0, 0.5);
         assert!((v - 0.5 * (2.0 - 0.25 + 0.0)).abs() < 1e-9);
         let same = ctx(layout, &phi, &[], &[], Some(&phi), 1.0, 0.5);
@@ -486,14 +489,14 @@ mod tests {
     }
 
     struct Three;
-    const THREE: [[f32; 10]; 3] = [
-        [1.0, 1.0, 0.0, 3.0, 0.0, 1.5, 0.0, 0.0, 0.0, 0.0],
-        [1.0, 0.0, 1.0, 0.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-        [1.0, 0.6, 0.8, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    const THREE: [[f32; 11]; 3] = [
+        [1.0, 1.0, 0.0, 3.0, 0.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [1.0, 0.0, 1.0, 0.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [1.0, 0.6, 0.8, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     ];
     impl Vectors for Three {
         fn layout(&self) -> Layout {
-            Layout { k: 2, a: 3 }
+            Layout { k: 2, r: 0, a: 3 }
         }
         fn phi(&self, work: Row) -> Option<&[f32]> {
             THREE.get(work.0 as usize).map(|r| r.as_slice())
@@ -553,17 +556,17 @@ mod tests {
         let rated = [
             Rated {
                 work: Row(1),
-                verdict: Verdict::Okay,
+                verdict: Verdict::Liked,
                 recent: false,
             },
             Rated {
                 work: Row(2),
-                verdict: Verdict::Loved,
-                recent: false,
+                verdict: Verdict::Liked,
+                recent: true,
             },
         ];
         let none = |_: Row, _: Row| false;
-        // Work 1 is further from work 0 than work 2, but faded memory (0.6) costs it.
+        // Work 1 is further from work 0 than work 2, but faded memory (0.6) may cost it.
         let x1: f64 = THREE[0]
             .iter()
             .zip(&THREE[1])
@@ -577,12 +580,12 @@ mod tests {
             .map(|x| x * x)
             .sum();
         assert!(x1 > x2);
-        let pick = next_comparison(&f, &Three, &h, Row(0), &rated, &none);
+        let pick = next_comparison(&f, &Three, &h, Row(0), Verdict::Liked, &rated, &none);
         assert!(pick.is_some());
         // Excluding a pair removes it; `new` itself is never a partner.
         let only_2 = |_: Row, b: Row| b == Row(1);
         assert_eq!(
-            next_comparison(&f, &Three, &h, Row(0), &rated, &only_2),
+            next_comparison(&f, &Three, &h, Row(0), Verdict::Liked, &rated, &only_2),
             Some(Row(2))
         );
         let self_only = [Rated {
@@ -591,7 +594,12 @@ mod tests {
             recent: true,
         }];
         assert_eq!(
-            next_comparison(&f, &Three, &h, Row(0), &self_only, &none),
+            next_comparison(&f, &Three, &h, Row(0), Verdict::Loved, &self_only, &none),
+            None
+        );
+        // A partner with another verdict is never asked about.
+        assert_eq!(
+            next_comparison(&f, &Three, &h, Row(0), Verdict::Loved, &rated, &none),
             None
         );
         // Below ask_min: no question.
@@ -600,7 +608,7 @@ mod tests {
             ..Hyper::default()
         };
         assert_eq!(
-            next_comparison(&f, &Three, &strict, Row(0), &rated, &none),
+            next_comparison(&f, &Three, &strict, Row(0), Verdict::Liked, &rated, &none),
             None
         );
     }

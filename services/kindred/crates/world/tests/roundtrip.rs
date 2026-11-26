@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use proptest::prelude::*;
 use world::{BookDoc, Model, SearchParams, VectorTable, WorkKey, WorkRow, World, WorldWriter};
 
-/// A small vector layout: d = 1 + 2 + 1 + 4.
+/// A small vector layout: d = 1 + 2 + 2 + 1 + 5.
 fn model() -> Model {
     Model {
-        layout: taste::Layout { k: 2, a: 1 },
+        layout: taste::Layout { k: 2, r: 2, a: 1 },
         aspects: vec![world::Aspect {
             id: "dark".into(),
             group: "tone".into(),
@@ -21,7 +21,7 @@ fn model() -> Model {
         }],
         hyper: taste::Hyper::default(),
         prior: taste::Prior {
-            m0_meta: [0.5, 0.25, 0.0, 0.0],
+            m0_meta: [0.5, 0.25, 0.0, 0.0, 0.1],
         },
         confidence_cuts: [0.5, 0.8],
         bench: serde_json::json!({"ndcg10_n20": 0.1}),
@@ -297,11 +297,11 @@ fn refuses_unknown_format_and_bad_checksums() {
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(
         &manifest,
-        text.replace("\"format_version\": 3", "\"format_version\": 4"),
+        text.replace("\"format_version\": 4", "\"format_version\": 5"),
     )
     .unwrap();
     assert!(matches!(
         World::open(&path),
-        Err(world::Error::Format { found: 4 })
+        Err(world::Error::Format { found: 5 })
     ));
 }

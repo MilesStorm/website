@@ -1,6 +1,7 @@
 //! kindred-world: builds the world (02-world-data.md) with its book vectors (03-engine.md),
 //! measures the taste model (04-benchmark.md) and publishes the world to Garage.
 
+pub mod als;
 pub mod aspects;
 pub mod bench;
 pub mod build;

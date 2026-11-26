@@ -1,13 +1,15 @@
 //! Stage vectors (03-engine.md §2–§3, 02-world-data.md §4): the book vector of every searchable
-//! work that can be placed, `phi = [1 | c | a | m]`, where each block came from, and which
+//! work that can be placed, `phi = [1 | c | r | a | m]`, where each block came from, and which
 //! works are recommendable. Twice: for the world, and for the cold-book test (variant `cold`).
 //!
 //! - `c`: the work's factors at unit length; without factors, the text map's prediction at unit
 //!   length times `text_shrink`. A work with neither has no vector.
+//! - `r`: the work's star factors as fitted (not unit length: their length is how strongly the
+//!   stars place it); zeros without them (no star ratings in training, or placed by text).
 //! - `a`: the shelf-and-subject numbers; without them, the text map's prediction (clipped to ±3);
 //!   with neither, zeros.
-//! - `m`: z-scores over recommendable works of quality, popularity, ln(pages) and first year,
-//!   clipped to ±3, 0 when unknown.
+//! - `m`: z-scores over recommendable works of quality, popularity, ln(pages), first year and
+//!   the star bias `b_i`, clipped to ±3, 0 when unknown.
 
 use std::path::{Path, PathBuf};
 
@@ -102,6 +104,8 @@ struct Facts {
     quality: f64,
     pages: Option<f64>,
     year: Option<f64>,
+    /// The work's bias in the star factorization.
+    stars_bias: Option<f64>,
     cover: bool,
     not_a_book: bool,
 }
@@ -109,23 +113,30 @@ struct Facts {
 pub fn layout(run: &Run) -> taste::Layout {
     taste::Layout {
         k: run.config.factors.k,
+        r: run.config.factors.k_stars,
         a: run.aspects.aspect.len(),
     }
 }
 
 pub fn run(run: &Run) -> anyhow::Result<()> {
-    let facts = facts(run)?;
+    let mut facts = facts(run)?;
     let aspects = Matrix::read(&text_maps::aspects_path(&run.model))?;
     let cold = text_maps::cold_works(run)?;
     let mut counts = serde_json::Map::new();
     for variant in [false, true] {
         let raw_c = Matrix::read(&factors::path(&run.model, variant))?;
+        let stars = Matrix::read(&factors::stars_path(&run.model, variant))?;
+        let bias = Matrix::read(&factors::stars_bias_path(&run.model, variant))?;
+        for f in &mut facts {
+            f.stars_bias = bias.get(f.work).map(|b| f64::from(b[0]));
+        }
         let c_text = Matrix::read(&text_maps::c_text_path(&run.model, variant))?;
         let a_text = Matrix::read(&text_maps::a_text_path(&run.model, variant))?;
         let (vectors, n) = assemble(
             layout(run),
             &facts,
             &raw_c,
+            &stars,
             &c_text,
             &aspects,
             &a_text,
@@ -157,6 +168,7 @@ fn facts(run: &Run) -> anyhow::Result<Vec<Facts>> {
                 .filter(|&p| p > 0)
                 .map(|p| p as f64),
             year: r.get::<_, Option<i64>>(4)?.map(|y| y as f64),
+            stars_bias: None,
             cover: r.get(5)?,
             not_a_book: r.get(6)?,
         })
@@ -194,6 +206,7 @@ fn assemble(
     layout: taste::Layout,
     facts: &[Facts],
     raw_c: &Matrix,
+    stars: &Matrix,
     c_text: &Matrix,
     aspects: &Matrix,
     a_text: &Matrix,
@@ -245,6 +258,7 @@ fn assemble(
         stats(rec().map(|f| f.popularity)),
         stats(rec().filter_map(|f| f.pages.map(f64::ln))),
         stats(rec().filter_map(|f| f.year)),
+        stats(rec().filter_map(|f| f.stars_bias)),
     ];
     let z = |value: Option<f64>, (mean, sd): (f64, f64)| {
         value.map_or(0.0, |v| ((v - mean) / sd).clamp(-3.0, 3.0)) as f32
@@ -256,12 +270,17 @@ fn assemble(
         let f = &facts[i];
         row[layout.bias()] = 1.0;
         row[layout.c()].copy_from_slice(&c);
+        match stars.get(f.work).filter(|_| flags & C_FROM_TEXT == 0) {
+            Some(r) => row[layout.r()].copy_from_slice(r),
+            None => row[layout.r()].fill(0.0),
+        }
         row[layout.a()].copy_from_slice(&a);
         let m = [
             z(Some(f.quality), scales[0]),
             z(Some(f.popularity), scales[1]),
             z(f.pages.map(f64::ln), scales[2]),
             z(f.year, scales[3]),
+            z(f.stars_bias, scales[4]),
         ];
         row[layout.m()].copy_from_slice(&m);
         phi.push(f.work, &row);
@@ -303,7 +322,7 @@ mod tests {
 
     #[test]
     fn blocks_come_from_the_right_source() {
-        let layout = taste::Layout { k: 2, a: 1 };
+        let layout = taste::Layout { k: 2, r: 1, a: 1 };
         let facts: Vec<Facts> = [1u64, 2, 3, 4]
             .iter()
             .map(|&work| Facts {
@@ -312,11 +331,17 @@ mod tests {
                 quality: 4.0,
                 pages: Some(300.0),
                 year: None,
+                stars_bias: match work {
+                    3 => Some(0.5),
+                    4 => Some(-0.5),
+                    _ => None,
+                },
                 cover: work != 2,
                 not_a_book: false,
             })
             .collect();
         let raw_c = matrix(2, &[(1, vec![3.0, 4.0]), (4, vec![0.0, 2.0])]);
+        let stars = matrix(1, &[(1, vec![0.7]), (2, vec![0.9])]);
         let c_text = matrix(2, &[(2, vec![1.0, 0.0]), (3, vec![0.0, 5.0])]);
         let aspects = matrix(1, &[(1, vec![2.0]), (3, vec![1.5])]);
         let a_text = matrix(1, &[(2, vec![-1.0]), (3, vec![0.2])]);
@@ -324,6 +349,7 @@ mod tests {
             layout,
             &facts,
             &raw_c,
+            &stars,
             &c_text,
             &aspects,
             &a_text,
@@ -332,20 +358,24 @@ mod tests {
             3.0,
         );
         assert_eq!(v.phi.keys, vec![1, 2, 3, 4]);
-        // Work 1: unit factors, its own aspects; popularity 2 < 3: not recommendable.
-        assert_eq!(&v.phi.row(0)[..4], &[1.0, 0.6, 0.8, 2.0]);
+        // Work 1: unit factors, its star factors as they are, its own aspects; popularity 2 < 3:
+        // not recommendable.
+        assert_eq!(&v.phi.row(0)[..5], &[1.0, 0.6, 0.8, 0.7, 2.0]);
         assert_eq!(v.flags[0], 0);
-        // Work 2: c from text, shrunk; a from text; no cover.
-        assert_eq!(&v.phi.row(1)[..4], &[1.0, 0.5, 0.0, -1.0]);
+        // Work 2: c from text, shrunk; no star block for a text-placed work; a from text; no
+        // cover.
+        assert_eq!(&v.phi.row(1)[..5], &[1.0, 0.5, 0.0, 0.0, -1.0]);
         assert_eq!(v.flags[1], C_FROM_TEXT | A_FROM_TEXT);
         // Work 3: excluded from its shelf aspects (the cold variant): a from text.
-        assert_eq!(v.phi.row(2)[3], 0.2);
+        assert_eq!(v.phi.row(2)[4], 0.2);
         assert_eq!(v.flags[2], C_FROM_TEXT | A_FROM_TEXT | RECOMMENDABLE);
-        // Work 4: factors, no aspects at all.
+        // Work 4: factors, no star factors, no aspects at all.
         assert_eq!(v.phi.row(3)[3], 0.0);
+        assert_eq!(v.phi.row(3)[4], 0.0);
         assert_eq!(n.a_missing, 1);
         assert_eq!(n.recommendable, 2);
-        // Meta: pages identical → z 0; unknown year → 0.
-        assert_eq!(&v.phi.row(3)[4..], &[0.0, 1.0, 0.0, 0.0]);
+        // Meta: pages identical → z 0; unknown year → 0; star bias z-scored over works 3 and 4.
+        assert_eq!(&v.phi.row(3)[5..], &[0.0, 1.0, 0.0, 0.0, -1.0]);
+        assert_eq!(v.phi.row(0)[9], 0.0, "unknown star bias");
     }
 }

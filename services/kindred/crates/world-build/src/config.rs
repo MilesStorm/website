@@ -104,6 +104,13 @@ pub struct Interactions {
 pub struct Factors {
     pub k: usize,
     pub iterations: u32,
+    /// Size of the star block (explicit factors on star ratings, 03-engine.md §2).
+    pub k_stars: usize,
+    /// Weighted-λ regularisation of the star factorization: λ · (ratings of the row + n0).
+    pub stars_regularisation: f64,
+    /// `n0` of the star factorization: biases are shrunk by `n / (n + n0)` (03-engine.md §2).
+    pub stars_prior_count: f64,
+    pub stars_iterations: u32,
     pub min_user_likes: i64,
     pub min_work_likes: i64,
     pub cold_from_year: i64,

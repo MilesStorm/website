@@ -29,7 +29,7 @@ impl World {
             for (slot, v) in phi[layout.c()].iter_mut().zip(&c) {
                 *slot = (v / norm) as f32 * scale;
             }
-            for i in layout.a().chain(layout.m()) {
+            for i in layout.r().chain(layout.a()).chain(layout.m()) {
                 let v: f64 = rng.sample(StandardNormal);
                 phi[i] = v.clamp(-3.0, 3.0) as f32 * scale;
             }
@@ -62,9 +62,17 @@ impl Vectors for World {
     }
 }
 
-const REAL: Layout = Layout { k: 64, a: 50 };
-const SMALL: Layout = Layout { k: 16, a: 10 };
-const SPEC: Layout = Layout { k: 64, a: 59 };
+const REAL: Layout = Layout {
+    k: 64,
+    r: 32,
+    a: 50,
+};
+const SMALL: Layout = Layout { k: 16, r: 4, a: 10 };
+const SPEC: Layout = Layout {
+    k: 64,
+    r: 32,
+    a: 59,
+};
 
 /// A true user drawn from the default prior (bias excepted).
 fn true_weights(layout: Layout, rng: &mut ChaCha8Rng) -> Vec<f64> {
@@ -73,6 +81,8 @@ fn true_weights(layout: Layout, rng: &mut ChaCha8Rng) -> Vec<f64> {
     for (i, slot) in w.iter_mut().enumerate() {
         let sd = if layout.c().contains(&i) {
             h.var_c.sqrt()
+        } else if layout.r().contains(&i) {
+            h.var_r.sqrt()
         } else if layout.a().contains(&i) {
             h.var_a.sqrt()
         } else if layout.m().contains(&i) {
@@ -249,7 +259,7 @@ fn prior_only() {
     let world = World::new(REAL, 10, 1.0, &mut rng);
     let h = Hyper::default();
     let prior = Prior {
-        m0_meta: [0.4, 0.3, -0.1, 0.05],
+        m0_meta: [0.4, 0.3, -0.1, 0.05, 0.2],
     };
     // A "not now" stop and a work without a vector give no observation either.
     let events = [
@@ -282,6 +292,7 @@ fn prior_only() {
         }
         assert_eq!(f.prior_variance()[0], h.var_bias);
         assert_eq!(f.prior_variance()[REAL.c().start], h.var_c);
+        assert_eq!(f.prior_variance()[REAL.r().start], h.var_r);
         assert_eq!(f.prior_variance()[REAL.a().start], h.var_a);
         assert_eq!(f.prior_variance()[REAL.m().start], h.var_m);
     }
@@ -405,7 +416,7 @@ fn rich_user(world: &World, rng: &mut ChaCha8Rng) -> Vec<Event> {
 fn breakdown() {
     let h = Hyper::default();
     let prior = Prior {
-        m0_meta: [0.4, 0.3, -0.1, 0.05],
+        m0_meta: [0.4, 0.3, -0.1, 0.05, 0.2],
     };
     for user in 0..8 {
         let mut rng = ChaCha8Rng::seed_from_u64(400 + user);

@@ -85,6 +85,17 @@ seed = 2017
 # (4 or 5 stars). Users and works below these counts are dropped, twice.
 k = 64
 iterations = 20
+# The star block (03-engine.md §2): explicit biased matrix factorization of the star ratings
+# (r - mean = b_user + b_work + p_user . q_work, alternating least squares) on the works of the
+# liked pairs, by users in neither benchmark role with at least min_user_likes ratings there.
+# Weighted-lambda regularisation (Zhou et al. 2008): a row with n ratings gets lambda * (n + n0) on
+# its factors; 0.05 is the usual value for 1-5 star data (their Netflix optimum was 0.05-0.065).
+# stars_prior_count n0: a bias is its mean residual times n / (n + n0), so a work few people rated
+# stays near 0 (25 is the shrinkage of the 2026-11-24 diagnostic that beat the raw average).
+k_stars = 32
+stars_regularisation = 0.05
+stars_prior_count = 25.0
+stars_iterations = 15
 min_user_likes = 10
 min_work_likes = 20
 # The cold-book test (04-benchmark.md §4): works first published in this year or later are left
@@ -131,18 +142,23 @@ min_popularity = 4.3
 # The taste model's hyperparameters (03-engine.md), chosen by the search on the 5,000 tuning users
 # (kindred-world bench --users tuning, 04-benchmark.md §3) on the 2026-11 data, with the pick-up
 # term (03-engine.md §8): NDCG@10 at n = 20 0.4003 there (0.1028 without it; engine defaults
-# 0.0215). var_bias, omega_h, ask_min, beta, b1–b3 are not searched.
+# 0.0215). var_bias, tau_c, omega_h, ask_min, beta, b1–b3 are not searched; the star block
+# (var_r) is new since that search: rerun it after the next build.
 var_bias = 4.0
-var_c = 1.0
+var_c = 2.25
+# Prior variance of the star-block weights (03-engine.md §2); not yet searched on tuning users.
+var_r = 1.0
 var_a = 0.005
-var_m = 0.05
+var_m = 0.01
 tau_v = 2.0
-tau_c = 1.0
-omega_v = 1.0
+# Fixed at the 03-engine.md default, not searched: the benchmark answers comparisons from the
+# same stars as the verdicts, so it cannot value them (04-benchmark.md §3).
+tau_c = 0.5
+omega_v = 0.2178
 omega_h = 0.5
 text_var = 0.0
 # Length of a text-placed collaborative block (03-engine.md §3).
-text_shrink = 0.5
+text_shrink = 1.0
 # Smallest information worth a comparison question (03-engine.md §7).
 ask_min = 0.05
 beta = 0.5

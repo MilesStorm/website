@@ -1,7 +1,8 @@
 //! The per-user taste model of `03-engine.md`: a Bayesian linear preference model over book
 //! vectors.
 //!
-//! Every work has a vector `phi` (bias, collaborative block, aspect block, meta block; see
+//! Every work has a vector `phi` (bias, collaborative block, star block, aspect block, meta
+//! block; see
 //! [`Layout`]). A user is a weight vector `w`, never stored: [`fit`] recomputes it from that
 //! user's own [`Event`]s and the world, as the posterior mode `w_hat` with covariance `Sigma`.
 //! The model's opinion of a work is the utility `phi · w`. From the fit come scores
@@ -14,11 +15,13 @@
 //! generator the caller passes in. Why: the benchmark and the service must run identical code,
 //! and every result must be reproducible from its inputs.
 
+mod agree;
 mod choose;
 mod fit;
 mod observe;
 mod pickup;
 
+pub use agree::Agreement;
 pub use choose::{
     Candidate, Picks, Rated, SeriesNext, context_aspects, cosine, ctx, have_you_read, lighter,
     next_comparison, novelty, picks, seed, shorter_page_limit, stretch,
@@ -36,22 +39,24 @@ use std::ops::Range;
 )]
 pub struct Row(pub u32);
 
-/// The shape of a book vector: `[ 1 | c (k) | a (a) | m (4) ]`, in this order (§2).
+/// The shape of a book vector: `[ 1 | c (k) | r (r) | a (a) | m (5) ]`, in this order (§2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Layout {
     /// Size of the collaborative block.
     pub k: usize,
+    /// Size of the star block (the explicit-rating factors; `[factors] k_stars`).
+    pub r: usize,
     /// Number of aspects.
     pub a: usize,
 }
 
 impl Layout {
-    /// Size of the meta block: quality, popularity, length, age.
-    pub const META: usize = 4;
+    /// Size of the meta block: quality, popularity, length, age, star bias.
+    pub const META: usize = 5;
 
     /// Length of a whole vector.
     pub fn d(&self) -> usize {
-        1 + self.k + self.a + Self::META
+        1 + self.k + self.r + self.a + Self::META
     }
 
     /// Index of the bias number, always 1 in `phi`.
@@ -64,20 +69,25 @@ impl Layout {
         1..1 + self.k
     }
 
+    /// The star block: the work's factors from the explicit (star) model, not unit length.
+    pub fn r(&self) -> Range<usize> {
+        1 + self.k..1 + self.k + self.r
+    }
+
     /// The aspect block; aspect `k` sits at `a().start + k`.
     pub fn a(&self) -> Range<usize> {
-        1 + self.k..1 + self.k + self.a
+        1 + self.k + self.r..1 + self.k + self.r + self.a
     }
 
     /// The meta block.
     pub fn m(&self) -> Range<usize> {
-        1 + self.k + self.a..self.d()
+        1 + self.k + self.r + self.a..self.d()
     }
 
     /// Index of aspect `k` in a whole vector.
     pub fn aspect(&self, k: usize) -> usize {
         debug_assert!(k < self.a, "aspect {k} out of 0..{}", self.a);
-        1 + self.k + k
+        1 + self.k + self.r + k
     }
 }
 
@@ -91,6 +101,8 @@ pub struct Hyper {
     pub var_bias: f64,
     /// Prior variance of each collaborative weight.
     pub var_c: f64,
+    /// Prior variance of each star-block weight.
+    pub var_r: f64,
     /// Prior variance of each aspect weight.
     pub var_a: f64,
     /// Prior variance of each meta weight.
@@ -121,6 +133,11 @@ pub struct Hyper {
     pub pickup: f64,
     /// Weight of popularity inside the pick-up term.
     pub pickup_pop: f64,
+    /// Weight of the neighbourhood term in how much a reader would like a work (§8,
+    /// [`Agreement`]); 0 leaves it out.
+    pub agree: f64,
+    /// Shrink of the neighbourhood term toward 0 (in units of summed similarity).
+    pub agree_shrink: f64,
 }
 
 impl Default for Hyper {
@@ -128,6 +145,7 @@ impl Default for Hyper {
         Self {
             var_bias: 4.0,
             var_c: 2.25,
+            var_r: 1.0,
             var_a: 0.0225,
             var_m: 0.25,
             tau_v: 1.0,
@@ -143,16 +161,18 @@ impl Default for Hyper {
             b3: 1.0,
             pickup: 1.0,
             pickup_pop: 0.5,
+            agree: 0.0,
+            agree_shrink: 1.0,
         }
     }
 }
 
-/// The prior mean of the meta block (quality, popularity, length, age), fitted once by the
-/// benchmark on its training users and stored in the world's manifest. Every other prior mean
+/// The prior mean of the meta block (quality, popularity, length, age, star bias), fitted once
+/// by the benchmark on its tuning users and stored in the world's manifest. Every other prior mean
 /// is zero. Why: with no data the model should prefer well-rated, widely read books.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Prior {
-    pub m0_meta: [f64; 4],
+    pub m0_meta: [f64; Layout::META],
 }
 
 /// What the model needs from the world: each work's vector and where it came from.
@@ -193,13 +213,18 @@ mod tests {
 
     #[test]
     fn layout_blocks_tile_the_vector() {
-        let l = Layout { k: 64, a: 50 };
-        assert_eq!(l.d(), 119);
+        let l = Layout {
+            k: 64,
+            r: 32,
+            a: 50,
+        };
+        assert_eq!(l.d(), 152);
         assert_eq!(l.bias(), 0);
         assert_eq!(l.c(), 1..65);
-        assert_eq!(l.a(), 65..115);
-        assert_eq!(l.m(), 115..119);
-        assert_eq!(l.aspect(3), 68);
+        assert_eq!(l.r(), 65..97);
+        assert_eq!(l.a(), 97..147);
+        assert_eq!(l.m(), 147..152);
+        assert_eq!(l.aspect(3), 100);
     }
 
     #[test]

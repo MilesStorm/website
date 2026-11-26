@@ -78,12 +78,14 @@ impl Space {
         })
     }
 
-    /// The same vectors with one block set to zero (an ablation, exact and well conditioned).
-    pub fn without(&self, block: std::ops::Range<usize>) -> Space {
+    /// The same vectors with some numbers set to zero (an ablation, exact and well conditioned).
+    pub fn without(&self, blocks: &[std::ops::Range<usize>]) -> Space {
         let mut phi = self.phi.clone();
         let d = self.layout.d();
         for i in 0..phi.len() {
-            phi.data[i * d + block.start..i * d + block.end].fill(0.0);
+            for block in blocks {
+                phi.data[i * d + block.start..i * d + block.end].fill(0.0);
+            }
         }
         Space::new(Vectors {
             layout: self.layout,
@@ -138,6 +140,7 @@ pub struct Rating {
     pub day: f64,
 }
 
+#[derive(Clone)]
 pub struct User {
     pub id: i32,
     pub tuning: bool,
