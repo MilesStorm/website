@@ -16,10 +16,12 @@ use crate::{bench, pack, publish, report, stages, vectors, verify};
 /// Every environment variable kindred-world reads (directly or through the OpenTelemetry SDK).
 /// Nothing else: in particular no database credentials (02-world-data.md §1 invariant 1).
 /// tests/fixture.rs checks the code and the CronJob against this list.
-pub const ENVIRONMENT: [&str; 7] = [
+pub const ENVIRONMENT: [&str; 8] = [
     "GIT_SHA",
     // Read by ONNX Runtime's loader (crate `ort`): where the library is (set in the image).
     "ORT_DYLIB_PATH",
+    // Read by rayon's global thread pool: the Rust stages' threads (set in the CronJob).
+    "RAYON_NUM_THREADS",
     "RUST_LOG",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_RESOURCE_ATTRIBUTES",
