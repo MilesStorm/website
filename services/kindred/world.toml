@@ -186,6 +186,8 @@ max_prior_terms = 2000000
 # NDCG@10 at n = 20 on the gate subset when M2 was accepted; every monthly build must reach
 # min_share of it. Absent until the benchmark was accepted.
 min_share = 0.9
+# Accepted 2026-11-26 (500 gate users, [model] above).
+accepted_ndcg10_n20 = 0.3763
 
 [search]
 # A hit's score: text relevance, plus this times popularity (ln(1 + ratings)), plus
