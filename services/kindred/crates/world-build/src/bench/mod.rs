@@ -11,11 +11,15 @@
 //!
 //! Outputs are aggregates only: no user and no work appears in them (PLAN.md rule 13).
 
+pub mod batch;
 pub mod data;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod methods;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::Context as _;
 use rand::{Rng as _, SeedableRng as _};
@@ -101,7 +105,7 @@ pub enum Rule {
 }
 
 /// Asks about `new` against the earlier works `earlier` by `rule`; answers with stars (more
-/// stars is better, equal stars a skip). Returns whether a question was asked.
+/// stars is better, equal stars a skip). Returns the partner asked about, if any.
 #[allow(clippy::too_many_arguments, reason = "one simulated question's inputs")]
 fn ask(
     space: &Space,
@@ -114,8 +118,8 @@ fn ask(
     rule: Rule,
     now: f64,
     rng: &mut ChaCha8Rng,
-) -> bool {
-    let key = |a: u32, b: u32| (a.min(b), a.max(b));
+    last_fit: &mut Option<(usize, taste::Fit)>,
+) -> Option<u32> {
     let other = match rule {
         Rule::None => None,
         Rule::Random => {
@@ -124,37 +128,64 @@ fn ask(
                 .filter(|(row, r)| {
                     *row != new.0
                         && data::verdict(r.stars) == data::verdict(new.1.stars)
-                        && !asked.contains(&key(new.0, *row))
+                        && !asked.contains(&pair_key(new.0, *row))
                 })
                 .collect();
             (!open.is_empty()).then(|| open[rng.random_range(0..open.len())].0)
         }
         Rule::Model => {
-            let fit = taste::fit(events, space, hyper, prior);
-            let rated: Vec<Rated> = earlier
-                .iter()
-                .map(|(row, r)| Rated {
-                    work: Row(*row),
-                    verdict: data::verdict(r.stars),
-                    recent: (now - r.day).is_nan() || now - r.day <= RECENT_DAYS,
-                })
-                .collect();
+            // Events only grow, and a skip adds none: the same count is the same fit.
+            if last_fit.as_ref().is_none_or(|(n, _)| *n != events.len()) {
+                *last_fit = Some((events.len(), taste::fit(events, space, hyper, prior)));
+            }
+            let fit = &last_fit.as_ref().expect("just set").1;
             taste::next_comparison(
-                &fit,
+                fit,
                 space,
                 hyper,
                 Row(new.0),
                 data::verdict(new.1.stars),
-                &rated,
-                &|a, b| asked.contains(&key(a.0, b.0)),
+                &rated(earlier, now),
+                &|a, b| asked.contains(&pair_key(a.0, b.0)),
             )
             .map(|r| r.0)
         }
     };
-    let Some(other) = other else {
-        return false;
-    };
-    asked.insert(key(new.0, other));
+    let other = other?;
+    answer(events, asked, new, earlier, other, now);
+    Some(other)
+}
+
+/// A pair of works, either way round.
+fn pair_key(a: u32, b: u32) -> (u32, u32) {
+    (a.min(b), a.max(b))
+}
+
+/// The earlier works as `taste::next_comparison` reads them; recent: logged within three years
+/// of `now`, or of unknown date.
+fn rated(earlier: &[(u32, Rating)], now: f64) -> Vec<Rated> {
+    earlier
+        .iter()
+        .map(|(row, r)| Rated {
+            work: Row(*row),
+            verdict: data::verdict(r.stars),
+            recent: (now - r.day).is_nan() || now - r.day <= RECENT_DAYS,
+        })
+        .collect()
+}
+
+/// The simulated answer about `new` against `other` (04-benchmark.md §2): the work with more
+/// stars was liked more; equal stars are a skip, which adds no event. The pair counts as asked
+/// either way.
+fn answer(
+    events: &mut Vec<Event>,
+    asked: &mut HashSet<(u32, u32)>,
+    new: (u32, Rating),
+    earlier: &[(u32, Rating)],
+    other: u32,
+    now: f64,
+) {
+    asked.insert(pair_key(new.0, other));
     let other_stars = earlier
         .iter()
         .find(|(row, _)| *row == other)
@@ -172,7 +203,6 @@ fn ask(
             age_years: age(now, new.1.day),
         });
     }
-    true
 }
 
 /// The product's flow replayed: log each revealed work in order and, after each, ask up to two
@@ -188,13 +218,14 @@ fn replay(
 ) -> Vec<Event> {
     let mut events = Vec::new();
     let mut asked = HashSet::new();
+    let mut last_fit = None;
     for (i, item) in revealed.iter().enumerate() {
         events.push(read_event(item.0, &item.1, now));
         if rule == Rule::None || i == 0 {
             continue;
         }
         for _ in 0..QUESTIONS_PER_LOG {
-            if !ask(
+            if ask(
                 space,
                 hyper,
                 prior,
@@ -205,7 +236,10 @@ fn replay(
                 rule,
                 now,
                 rng,
-            ) {
+                &mut last_fit,
+            )
+            .is_none()
+            {
                 break;
             }
         }
@@ -232,6 +266,7 @@ fn ask_after(
         .map(|(row, r)| read_event(*row, r, now))
         .collect();
     let mut asked = HashSet::new();
+    let mut last_fit = None;
     let mut done = 0;
     while done < count {
         let before = done;
@@ -250,7 +285,10 @@ fn ask_after(
                 rule,
                 now,
                 rng,
-            ) {
+                &mut last_fit,
+            )
+            .is_some()
+            {
                 done += 1;
             }
         }
@@ -302,19 +340,49 @@ impl Method {
     }
 }
 
+/// What ranking and pairwise accuracy read from a fitted reader (03-engine.md §8): `mu` of one
+/// work and of every candidate. The CPU path reads taste's own fit; the batched path
+/// ([`batch`]) the weights it fitted on a device.
+trait Mu {
+    /// `mu(i)` without the bias number.
+    fn score(&self, phi: &[f32]) -> f64;
+    /// [`Mu::score`] in f32 of every row of `rows` (`d` numbers each) into `out`.
+    fn score_rows(&self, rows: &[f32], out: &mut [f32]);
+}
+
+impl Mu for taste::Fit {
+    fn score(&self, phi: &[f32]) -> f64 {
+        taste::Fit::score(self, phi)
+    }
+
+    fn score_rows(&self, rows: &[f32], out: &mut [f32]) {
+        taste::Fit::score_rows(self, rows, out)
+    }
+}
+
+impl<T: Mu + ?Sized> Mu for &T {
+    fn score(&self, phi: &[f32]) -> f64 {
+        (**self).score(phi)
+    }
+
+    fn score_rows(&self, rows: &[f32], out: &mut [f32]) {
+        (**self).score_rows(rows, out)
+    }
+}
+
 /// One method's scores for one user.
-enum Scorer {
+enum Scorer<'a> {
     /// The taste model: `mu(i)` plus the pick-up term (03-engine.md §8).
-    Model(Box<taste::Fit>, Personal),
+    Model(Box<dyn Mu + 'a>, Personal),
     Content(Option<Vec<f32>>),
     Sparse(HashMap<u32, f32>),
     Factor(Option<Vec<f32>>),
 }
 
-impl Scorer {
+impl Scorer<'_> {
     fn score(&self, space: &Space, content: &Content, hyper: &Hyper, row: u32) -> f32 {
         match self {
-            Scorer::Model(fit, pickup) => model_score(fit, pickup, hyper, space, row) as f32,
+            Scorer::Model(fit, pickup) => model_score(&**fit, pickup, hyper, space, row) as f32,
             Scorer::Content(q) => q.as_ref().map_or(0.0, |q| content.score(q, row)),
             Scorer::Sparse(s) => s.get(&row).copied().unwrap_or(0.0),
             Scorer::Factor(x) => x.as_ref().map_or(0.0, |x| methods::dot(x, space.c(row))),
@@ -326,7 +394,7 @@ impl Scorer {
     /// pairwise accuracy orders works the reader has read.
     fn liking(&self, space: &Space, content: &Content, hyper: &Hyper, row: u32) -> f32 {
         match self {
-            Scorer::Model(fit, personal) => liking(fit, personal, hyper, space, row) as f32,
+            Scorer::Model(fit, personal) => liking(&**fit, personal, hyper, space, row) as f32,
             _ => self.score(space, content, hyper, row),
         }
     }
@@ -334,7 +402,7 @@ impl Scorer {
     /// Scores of every recommendable row, in `space.cand` order.
     fn fill(&self, space: &Space, content: &Content, hyper: &Hyper, out: &mut [f32]) {
         match self {
-            Scorer::Model(fit, pickup) => model_rank(fit, pickup, hyper, space, out),
+            Scorer::Model(fit, pickup) => model_rank(&**fit, pickup, hyper, space, out),
             _ => {
                 for (o, &row) in out.iter_mut().zip(&space.cand) {
                     *o = self.score(space, content, hyper, row);
@@ -353,14 +421,20 @@ struct Personal {
 }
 
 /// How much the reader would like `row`: `mu` (bias dropped) plus the neighbourhood term.
-fn liking(fit: &taste::Fit, personal: &Personal, hyper: &Hyper, space: &Space, row: u32) -> f64 {
+fn liking(
+    fit: &(impl Mu + ?Sized),
+    personal: &Personal,
+    hyper: &Hyper,
+    space: &Space,
+    row: u32,
+) -> f64 {
     fit.score(space.vector(row)) + hyper.agree * personal.agree.get(Row(row), hyper.agree_shrink)
 }
 
 /// The taste model's ranking score of one work: how much the reader would like it plus the
 /// pick-up term.
 fn model_score(
-    fit: &taste::Fit,
+    fit: &(impl Mu + ?Sized),
     personal: &Personal,
     hyper: &Hyper,
     space: &Space,
@@ -377,7 +451,7 @@ fn model_score(
 
 /// [`model_score`] of every recommendable row, in `space.cand` order.
 fn model_rank(
-    fit: &taste::Fit,
+    fit: &(impl Mu + ?Sized),
     personal: &Personal,
     hyper: &Hyper,
     space: &Space,
@@ -601,6 +675,9 @@ pub struct Setup<'a> {
     pub prior: Prior,
     pub revealed: Vec<usize>,
     pub seed: u64,
+    /// Where the per-reader work runs: `None` on the CPU, one user at a time (the reference);
+    /// a device batches it across users ([`batch`]).
+    pub device: Option<&'a Mutex<Box<dyn batch::Device>>>,
 }
 
 impl Setup<'_> {
@@ -628,28 +705,30 @@ pub enum Scope {
     Quick,
 }
 
-fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
-    let space = setup.space;
-    let mut sums = Sums::default();
-    let empty_content;
-    let content = match &setup.content {
-        Some(c) => c,
-        None => {
-            empty_content = Content {
-                embeddings: &EMPTY,
-                of_row: vec![u32::MAX; space.phi.len()],
-            };
-            &empty_content
-        }
-    };
-    let mut buf = vec![0f32; space.cand.len()];
-    let ns: Vec<(usize, usize)> = match scope {
-        Scope::Report => setup.revealed.iter().copied().enumerate().collect(),
-        Scope::FullAtMain | Scope::PairwiseAtMain | Scope::Quick => vec![(0, N_MAIN)],
-    };
-    for (ni, n) in ns {
+/// One user's ratings split at `n` (04-benchmark.md §2) and the sets the measurements read.
+struct Split<'u> {
+    revealed: &'u [Rating],
+    /// The day of the last revealed rating: "now" for ages and the recent flag.
+    now: f64,
+    /// The revealed works that have a vector.
+    shown: Vec<(u32, Rating)>,
+    revealed_rows: HashSet<u32>,
+    /// Recommendable future works with 4 or 5 stars.
+    relevant: HashSet<u32>,
+    /// The same future at every n (Report only): the works before the largest n, and the
+    /// relevant ones after it.
+    before_rows: HashSet<u32>,
+    relevant_same: HashSet<u32>,
+    /// Future works with a vector and their stars.
+    future_rows: Vec<(u32, u8)>,
+}
+
+impl<'u> Split<'u> {
+    /// `None` when the user has no future at `n`.
+    fn new(setup: &Setup, user: &'u User, n: usize) -> Option<Split<'u>> {
+        let space = setup.space;
         if user.ratings.len() <= n {
-            continue;
+            return None;
         }
         let (revealed, future) = user.ratings.split_at(n);
         let now = revealed.last().map_or(f64::NAN, |r| r.day);
@@ -661,7 +740,6 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             .filter_map(|r| space.row_of(r.work))
             .filter(|&row| space.recommendable(row) && !revealed_rows.contains(&row))
             .collect();
-        // The same future at every n (Report only): after the largest n.
         let last = setup.revealed.iter().copied().max().unwrap_or(0);
         let (before_last, after_last) = user.ratings.split_at(last.min(user.ratings.len()));
         let before_rows: HashSet<u32> = before_last
@@ -679,14 +757,101 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             .filter_map(|r| space.row_of(r.work).map(|row| (row, r.stars)))
             .filter(|(row, _)| !revealed_rows.contains(row))
             .collect();
-        let methods: &[Method] = match scope {
-            Scope::Report => &Method::ALL,
-            Scope::FullAtMain | Scope::PairwiseAtMain => &[Method::Full],
-            Scope::Quick => &[Method::P, Method::Full, Method::FullWithoutComparisons],
+        Some(Split {
+            revealed,
+            now,
+            shown,
+            revealed_rows,
+            relevant,
+            before_rows,
+            relevant_same,
+            future_rows,
+        })
+    }
+
+    /// The cold-book test's candidates (cold works the cold vectors can rank, not revealed) and
+    /// its relevant works; `None` when no relevant work is among them (the user is not counted).
+    fn cold(&self, setup: &Setup, cold_space: &Space) -> Option<(Vec<u32>, HashSet<u32>)> {
+        let space = setup.space;
+        let cold_cands: Vec<u32> = space
+            .cand
+            .iter()
+            .copied()
+            .filter(|r| setup.cold_rows.contains(r) && !self.revealed_rows.contains(r))
+            .filter(|&r| cold_space.row_of(space.phi.keys[r as usize]).is_some())
+            .collect();
+        // Only works the cold vectors can rank count toward the ideal.
+        let cold_relevant: HashSet<u32> = self
+            .relevant
+            .iter()
+            .copied()
+            .filter(|r| setup.cold_rows.contains(r))
+            .filter(|r| cold_space.row_of(space.phi.keys[*r as usize]).is_some())
+            .collect();
+        (!cold_relevant.is_empty()).then_some((cold_cands, cold_relevant))
+    }
+}
+
+/// The (index of n, n) a scope measures.
+fn ns(setup: &Setup, scope: Scope) -> Vec<(usize, usize)> {
+    match scope {
+        Scope::Report => setup.revealed.iter().copied().enumerate().collect(),
+        Scope::FullAtMain | Scope::PairwiseAtMain | Scope::Quick => vec![(0, N_MAIN)],
+    }
+}
+
+/// The methods a scope measures.
+fn methods(scope: Scope) -> &'static [Method] {
+    match scope {
+        Scope::Report => &Method::ALL,
+        Scope::FullAtMain | Scope::PairwiseAtMain => &[Method::Full],
+        Scope::Quick => &[Method::P, Method::Full, Method::FullWithoutComparisons],
+    }
+}
+
+/// Whether the cold-book test runs at `n` (the report runs it at the main n only).
+fn cold_at(setup: &Setup, scope: Scope, n: usize) -> bool {
+    setup.cold_space.is_some() && (scope != Scope::Report || n == N_MAIN)
+}
+
+/// One user's measurements. `pre`: the histories and fits the batched path computed ahead
+/// ([`batch`]); without it every replay and fit runs here, on the CPU.
+fn measure_user(setup: &Setup, user: &User, scope: Scope, pre: Option<&batch::UserSims>) -> Sums {
+    let space = setup.space;
+    let mut sums = Sums::default();
+    let empty_content;
+    let content = match &setup.content {
+        Some(c) => c,
+        None => {
+            empty_content = Content {
+                embeddings: &EMPTY,
+                of_row: vec![u32::MAX; space.phi.len()],
+            };
+            &empty_content
+        }
+    };
+    let mut buf = vec![0f32; space.cand.len()];
+    // FULL's fit with its covariance: the bands, the stretch pick and the cold test read it.
+    let full_fit_needed = scope == Scope::Report || setup.cold_space.is_some();
+    for (ni, n) in ns(setup, scope) {
+        let Some(split) = Split::new(setup, user, n) else {
+            continue;
         };
+        let Split {
+            revealed,
+            now,
+            shown,
+            revealed_rows,
+            relevant,
+            before_rows,
+            relevant_same,
+            future_rows,
+        } = &split;
+        let now = *now;
+        let simulated = |sim: batch::Sim| pre.map(|p| &p[&(sim, ni)]);
         let mut full_fit = None;
-        let full_pickup = personal(setup.lists, &shown);
-        for &method in methods {
+        let full_pickup = personal(setup.lists, shown);
+        for &method in methods(scope) {
             let mut g = rng(setup.seed, &[user.id as u64, n as u64, method as u64]);
             let scorer = match method {
                 Method::P => Scorer::Model(
@@ -695,40 +860,56 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 ),
                 Method::Full | Method::FullWithoutCollaborative | Method::FullWithoutAspects => {
                     let view = setup.view(method);
-                    let events = replay(
-                        view,
-                        &setup.hyper,
-                        &setup.prior,
-                        &shown,
-                        Rule::Model,
-                        now,
-                        &mut g,
-                    );
                     // Without the collaborative block there are no co-likes either.
                     let pickup = if method == Method::FullWithoutCollaborative {
                         Personal::default()
                     } else {
                         full_pickup.clone()
                     };
-                    Scorer::Model(
-                        Box::new(taste::fit(&events, view, &setup.hyper, &setup.prior)),
-                        pickup,
-                    )
+                    let fitted: Box<dyn Mu> = match simulated(batch::Sim::Method(method)) {
+                        Some(s) => {
+                            if method == Method::Full && full_fit_needed {
+                                full_fit =
+                                    Some(taste::fit(&s.events, view, &setup.hyper, &setup.prior));
+                            }
+                            Box::new(s)
+                        }
+                        None => {
+                            let events = replay(
+                                view,
+                                &setup.hyper,
+                                &setup.prior,
+                                shown,
+                                Rule::Model,
+                                now,
+                                &mut g,
+                            );
+                            let fit = taste::fit(&events, view, &setup.hyper, &setup.prior);
+                            if method == Method::Full && scope != Scope::PairwiseAtMain {
+                                full_fit = Some(fit.clone());
+                            }
+                            Box::new(fit)
+                        }
+                    };
+                    Scorer::Model(fitted, pickup)
                 }
                 Method::FullWithoutComparisons => {
-                    let events = replay(
-                        space,
-                        &setup.hyper,
-                        &setup.prior,
-                        &shown,
-                        Rule::None,
-                        now,
-                        &mut g,
-                    );
-                    Scorer::Model(
-                        Box::new(taste::fit(&events, space, &setup.hyper, &setup.prior)),
-                        full_pickup.clone(),
-                    )
+                    let fitted: Box<dyn Mu> = match simulated(batch::Sim::Method(method)) {
+                        Some(s) => Box::new(s),
+                        None => {
+                            let events = replay(
+                                space,
+                                &setup.hyper,
+                                &setup.prior,
+                                shown,
+                                Rule::None,
+                                now,
+                                &mut g,
+                            );
+                            Box::new(taste::fit(&events, space, &setup.hyper, &setup.prior))
+                        }
+                    };
+                    Scorer::Model(fitted, full_pickup.clone())
                 }
                 Method::C => {
                     let liked: Vec<u32> = shown
@@ -779,10 +960,10 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                 continue;
             }
             scorer.fill(view, content, &setup.hyper, &mut buf);
-            let ranked = top(space, &buf, &revealed_rows, 50);
+            let ranked = top(space, &buf, revealed_rows, 50);
             let acc = sums.main.entry((method, ni)).or_default();
             if !relevant.is_empty() {
-                let v = ndcg(&ranked, &relevant, 10);
+                let v = ndcg(&ranked, relevant, 10);
                 acc.ndcg += v;
                 acc.ndcg_sq += v * v;
                 acc.recall += ranked.iter().filter(|r| relevant.contains(r)).count() as f64
@@ -801,17 +982,12 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                     acc.pairwise_users += 1.0;
                 }
             }
-            if method == Method::Full
-                && let Scorer::Model(fit, _) = &scorer
-            {
-                full_fit = Some((**fit).clone());
-            }
             if scope == Scope::FullAtMain || scope == Scope::Quick {
                 continue;
             }
             if !relevant_same.is_empty() {
-                let ranked_same = top(space, &buf, &before_rows, 10);
-                acc.ndcg_same += ndcg(&ranked_same, &relevant_same, 10);
+                let ranked_same = top(space, &buf, before_rows, 10);
+                acc.ndcg_same += ndcg(&ranked_same, relevant_same, 10);
                 acc.same_users += 1.0;
             }
             let scored: Vec<(f32, u8)> = future_rows
@@ -847,7 +1023,7 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
         if scope == Scope::Report {
             // Band calibration: each future work with a vector, in its band.
             let bands = sums.bands.entry(ni).or_default();
-            for &(row, stars) in &future_rows {
+            for &(row, stars) in future_rows {
                 let (_, band) = fit.band(
                     space.vector(row),
                     taste::Vectors::text_sourced(space, Row(row)),
@@ -910,35 +1086,40 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
                     if rule == Rule::None && count > 0 {
                         continue;
                     }
-                    let mut g = rng(
-                        setup.seed,
-                        &[user.id as u64, 200 + count as u64, rule as u64],
-                    );
-                    let events = ask_after(
-                        space,
-                        &setup.hyper,
-                        &setup.prior,
-                        &shown,
-                        count,
-                        rule,
-                        now,
-                        &mut g,
-                    );
-                    let fit = taste::fit(&events, space, &setup.hyper, &setup.prior);
-                    model_rank(&fit, &full_pickup, &setup.hyper, space, &mut buf);
-                    let ranked = top(space, &buf, &revealed_rows, 10);
+                    let fit: Box<dyn Mu> = match simulated(batch::Sim::Question(rule, count)) {
+                        Some(s) => Box::new(s),
+                        None => {
+                            let mut g = rng(
+                                setup.seed,
+                                &[user.id as u64, 200 + count as u64, rule as u64],
+                            );
+                            let events = ask_after(
+                                space,
+                                &setup.hyper,
+                                &setup.prior,
+                                shown,
+                                count,
+                                rule,
+                                now,
+                                &mut g,
+                            );
+                            Box::new(taste::fit(&events, space, &setup.hyper, &setup.prior))
+                        }
+                    };
+                    model_rank(&*fit, &full_pickup, &setup.hyper, space, &mut buf);
+                    let ranked = top(space, &buf, revealed_rows, 10);
                     let scored: Vec<(f32, u8)> = future_rows
                         .iter()
                         .map(|&(row, stars)| {
                             (
-                                liking(&fit, &full_pickup, &setup.hyper, space, row) as f32,
+                                liking(&*fit, &full_pickup, &setup.hyper, space, row) as f32,
                                 stars,
                             )
                         })
                         .collect();
                     let e = sums.questions.entry((rule, count)).or_default();
                     if !relevant.is_empty() {
-                        e[0] += ndcg(&ranked, &relevant, 10);
+                        e[0] += ndcg(&ranked, relevant, 10);
                         e[1] += 1.0;
                     }
                     if let Some(p) = pairwise(&scored) {
@@ -950,26 +1131,9 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
         }
         // The cold-book test: rank only cold candidates.
         if let Some(cold_space) = setup.cold_space {
-            let cold_relevant: HashSet<u32> = relevant
-                .iter()
-                .copied()
-                .filter(|r| setup.cold_rows.contains(r))
-                .collect();
-            let cold_cands: Vec<u32> = space
-                .cand
-                .iter()
-                .copied()
-                .filter(|r| setup.cold_rows.contains(r) && !revealed_rows.contains(r))
-                .filter(|&r| cold_space.row_of(space.phi.keys[r as usize]).is_some())
-                .collect();
-            // Only works the cold vectors can rank count toward the ideal.
-            let cold_relevant: HashSet<u32> = cold_relevant
-                .into_iter()
-                .filter(|r| cold_space.row_of(space.phi.keys[*r as usize]).is_some())
-                .collect();
-            if cold_relevant.is_empty() {
+            let Some((cold_cands, cold_relevant)) = split.cold(setup, cold_space) else {
                 continue;
-            }
+            };
             let rank = |score: &dyn Fn(u32) -> f32| -> f64 {
                 let mut items: Vec<(f32, u32)> =
                     cold_cands.iter().map(|&r| (score(r), r)).collect();
@@ -1003,22 +1167,27 @@ fn measure_user(setup: &Setup, user: &User, scope: Scope) -> Sums {
             sums.cold[3][0] +=
                 rank(&|r| model_score(&prior_fit, &none, &setup.hyper, space, r) as f32);
             let cold_shown = placed(cold_space, revealed);
-            let mut g = rng(setup.seed, &[user.id as u64, 300]);
-            let events = replay(
-                cold_space,
-                &setup.hyper,
-                &setup.prior,
-                &cold_shown,
-                Rule::Model,
-                now,
-                &mut g,
-            );
-            let text_fit = taste::fit(&events, cold_space, &setup.hyper, &setup.prior);
+            let text_fit: Box<dyn Mu> = match simulated(batch::Sim::Cold) {
+                Some(s) => Box::new(s),
+                None => {
+                    let mut g = rng(setup.seed, &[user.id as u64, 300]);
+                    let events = replay(
+                        cold_space,
+                        &setup.hyper,
+                        &setup.prior,
+                        &cold_shown,
+                        Rule::Model,
+                        now,
+                        &mut g,
+                    );
+                    Box::new(taste::fit(&events, cold_space, &setup.hyper, &setup.prior))
+                }
+            };
             // Co-likes without the cold works: they get no pick-up from them.
             let cold_pickup = personal(setup.cold_lists, &cold_shown);
             sums.cold[1][0] += rank(&|r| {
                 model_score(
-                    &text_fit,
+                    &*text_fit,
                     &cold_pickup,
                     &setup.hyper,
                     cold_space,
@@ -1042,10 +1211,16 @@ static EMPTY: Matrix = Matrix {
 };
 
 fn measure(setup: &Setup, users: &[User], scope: Scope) -> Sums {
+    if let Some(device) = setup.device {
+        let mut device = device
+            .lock()
+            .expect("no measurement panicked holding the device");
+        return batch::measure(setup, users, scope, &mut **device);
+    }
     // Users in parallel, then summed in user order: the same floating-point sums every run.
     let per_user: Vec<Sums> = users
         .par_iter()
-        .map(|u| measure_user(setup, u, scope))
+        .map(|u| measure_user(setup, u, scope, None))
         .collect();
     per_user.into_iter().fold(Sums::default(), Sums::merge)
 }
@@ -1567,6 +1742,7 @@ pub fn gate(run: &Run) -> anyhow::Result<()> {
         prior,
         revealed: vec![N_MAIN],
         seed: run.config.interactions.seed,
+        device: None,
     };
     let sums = measure(&setup, &users, Scope::FullAtMain);
     let ndcg = sums
@@ -1653,6 +1829,27 @@ fn cold(
     Ok((cold_space, cold_lists, cold_rows))
 }
 
+/// Where `kindred-world bench` runs the per-reader work (replays, fits, ranking).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Compute {
+    /// On the CPU, one user at a time: taste's own code (04-benchmark.md §1).
+    Cpu,
+    /// Batched across users on an NVIDIA GPU ([`batch`], [`gpu`]; the `gpu` feature).
+    Cuda,
+}
+
+fn open_device(compute: Compute) -> anyhow::Result<Option<Mutex<Box<dyn batch::Device>>>> {
+    match compute {
+        Compute::Cpu => Ok(None),
+        #[cfg(feature = "gpu")]
+        Compute::Cuda => Ok(Some(Mutex::new(Box::new(gpu::Cuda::new()?)))),
+        #[cfg(not(feature = "gpu"))]
+        Compute::Cuda => {
+            anyhow::bail!("--device cuda: this binary was built without the `gpu` feature")
+        }
+    }
+}
+
 /// `kindred-world bench`: the full report on the test users, or the hyperparameter search on
 /// the tuning users (04-benchmark.md §3). Reads the scratch volume of a finished build.
 pub fn run_full(
@@ -1664,6 +1861,7 @@ pub fn run_full(
     report_tuning: bool,
     quick_tuning: bool,
     only: &[String],
+    compute: Compute,
 ) -> anyhow::Result<String> {
     let layout = taste::Layout {
         k: config.factors.k,
@@ -1680,6 +1878,7 @@ pub fn run_full(
         which == Users::Tuning || (!quick_tuning && only.is_empty()),
         "--quick and --only are for the tuning users"
     );
+    let device = open_device(compute)?;
     if which == Users::Tuning && quick_tuning {
         let (cold_space, cold_lists, cold_rows) = cold(duck, config, model, &space, layout)?;
         return Ok(quick(
@@ -1688,10 +1887,11 @@ pub fn run_full(
             config,
             &lists,
             (&cold_space, &cold_lists, cold_rows),
+            device.as_ref(),
         ));
     }
     if which == Users::Tuning && !report_tuning {
-        return tune(&space, &users, config, lists, only);
+        return tune(&space, &users, config, lists, only, device.as_ref());
     }
     let (cold_space, cold_lists, cold_rows) = cold(duck, config, model, &space, layout)?;
     let embeddings = Matrix::read(&crate::embed::path(model))?;
@@ -1729,6 +1929,7 @@ pub fn run_full(
         prior,
         revealed: config.bench.revealed.clone(),
         seed: config.interactions.seed,
+        device: device.as_ref(),
     };
     let sums = measure(&setup, &users, Scope::Report);
     let report = report(&setup, users.len(), &sums, agreement);
@@ -1759,6 +1960,7 @@ fn tune(
     config: &Config,
     lists: RowLists,
     only: &[String],
+    device: Option<&Mutex<Box<dyn batch::Device>>>,
 ) -> anyhow::Result<String> {
     type Setter = fn(&mut Hyper, f64);
     // (name, grid, setter, what it is chosen on, largest allowed value).
@@ -1898,6 +2100,7 @@ fn tune(
             prior,
             revealed: vec![N_MAIN],
             seed: config.interactions.seed,
+            device,
         };
         let (scope, who) = match objective {
             Objective::Ndcg => (Scope::FullAtMain, &ndcg_users[..]),
@@ -2082,6 +2285,7 @@ fn quick(
     config: &Config,
     lists: &RowLists,
     (cold_space, cold_lists, cold_rows): (&Space, &RowLists, HashSet<u32>),
+    device: Option<&Mutex<Box<dyn batch::Device>>>,
 ) -> String {
     let prior = prior_from(
         space,
@@ -2105,6 +2309,7 @@ fn quick(
         prior,
         revealed: vec![N_MAIN],
         seed: config.interactions.seed,
+        device,
     };
     let sums = measure(&setup, &who, Scope::Quick);
     let mut out = format!(

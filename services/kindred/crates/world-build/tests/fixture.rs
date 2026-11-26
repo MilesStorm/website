@@ -197,6 +197,7 @@ async fn the_benchmark_recovers_the_planted_model() {
         false,
         false,
         &[],
+        bench::Compute::Cpu,
     )
     .unwrap();
     assert!(markdown.contains("| G1 |"), "{markdown}");

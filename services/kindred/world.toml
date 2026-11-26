@@ -140,15 +140,16 @@ min_popularity = 4.3
 
 [model]
 # The taste model's hyperparameters (03-engine.md), chosen by the search on the 5,000 tuning users
-# (kindred-world bench --users tuning, 04-benchmark.md §3) on the 2026-11 data, with the pick-up
-# term (03-engine.md §8): NDCG@10 at n = 20 0.4003 there (0.1028 without it; engine defaults
-# 0.0215). var_bias, tau_c, omega_h, ask_min, beta, b1–b3 are not searched; the star block
-# (var_r) is new since that search: rerun it after the next build.
+# (kindred-world bench --users tuning, 04-benchmark.md §3) on the 2026-11 data, with the star
+# block, the neighbourhood term and same-verdict comparisons (2026-11-26): NDCG@10 at n = 20
+# 0.4103, pairwise accuracy 0.6609 there. var_bias, tau_c, omega_h, ask_min, beta, b1–b3 are not
+# searched.
 var_bias = 4.0
-var_c = 2.25
-# Prior variance of the star-block weights (03-engine.md §2); not yet searched on tuning users.
-var_r = 1.0
-var_a = 0.005
+var_c = 4.0
+# Prior variance of the star-block weights (03-engine.md §2).
+var_r = 4.0
+# Below the searched grid's bottom: the aspect block adds nothing measurable at this weight.
+var_a = 0.0011111111111111111
 var_m = 0.01
 tau_v = 2.0
 # Fixed at the 03-engine.md default, not searched: the benchmark answers comparisons from the
@@ -157,8 +158,9 @@ tau_c = 0.5
 omega_v = 0.2178
 omega_h = 0.5
 text_var = 0.0
-# Length of a text-placed collaborative block (03-engine.md §3).
-text_shrink = 1.0
+# Length of a text-placed collaborative block (03-engine.md §3). The search sees it only through
+# the few uncovered works; every value in its grid scored within 0.00002.
+text_shrink = 0.35714285714285715
 # Smallest information worth a comparison question (03-engine.md §7).
 ask_min = 0.05
 beta = 0.5
@@ -169,6 +171,10 @@ b3 = 1.0
 # popularity inside it. 16 is the top of the searched grid.
 pickup = 16.0
 pickup_pop = 0.0
+# Neighbourhood term (03-engine.md §8): weight and shrink of how the reader judged a work's
+# nearest works.
+agree = 0.5
+agree_shrink = 1.0
 
 [bench]
 # The values of n (revealed ratings per user) measured.

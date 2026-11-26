@@ -23,11 +23,11 @@ mod pickup;
 
 pub use agree::Agreement;
 pub use choose::{
-    Candidate, Picks, Rated, SeriesNext, context_aspects, cosine, ctx, have_you_read, lighter,
-    next_comparison, novelty, picks, seed, shorter_page_limit, stretch,
+    Candidate, FADED_MEMORY, Picks, Rated, SeriesNext, context_aspects, cosine, ctx, have_you_read,
+    lighter, next_comparison, novelty, picks, seed, shorter_page_limit, stretch,
 };
 pub use fit::{AspectWeight, Band, Breakdown, Fit, Origin, Profile, fit};
-pub use observe::{Event, Feedback, ProfileChoice, StopReason, Verdict};
+pub use observe::{Event, Feedback, ProfileChoice, StopReason, Verdict, age_factor};
 pub use pickup::{Lean, Pickup, bonus, popularity_z};
 
 use std::ops::Range;

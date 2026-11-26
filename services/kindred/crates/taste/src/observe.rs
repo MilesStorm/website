@@ -120,8 +120,9 @@ const EARLIER_SHARE: f64 = 0.5;
 /// "Don't care" divides the aspect weight's prior variance by this.
 const DONT_CARE_SHRINK: f64 = 100.0;
 
-/// `max(0.5, 0.5^(age / 10))`: tastes drift, but old favourites still count.
-pub(crate) fn age_factor(age_years: f64) -> f64 {
+/// `max(0.5, 0.5^(age / 10))`: tastes drift, but old favourites still count. Public for the
+/// benchmark's batched fits, which build the same terms on a device.
+pub fn age_factor(age_years: f64) -> f64 {
     0.5f64.powf(age_years.max(0.0) / 10.0).max(0.5)
 }
 

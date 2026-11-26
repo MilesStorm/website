@@ -10,7 +10,7 @@ use crate::observe::vector;
 use crate::{Fit, Hyper, Layout, Row, Vectors, Verdict, sigmoid};
 
 /// `memory(B)` for an earlier work the user may remember less well (§7).
-const FADED_MEMORY: f64 = 0.6;
+pub const FADED_MEMORY: f64 = 0.6;
 /// Weight of the "unlike the first likely fit" term of the second likely fit (§8).
 const SECOND_PICK_SPREAD: f64 = 0.5;
 /// The stretch pick's novelty requirement is at least this quantile of the candidates' novelty.

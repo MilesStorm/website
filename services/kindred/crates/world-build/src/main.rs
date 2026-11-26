@@ -81,6 +81,10 @@ enum Command {
         /// values for the rest.
         #[arg(long, value_delimiter = ',', conflicts_with_all = ["report", "quick"])]
         only: Vec<String>,
+        /// Where the per-reader work (replays, fits, ranking) runs: the CPU, or batched across
+        /// users on an NVIDIA GPU (needs a build with `--features gpu`).
+        #[arg(long, value_enum, default_value_t = bench::Compute::Cpu)]
+        device: bench::Compute,
     },
     /// Check the text embedding against the reference embeddings (the image runs this when it
     /// is built).
@@ -174,6 +178,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             quick,
             set,
             only,
+            device,
         } => {
             let mut config = config;
             config.model = override_model(&config.model, &set)?;
@@ -194,6 +199,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     report,
                     quick,
                     &only,
+                    device,
                 )
             })
             .await?;
