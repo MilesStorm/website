@@ -41,7 +41,9 @@ pub fn verify(
                     tracing::warn!(count = name, "not in both reports: change gate skipped");
                     continue;
                 };
-                let change = if before == 0.0 {
+                let change = if before == now {
+                    0.0
+                } else if before == 0.0 {
                     f64::INFINITY
                 } else {
                     (now - before).abs() / before
@@ -54,6 +56,27 @@ pub fn verify(
                 }
             }
         }
+    }
+
+    // M2: the recommendable works and the benchmark gate (02-world-data.md §7, 04-benchmark.md §5).
+    let recommendable = report["recommendable_works"].as_u64().unwrap_or(0);
+    let (low, high) = config.verify.recommendable;
+    if !(low..=high).contains(&recommendable) {
+        failures.push(format!(
+            "recommendable works: {recommendable}, outside {low}–{high}"
+        ));
+    }
+    let ndcg = report["bench_gate_ndcg10_n20"].as_f64().unwrap_or(0.0);
+    match config.bench.accepted_ndcg10_n20 {
+        Some(accepted) if ndcg < config.bench.min_share * accepted => failures.push(format!(
+            "benchmark gate: NDCG@10 at n = 20 is {ndcg:.4}, below {:.0}% of the accepted {accepted:.4}",
+            config.bench.min_share * 100.0
+        )),
+        Some(_) => {}
+        None => tracing::warn!(ndcg10_n20 = ndcg, "no accepted benchmark value yet: gate skipped"),
+    }
+    if world.manifest().model.aspects.len() != world.manifest().model.layout.a {
+        failures.push("the aspects do not match the vector layout".into());
     }
 
     let mut timings = Vec::new();

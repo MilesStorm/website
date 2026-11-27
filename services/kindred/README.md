@@ -1,12 +1,13 @@
 # kindred: books
 
-The world builder and the world's format. The kindred service (crate `kindred`) and the taste
-model (crate `taste`) join this workspace later.
+The world builder, the world's format and the taste model. The kindred service (crate
+`kindred`) joins this workspace in M3.
 
 | Crate | What |
 |---|---|
 | `crates/world` | The world's on-disk format: types, the writer, the reader (memory-mapped columns, the search index). |
-| `crates/world-build` | Binary `kindred-world`: the monthly build, the fixture world, publishing and rollback. |
+| `crates/taste` | The per-user taste model (pure maths, no I/O): fit, scores, fit bands, score breakdowns, questions, picks, taste profile. |
+| `crates/world-build` | Binary `kindred-world`: the monthly build, the book vectors, the benchmark, the fixture world, publishing and rollback. |
 
 ## The world
 
@@ -28,8 +29,17 @@ passed every check, and the bucket keeps the new version and the one it replaced
 
 `kindred-world build --scratch /scratch` runs, in order: download (Open Library's monthly dumps
 again when they changed, the Goodreads files once), the SQL stages in
-`crates/world-build/sql/` (ingest, identity, catalogue, series, popularity) against one DuckDB
-file, search-index and pack, verify, publish. Configuration is `world.toml`. A stage whose
+`crates/world-build/sql/` (ingest, identity, catalogue, series, popularity, interactions,
+aspects) against one DuckDB file, the model stages (factors, embed, text-maps, vectors, prior,
+bench; their files in the scratch volume's `model/`), search-index and pack, verify, publish.
+
+The model stages make each work's book vector (`[1 | collaborative | aspects | meta]`): matrix factorization of the
+Goodreads readers' likes, aspect numbers from shelf tags and Open Library subjects matched by
+`aspects.toml`, text embeddings (`BAAI/bge-small-en-v1.5` through ONNX Runtime, on eta's GPU;
+cached in `embed-cache/` by text), and ridge maps from the embedding to the other blocks for
+books without reading data. Stage bench measures the model on the benchmark's fixed gate users;
+verify refuses a world whose NDCG@10 at 20 ratings falls below `bench.min_share` of the accepted
+value. Configuration is `world.toml`. A stage whose
 inputs, SQL and settings are unchanged since its last success is skipped, so a failed run
 resumes where it stopped.
 
@@ -42,6 +52,14 @@ Verify reads the new world back through crate `world` and refuses to publish whe
 
 The build report (counts and coverage, no titles) is in `report.json`, the manifest and one
 log line.
+
+### The benchmark
+
+`kindred-world bench --scratch /scratch` reads the scratch volume of a finished build and prints
+the benchmark's report on the test users (tables per metric and method, the cold-book test, the
+gates) as Markdown: aggregates only. `--users tuning` runs the hyperparameter search instead and
+prints the `[model]` section for `world.toml`. Run it in the cluster (the data may not leave
+it), as a one-off Job from the CronJob with these arguments.
 
 ### Rollback
 
@@ -74,7 +92,13 @@ kubectl create job -n kindred --from=cronjob/kindred-world kindred-world-manual-
 
 `fixtures/` holds real Open Library records for the works in `fixtures/works.toml` (open data)
 and nothing from Goodreads: `kindred-world fixture` generates synthetic Goodreads files from a
-fixed seed. Every test builds it; nothing is downloaded.
+fixed seed, including readers drawn from a planted low-rank taste model that the benchmark must
+recover. The text embedding is a stand-in (hashed words), so no model and no GPU are needed.
+Every test builds it; nothing is downloaded.
+
+`fixtures/embedding-reference.json` holds the embedding model card's own embeddings of a few
+texts; `kindred-world embed-check` compares the Rust embedder with them, and the image runs it
+when it is built.
 
 ```sh
 cargo run -p world-build -- fixture --out /tmp/world

@@ -25,6 +25,8 @@ base = "https://mcauleylab.ucsd.edu/public_datasets/gdrive/goodreads"
 books = "goodreads_books.json.gz"
 works = "goodreads_book_works.json.gz"
 series = "goodreads_book_series.json.gz"
+# Who shelved and rated what, with dates (M2: the collaborative block and the benchmark).
+interactions = "goodreads_interactions_dedup.json.gz"
 
 [duckdb]
 # DuckDB spills to the scratch volume above this.
@@ -66,6 +68,127 @@ not_a_book_subjects = [
 # Prior weight `m` of the smoothed average rating (`quality`).
 prior_weight = 50.0
 
+[interactions]
+# Benchmark users (04-benchmark.md §2). Eligible: at least this many works rated 1-5 stars after
+# mapping to Open Library works. Test users are removed before anything is trained; the gate
+# subset (the first of the test users) is measured by every monthly build; tuning users stay in
+# factor training and fit the prior mean and the hyperparameters.
+min_eligible_ratings = 60
+test_users = 5000
+gate_users = 500
+tuning_users = 5000
+# Orders the eligible users for the split (and every other draw of the benchmark).
+seed = 2017
+
+[factors]
+# The collaborative block (03-engine.md §2): implicit matrix factorization on liked pairs
+# (4 or 5 stars). Users and works below these counts are dropped, twice.
+k = 64
+iterations = 20
+# The star block (03-engine.md §2): explicit biased matrix factorization of the star ratings
+# (r - mean = b_user + b_work + p_user . q_work, alternating least squares) on the works of the
+# liked pairs, by users in neither benchmark role with at least min_user_likes ratings there.
+# Weighted-lambda regularisation (Zhou et al. 2008): a row with n ratings gets lambda * (n + n0) on
+# its factors; 0.05 is the usual value for 1-5 star data (their Netflix optimum was 0.05-0.065).
+# stars_prior_count n0: a bias is its mean residual times n / (n + n0), so a work few people rated
+# stays near 0 (25 is the shrinkage of the 2026-11-24 diagnostic that beat the raw average).
+k_stars = 32
+stars_regularisation = 0.05
+stars_prior_count = 25.0
+stars_iterations = 15
+min_user_likes = 10
+min_work_likes = 20
+# The cold-book test (04-benchmark.md §4): works first published in this year or later are left
+# out of a second factorization and placed by their text instead.
+cold_from_year = 2015
+
+[aspects]
+# 03-engine.md §2, aspect block: smoothing toward the global share, the weight of one matching
+# Open Library subject in shelvings, and the shelvings a work needs for its own aspect numbers
+# (fewer: placed by its text).
+alpha = 20.0
+subject_weight = 5.0
+min_shelvings = 20.0
+# Unmatched shelf names printed by the stage, to extend aspects.toml with evidence.
+report_unmatched = 500
+
+[embed]
+# Text embeddings for the text maps (03-engine.md §3). The model directory holds model.onnx and
+# tokenizer.json (in the image, services/kindred/Dockerfile). Without it only the fixture world
+# builds, with a seeded stand-in.
+model_dir = "/opt/kindred/bge-small-en-v1.5"
+model_id = "BAAI/bge-small-en-v1.5"
+dimensions = 384
+max_tokens = 512
+batch = 64
+# At most this many tokens in one forward pass (texts × padded length): a bounded share of eta's
+# shared 6 GB GPU. 8192 is 16 texts at max_tokens.
+batch_tokens = 8192
+# The text given to the model: title, authors, this many subjects, the description's first
+# characters.
+max_subjects = 10
+max_description_chars = 1500
+
+[text_maps]
+# Ridge strengths tried for each map; the best on a held-out tenth is used.
+ridge = [0.1, 1.0, 10.0, 100.0, 1000.0]
+
+[vectors]
+# Popularity (ln(1 + ratings)) a work needs to be picked (02-world-data.md §4): set so that about
+# 300,000 works are recommendable (4.3: 307,787 on the 2026-11 data).
+min_popularity = 4.3
+
+[model]
+# The taste model's hyperparameters (03-engine.md), chosen by the search on the 5,000 tuning users
+# (kindred-world bench --users tuning, 04-benchmark.md §3) on the 2026-11 data, with the star
+# block, the neighbourhood term and same-verdict comparisons (2026-11-26): NDCG@10 at n = 20
+# 0.4103, pairwise accuracy 0.6609 there. var_bias, tau_c, omega_h, ask_min, beta, b1–b3 are not
+# searched.
+var_bias = 4.0
+var_c = 4.0
+# Prior variance of the star-block weights (03-engine.md §2).
+var_r = 4.0
+# Below the searched grid's bottom: the aspect block adds nothing measurable at this weight.
+var_a = 0.0011111111111111111
+var_m = 0.01
+tau_v = 2.0
+# Fixed at the 03-engine.md default, not searched: the benchmark answers comparisons from the
+# same stars as the verdicts, so it cannot value them (04-benchmark.md §3).
+tau_c = 0.5
+omega_v = 0.2178
+omega_h = 0.5
+text_var = 0.0
+# Length of a text-placed collaborative block (03-engine.md §3). The search sees it only through
+# the few uncovered works; every value in its grid scored within 0.00002.
+text_shrink = 0.35714285714285715
+# Smallest information worth a comparison question (03-engine.md §7).
+ask_min = 0.05
+beta = 0.5
+b1 = -1.0
+b2 = 0.0
+b3 = 1.0
+# Pick-up term (03-engine.md §8): weight of "readers who liked your books also liked it", and of
+# popularity inside it. 16 is the top of the searched grid.
+pickup = 16.0
+pickup_pop = 0.0
+# Neighbourhood term (03-engine.md §8): weight and shrink of how the reader judged a work's
+# nearest works.
+agree = 0.5
+agree_shrink = 1.0
+
+[bench]
+# The values of n (revealed ratings per user) measured.
+revealed = [0, 5, 10, 20, 50]
+# Neighbours kept per work by the item-to-item baseline.
+neighbours = 200
+# Verdict terms sampled at most when fitting the prior mean of the meta block.
+max_prior_terms = 2000000
+# NDCG@10 at n = 20 on the gate subset when M2 was accepted; every monthly build must reach
+# min_share of it. Absent until the benchmark was accepted.
+min_share = 0.9
+# Accepted 2026-11-26 (500 gate users, [model] above).
+accepted_ndcg10_n20 = 0.3763
+
 [search]
 # A hit's score: text relevance, plus this times popularity (ln(1 + ratings)), plus
 # whole_title_bonus when the query is a whole title of the work (last word possibly unfinished).
@@ -85,6 +208,8 @@ p95_ms = 30
 [verify]
 # Counts that may not move more than this between versions (skipped on the first run).
 max_change = 0.20
+# The recommendable works must number within this range.
+recommendable = [150000, 600000]
 
 [publish]
 endpoint = "http://garage.garage.svc.cluster.local:3900"

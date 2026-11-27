@@ -1,7 +1,10 @@
-//! The SQL stages (ingest → identity → catalogue → series → popularity), each run against the
-//! build's DuckDB file. A stage writes a done-marker holding the hash of its inputs (the
-//! previous stage's hash, its SQL, its variables); a rerun skips a stage whose marker still
-//! matches, so a failed monthly run resumes where it stopped.
+//! The build's stages, in order (02-world-data.md §3): the SQL stages (ingest → identity →
+//! catalogue → series → popularity → interactions → aspects) run against the build's DuckDB
+//! file; the model stages (factors → embed → text-maps → vectors → prior → bench) are Rust and
+//! keep their results in the scratch volume's `model/` directory. A stage writes a done-marker
+//! holding the hash of its inputs (the previous stage's hash, its SQL or code version, its
+//! variables and settings); a rerun skips a stage whose marker still matches, so a failed
+//! monthly run resumes where it stopped.
 
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
@@ -11,43 +14,102 @@ use anyhow::{Context as _, bail};
 use sha2::{Digest as _, Sha256};
 use world::InputFile;
 
-use crate::config::{Config, SeriesOverrides};
+use crate::config::{Aspects, Config, SeriesOverrides};
 use crate::download::{self, Source};
 use crate::trace::{Duck, Value};
 
 pub const MACROS: &str = include_str!("../sql/macros.sql");
 
-/// A stage: its name and SQL.
+/// DuckDB's memory limit while a Rust stage runs: its queries there only stream rows.
+const RUST_STAGE_DUCKDB: &str = "1GB";
+
+/// A stage: its name and what it runs.
+/// A model stage's Rust: its version and the function.
+pub type RustStage = (&'static str, fn(&Run) -> anyhow::Result<()>);
+
 pub struct Stage {
     pub name: &'static str,
     pub sql: &'static str,
+    /// A model stage: the Rust that runs after the SQL (which is then usually empty). Its
+    /// version string is part of the hash: change it when the stage's code changes its output.
+    pub rust: Option<RustStage>,
 }
 
-pub const STAGES: [Stage; 5] = [
+pub const STAGES: [Stage; 14] = [
     Stage {
         name: "ingest",
         sql: include_str!("../sql/ingest.sql"),
+        rust: None,
     },
     Stage {
         name: "identity",
         sql: include_str!("../sql/identity.sql"),
+        rust: None,
     },
     Stage {
         name: "catalogue",
         sql: include_str!("../sql/catalogue.sql"),
+        rust: None,
     },
     Stage {
         name: "series",
         sql: include_str!("../sql/series.sql"),
+        rust: None,
     },
     Stage {
         name: "popularity",
         sql: include_str!("../sql/popularity.sql"),
+        rust: None,
+    },
+    Stage {
+        name: "interactions",
+        sql: include_str!("../sql/interactions.sql"),
+        rust: None,
+    },
+    Stage {
+        name: "aspects",
+        sql: include_str!("../sql/aspects.sql"),
+        rust: Some(("1", crate::aspects::report_unmatched)),
+    },
+    Stage {
+        name: "factors",
+        sql: "",
+        rust: Some(("2", crate::factors::run)),
+    },
+    Stage {
+        name: "embed",
+        sql: "",
+        rust: Some(("1", crate::embed::run)),
+    },
+    Stage {
+        name: "text-maps",
+        sql: "",
+        rust: Some(("1", crate::text_maps::run)),
+    },
+    Stage {
+        name: "vectors",
+        sql: "",
+        rust: Some(("2", crate::vectors::run)),
+    },
+    Stage {
+        name: "neighbours",
+        sql: "",
+        rust: Some(("1", crate::neighbours::run)),
+    },
+    Stage {
+        name: "prior",
+        sql: "",
+        rust: Some(("3", crate::bench::fit_prior)),
+    },
+    Stage {
+        name: "bench",
+        sql: "",
+        rust: Some(("1", crate::bench::gate)),
     },
 ];
 
 /// Goodreads fields each file must have (02-world-data.md §2).
-const GOODREADS_FIELDS: [(&str, &[&str]); 3] = [
+const GOODREADS_FIELDS: [(&str, &[&str]); 4] = [
     (
         "gr_books",
         &[
@@ -60,6 +122,7 @@ const GOODREADS_FIELDS: [(&str, &[&str]); 3] = [
             "title",
             "title_without_series",
             "language_code",
+            "popular_shelves",
         ],
     ),
     (
@@ -72,6 +135,10 @@ const GOODREADS_FIELDS: [(&str, &[&str]); 3] = [
         ],
     ),
     ("gr_series", &["series_id", "title"]),
+    (
+        "gr_interactions",
+        &["user_id", "book_id", "rating", "date_added", "date_updated"],
+    ),
 ];
 
 /// How long each stage took this run, `None` when it was skipped.
@@ -81,6 +148,11 @@ pub struct Run<'a> {
     pub duck: &'a Duck,
     pub config: &'a Config,
     pub overrides: &'a SeriesOverrides,
+    pub aspects: &'a Aspects,
+    /// The model stages' files (factors, embeddings, maps, vectors), on the scratch volume.
+    pub model: PathBuf,
+    /// The fixture world: the text embedding is the seeded stand-in, never the model.
+    pub fixture: bool,
     pub downloads: &'a Path,
     pub markers: PathBuf,
     pub sources: &'a [Source],
@@ -125,8 +197,58 @@ impl Run<'_> {
                 ("not_a_book_subjects", any(&c.catalogue.not_a_book_subjects)),
             ],
             "popularity" => vec![("prior_weight", Value::Float(c.popularity.prior_weight))],
+            "interactions" => {
+                let i = &c.interactions;
+                let f = &c.factors;
+                vec![
+                    ("gr_interactions", self.source_path("gr_interactions")),
+                    ("min_eligible_ratings", Value::Int(i.min_eligible_ratings)),
+                    ("test_users", Value::Int(i.test_users)),
+                    ("gate_users", Value::Int(i.gate_users)),
+                    ("tuning_users", Value::Int(i.tuning_users)),
+                    ("split_seed", Value::Text(i.seed.to_string())),
+                    ("min_user_likes", Value::Int(f.min_user_likes)),
+                    ("min_work_likes", Value::Int(f.min_work_likes)),
+                    ("cold_from_year", Value::Int(f.cold_from_year)),
+                ]
+            }
+            "aspects" => {
+                let a = &c.aspects;
+                vec![
+                    ("gr_books", self.source_path("gr_books")),
+                    ("org_patterns", any(&self.aspects.organisational.patterns)),
+                    ("aspect_alpha", Value::Float(a.alpha)),
+                    ("subject_weight", Value::Float(a.subject_weight)),
+                    ("min_shelvings", Value::Float(a.min_shelvings)),
+                    ("report_unmatched", Value::Int(a.report_unmatched)),
+                ]
+            }
             _ => vec![],
         }
+    }
+
+    fn source_path(&self, name: &str) -> Value {
+        let source = self
+            .sources
+            .iter()
+            .find(|s| s.name == name)
+            .expect("a known source");
+        Value::Text(download::path(self.downloads, source).display().to_string())
+    }
+
+    /// The settings a model stage's output depends on, hashed into its marker.
+    fn settings(&self, stage: &str) -> anyhow::Result<Vec<u8>> {
+        let c = self.config;
+        Ok(match stage {
+            "aspects" => serde_json::to_vec(self.aspects)?,
+            "factors" => serde_json::to_vec(&c.factors)?,
+            "embed" => serde_json::to_vec(&(&c.embed, self.fixture))?,
+            "text-maps" => serde_json::to_vec(&c.text_maps)?,
+            "vectors" => serde_json::to_vec(&(&c.vectors, &c.model))?,
+            "neighbours" => serde_json::to_vec(&c.bench.neighbours)?,
+            "prior" | "bench" => serde_json::to_vec(&(&c.model, &c.bench))?,
+            _ => Vec::new(),
+        })
     }
 
     /// Runs every stage that isn't done yet. Returns each stage's duration.
@@ -142,10 +264,17 @@ impl Run<'_> {
             h.update(MACROS);
             h.update(stage.sql);
             for (name, value) in &variables {
-                if stage.name != "ingest" {
+                // Downloads count by content (above), not by where they are.
+                if !self.sources.iter().any(|s| s.name == *name) {
                     h.update(format!("{name}={value:?};"));
                 }
             }
+            if let Some((version, _)) = stage.rust {
+                // The commit too: a new image's code reruns the model stages, whatever the
+                // hand-kept version says.
+                h.update(format!("rust {version} {};", crate::build::builder()));
+            }
+            h.update(self.settings(stage.name)?);
             if stage.name == "series" {
                 h.update(serde_json::to_vec(self.overrides)?);
             }
@@ -186,9 +315,30 @@ impl Run<'_> {
                 }
             }
             "series" => self.load_overrides()?,
+            "aspects" => crate::aspects::load(self.duck, self.aspects)?,
             _ => {}
         }
-        self.duck.exec(stage.name, stage.sql)?;
+        if !stage.sql.is_empty() {
+            self.duck.sql_stage(stage.name, stage.sql)?;
+        }
+        if let Some((_, rust)) = stage.rust {
+            std::fs::create_dir_all(&self.model)?;
+            // The Rust stages hold their own data (the factorization's pairs, the embeddings):
+            // DuckDB gives back its buffer pool first, so the two never add up.
+            self.duck.exec(
+                "release memory",
+                &format!("SET memory_limit = '{RUST_STAGE_DUCKDB}';"),
+            )?;
+            let result = rust(self);
+            self.duck.exec(
+                "restore memory",
+                &format!(
+                    "SET memory_limit = '{}';",
+                    self.config.duckdb.memory_limit.replace('\'', "")
+                ),
+            )?;
+            result?;
+        }
         if stage.name == "identity" {
             let share = mapped_share(self.duck)?;
             tracing::info!(share, "Goodreads ratings on mapped works");

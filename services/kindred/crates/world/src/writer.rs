@@ -25,6 +25,8 @@ pub struct WorkRow {
     pub year: Option<i16>,
     pub not_a_book: bool,
     pub has_description: bool,
+    /// May be picked (02-world-data.md §4).
+    pub recommendable: bool,
     /// Row in the series names given to [`WorldWriter::write_works`], and the position.
     pub series: Option<(u32, Option<f32>)>,
 }
@@ -46,10 +48,28 @@ pub struct BookDoc {
     pub not_a_book: bool,
 }
 
+/// The book vectors of the works that have one (03-engine.md §2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorTable {
+    /// Numbers per vector.
+    pub d: usize,
+    /// The work of each vector, strictly ascending.
+    pub keys: Vec<WorkKey>,
+    /// `keys.len() * d` numbers, row-major.
+    pub data: Vec<f32>,
+    /// Per vector, see [`crate::reader::source`].
+    pub source: Vec<u8>,
+}
+
 pub struct WorldWriter {
     dir: PathBuf,
     fields: Fields,
     index: IndexWriter,
+    /// The work keys written by `write_works`, ascending.
+    keys: Option<Vec<u64>>,
+    /// The numbers per vector, once the vectors are written.
+    vector_d: Option<usize>,
+    neighbours_written: bool,
 }
 
 /// The search index writer's memory budget.
@@ -79,6 +99,9 @@ impl WorldWriter {
             dir: dir.to_owned(),
             fields,
             index,
+            keys: None,
+            vector_d: None,
+            neighbours_written: false,
         })
     }
 
@@ -119,7 +142,7 @@ impl WorldWriter {
 
     /// The per-work columns, in any order (they are sorted by key here), and the series names
     /// their `series` rows point into.
-    pub fn write_works(&self, mut works: Vec<WorkRow>, series_names: &[String]) -> Result<()> {
+    pub fn write_works(&mut self, mut works: Vec<WorkRow>, series_names: &[String]) -> Result<()> {
         works.sort_unstable_by_key(|w| w.key);
         if let Some(pair) = works.windows(2).find(|p| p[0].key == p[1].key) {
             return Err(Error::Corrupt {
@@ -161,6 +184,7 @@ impl WorldWriter {
             .map(|w| {
                 (u8::from(w.not_a_book) * crate::reader::flags::NOT_A_BOOK)
                     | (u8::from(w.has_description) * crate::reader::flags::HAS_DESCRIPTION)
+                    | (u8::from(w.recommendable) * crate::reader::flags::RECOMMENDABLE)
             })
             .collect();
         columns::write(&col(files::FLAGS), &flags)?;
@@ -186,7 +210,109 @@ impl WorldWriter {
             offsets.push(text.len() as u64);
         }
         columns::write(&col(files::SERIES_NAME_OFFSETS), &offsets)?;
-        columns::write(&col(files::SERIES_NAME_TEXT), text.as_bytes())
+        columns::write(&col(files::SERIES_NAME_TEXT), text.as_bytes())?;
+        self.keys = Some(works.iter().map(|w| w.key.0).collect());
+        Ok(())
+    }
+
+    /// The vectors, after [`WorldWriter::write_works`]. A vector of a work that is not in the
+    /// world is left out; a recommendable work must have one.
+    pub fn write_vectors(&mut self, table: &VectorTable, recommendable: &[WorkKey]) -> Result<()> {
+        let corrupt = |path: &str, what: String| Error::Corrupt {
+            path: path.into(),
+            what,
+        };
+        let keys = self
+            .keys
+            .as_ref()
+            .ok_or_else(|| corrupt(files::VECTOR_ROWS, "write_works must come first".into()))?;
+        if table.d == 0
+            || table.data.len() != table.keys.len() * table.d
+            || table.source.len() != table.keys.len()
+        {
+            return Err(corrupt(files::VECTORS, "sizes do not match".into()));
+        }
+        if table.keys.windows(2).any(|p| p[0] >= p[1]) {
+            return Err(corrupt(
+                files::VECTORS,
+                "keys not strictly ascending".into(),
+            ));
+        }
+        if table.data.iter().any(|x| !x.is_finite()) {
+            return Err(corrupt(
+                files::VECTORS,
+                "a number that is not finite".into(),
+            ));
+        }
+        let mut rows = vec![u32::MAX; keys.len()];
+        let mut data = Vec::new();
+        let mut source = Vec::new();
+        for (i, key) in table.keys.iter().enumerate() {
+            if let Ok(row) = keys.binary_search(&key.0) {
+                rows[row] = source.len() as u32;
+                data.extend_from_slice(&table.data[i * table.d..(i + 1) * table.d]);
+                source.push(table.source[i]);
+            }
+        }
+        if let Some(key) = recommendable.iter().find(|k| {
+            keys.binary_search(&k.0)
+                .map_or(true, |row| rows[row] == u32::MAX)
+        }) {
+            return Err(corrupt(
+                files::VECTOR_ROWS,
+                format!("recommendable {key} has no vector"),
+            ));
+        }
+        let col = |name: &str| self.dir.join(name);
+        columns::write(&col(files::VECTOR_ROWS), &rows)?;
+        columns::write(&col(files::VECTORS), &data)?;
+        columns::write(&col(files::VECTOR_SOURCE), &source)?;
+        self.vector_d = Some(table.d);
+        Ok(())
+    }
+
+    /// The pick-up neighbours (03-engine.md §8), after [`WorldWriter::write_works`]: per work,
+    /// its nearest works with their similarity, nearest first. Works and neighbours that are not
+    /// in the world are left out.
+    pub fn write_neighbours(&mut self, lists: &[(WorkKey, Vec<(WorkKey, f32)>)]) -> Result<()> {
+        let keys = self.keys.as_ref().ok_or_else(|| Error::Corrupt {
+            path: files::NEIGHBOUR_OFFSETS.into(),
+            what: "write_works must come first".into(),
+        })?;
+        let row = |k: WorkKey| keys.binary_search(&k.0).ok();
+        let mut by_row: Vec<Option<&Vec<(WorkKey, f32)>>> = vec![None; keys.len()];
+        for (work, list) in lists {
+            if let Some(r) = row(*work) {
+                by_row[r] = Some(list);
+            }
+        }
+        let mut offsets = Vec::with_capacity(keys.len() + 1);
+        let mut rows: Vec<u32> = Vec::new();
+        let mut sims: Vec<f32> = Vec::new();
+        offsets.push(0u64);
+        for list in by_row {
+            let mut here: Vec<(u32, f32)> = list
+                .into_iter()
+                .flatten()
+                .filter_map(|&(k, s)| row(k).map(|r| (r as u32, s)))
+                .collect();
+            if here.iter().any(|p| !p.1.is_finite()) {
+                return Err(Error::Corrupt {
+                    path: files::NEIGHBOUR_SIMS.into(),
+                    what: "a similarity that is not finite".into(),
+                });
+            }
+            here.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+            rows.extend(here.iter().map(|p| p.0));
+            sims.extend(here.iter().map(|p| p.1));
+            offsets.push(rows.len() as u64);
+        }
+        let col = |name: &str| self.dir.join(name);
+        columns::write(&col(files::NEIGHBOUR_OFFSETS), &offsets)?;
+        columns::write(&col(files::NEIGHBOUR_ROWS), &rows)?;
+        columns::write(&col(files::NEIGHBOUR_SIMS), &sims)?;
+        self.neighbours_written = true;
+        Ok(())
     }
 
     /// Old work key → current key. Chains must already be resolved.
@@ -209,7 +335,32 @@ impl WorldWriter {
         inputs: Vec<InputFile>,
         search: SearchParams,
         mut report: serde_json::Value,
+        model: crate::Model,
     ) -> Result<Manifest> {
+        match self.vector_d {
+            None => {
+                return Err(Error::Corrupt {
+                    path: files::VECTORS.into(),
+                    what: "was never written".into(),
+                });
+            }
+            Some(d) if d != model.layout.d() => {
+                return Err(Error::Corrupt {
+                    path: files::VECTORS.into(),
+                    what: format!(
+                        "{d} numbers per vector, the layout has {}",
+                        model.layout.d()
+                    ),
+                });
+            }
+            Some(_) => {}
+        }
+        if !self.neighbours_written {
+            return Err(Error::Corrupt {
+                path: files::NEIGHBOUR_OFFSETS.into(),
+                what: "was never written".into(),
+            });
+        }
         self.index.commit()?;
         self.index.wait_merging_threads()?;
         if let serde_json::Value::Object(map) = &mut report {
@@ -222,7 +373,14 @@ impl WorldWriter {
         let mut entries = Vec::new();
         hash_tree(&self.dir, &self.dir, &mut entries)?;
         entries.sort_by(|a, b| a.path.cmp(&b.path));
-        for required in [files::KEYS, files::REDIRECTS, files::SERIES_NAME_TEXT] {
+        for required in [
+            files::KEYS,
+            files::REDIRECTS,
+            files::SERIES_NAME_TEXT,
+            files::VECTOR_ROWS,
+            files::VECTORS,
+            files::VECTOR_SOURCE,
+        ] {
             if !entries.iter().any(|e| e.path == required) {
                 return Err(Error::Corrupt {
                     path: required.into(),
@@ -238,6 +396,7 @@ impl WorldWriter {
             files: entries,
             search,
             report,
+            model,
         };
         let path = self.dir.join(files::MANIFEST);
         std::fs::write(&path, serde_json::to_vec_pretty(&manifest)?)

@@ -143,8 +143,11 @@ impl Duck {
     ) -> anyhow::Result<Duck> {
         let conn = duckdb::Connection::open(path)?;
         conn.execute_batch(OFFLINE)?;
+        // Insertion order stays on outside the stages' SQL (see `Duck::sql_stage`): DuckDB 2.0.1
+        // and 2.0.2 with it off and threads > 1 return a large ORDER BY as separately sorted
+        // runs (91M rows of work_aspects came back as two), and the Rust readers rely on order.
         conn.execute_batch(&format!(
-            "SET memory_limit = '{}'; SET threads = {threads}; SET temp_directory = '{}'; SET preserve_insertion_order = false;",
+            "SET memory_limit = '{}'; SET threads = {threads}; SET temp_directory = '{}'; SET preserve_insertion_order = true;",
             sql_text(memory_limit),
             sql_text(&temp_dir.display().to_string()),
         ))?;
@@ -160,6 +163,18 @@ impl Duck {
         let conn = duckdb::Connection::open_in_memory().expect("in-memory DuckDB");
         conn.execute_batch(OFFLINE).expect("extension settings");
         Duck(conn)
+    }
+
+    /// A stage's SQL, with insertion order off (less memory for the big CREATE TABLE ... AS
+    /// statements, which never rely on it) and back on afterwards for the Rust readers.
+    pub fn sql_stage(&self, name: &str, sql: &str) -> anyhow::Result<()> {
+        self.exec(
+            "insertion order off",
+            "SET preserve_insertion_order = false;",
+        )?;
+        let result = self.exec(name, sql);
+        self.exec("insertion order on", "SET preserve_insertion_order = true;")?;
+        result
     }
 
     /// Runs a batch of statements (one stage's SQL) in a span named after it.
@@ -378,5 +393,31 @@ mod tests {
             .to_string();
         assert!(err.starts_with("ingest: Out of Memory Error: "), "{err}");
         assert!(err.contains("used") && !err.contains("withheld"), "{err}");
+    }
+
+    /// DuckDB 2.0 returned this ORDER BY as two sorted runs with insertion order off and two
+    /// threads (from about a million rows; seen on the real work_aspects). The stage's SQL runs
+    /// with it off; the Rust read afterwards must still be in order.
+    #[test]
+    fn ordered_reads_after_a_stage_are_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let duck = Duck::open(&dir.path().join("t.duckdb"), "1GB", 2, dir.path()).unwrap();
+        duck.sql_stage(
+            "t",
+            "CREATE TABLE t AS SELECT (hash(i) % 200000)::BIGINT AS work, (i % 59)::INTEGER AS k
+             FROM range(2000000) r(i);",
+        )
+        .unwrap();
+        let mut statement = duck
+            .conn()
+            .prepare("SELECT work, k FROM t ORDER BY work, k")
+            .unwrap();
+        let mut rows = statement.query([]).unwrap();
+        let mut previous = (i64::MIN, i32::MIN);
+        while let Some(r) = rows.next().unwrap() {
+            let row = (r.get::<_, i64>(0).unwrap(), r.get::<_, i32>(1).unwrap());
+            assert!(row >= previous, "{row:?} after {previous:?}");
+            previous = row;
+        }
     }
 }

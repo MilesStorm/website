@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 817f165f369c8eac9a8bc4a4f1342067836ce6f992b576e838906b6037eda420 # shrinks to input = Input { works: {}, series: ["O", "waK", "éQS ", "éuVrd"], redirects: {}, titles: ["aaa", "aaa", "aaa", "aaa", "aaa", "brx yofswrekfy maqhiovn", "artb rjkxpibzmp xstx", "otxka omjbyna", "wudeflyq zqp tsctyso svqpyy", "qgo", "zbub", "atpqaqja", "byoze", "cbjhybm", "xetwxsfkv", "shhtw nqhfoeb", "prq fwljqsqww dltzawsky nywkaxbtzh", "vfiwxivjej", "dmlgn tqwpuk lqm", "zgzqzuh zpogcfmg ykrildbnw wym", "yzsaldc", "pji tjmavyv", "cdsmhtykji ehyns", "wjuioofa hzivour", "cnhm itjmkffzjn", "pshyfppxlv zqlkvhuwb gphierybgi", "xmngdkszsg gtxtop vew", "msck gmyobaqm jnvmlzcni", "ckeniv", "zoqn", "glmnbwhq cnpbul rwzyqgaaum", "eenyb ptmbiinim bvp", "vxowubjlco heylcix", "tfq", "zir mfbm", "rumtivat cpgt cqgtzy vll", "aru", "ibffvf cgzpvij yswrbkyih", "vvr bhpqwtdkt bfhpvih", "euusgysjoc dwyusmhngq vbmxk wnpnexf"] }

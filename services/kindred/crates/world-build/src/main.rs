@@ -13,8 +13,9 @@ use tracing_subscriber::{
     EnvFilter, Layer as _, filter::filter_fn, layer::SubscriberExt as _,
     util::SubscriberInitExt as _,
 };
-use world_build::config::{self, Acceptance, Config, SeriesOverrides};
-use world_build::{build, fixture, publish, refresh};
+use world_build::bench::data::Users;
+use world_build::config::{self, Acceptance, Aspects, Config, SeriesOverrides};
+use world_build::{bench, build, fixture, publish, refresh};
 
 /// The log filter when `RUST_LOG` isn't set: kindred-world's own spans and logs at info,
 /// libraries at warn (TRACING.md, "Log level").
@@ -32,6 +33,9 @@ struct Cli {
     /// search-acceptance.toml to use instead of the built-in one.
     #[arg(long, global = true)]
     acceptance: Option<PathBuf>,
+    /// aspects.toml to use instead of the built-in one.
+    #[arg(long, global = true)]
+    aspects: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -54,6 +58,37 @@ enum Command {
         #[arg(long, default_value_os_t = fixture::default_dir())]
         fixtures: PathBuf,
     },
+    /// The benchmark (04-benchmark.md) on the scratch volume of a finished build: the report on
+    /// the test users (printed as Markdown; aggregates only), or the hyperparameter search on the
+    /// tuning users (printed as world.toml's [model] section).
+    Bench {
+        #[arg(long, default_value = "/scratch")]
+        scratch: PathBuf,
+        #[arg(long, value_enum, default_value_t = Users::Test)]
+        users: Users,
+        /// With `--users tuning`: the full report instead of the search (04-benchmark.md §3,
+        /// "report both sets of numbers").
+        #[arg(long)]
+        report: bool,
+        /// With `--users tuning`: P, FULL and FULL without comparisons at n = 20 on 2,000 users,
+        /// with the prior refitted (minutes; for development).
+        #[arg(long, conflicts_with = "report")]
+        quick: bool,
+        /// With `--quick`: override a `[model]` setting, `name=value` (repeatable).
+        #[arg(long = "set", requires = "quick", value_name = "NAME=VALUE")]
+        set: Vec<String>,
+        /// With `--users tuning`: search only these settings (comma-separated), from world.toml's
+        /// values for the rest.
+        #[arg(long, value_delimiter = ',', conflicts_with_all = ["report", "quick"])]
+        only: Vec<String>,
+        /// Where the per-reader work (replays, fits, ranking) runs: the CPU, or batched across
+        /// users on an NVIDIA GPU (needs a build with `--features gpu`).
+        #[arg(long, value_enum, default_value_t = bench::Compute::Cpu)]
+        device: bench::Compute,
+    },
+    /// Check the text embedding against the reference embeddings (the image runs this when it
+    /// is built).
+    EmbedCheck,
     /// Rollback: point current.json at a version still in the bucket.
     Publish {
         #[arg(long)]
@@ -120,15 +155,70 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         config::ACCEPTANCE_TOML,
         "search-acceptance.toml",
     )?;
+    let aspects: Aspects =
+        config::read(cli.aspects.as_deref(), config::ASPECTS_TOML, "aspects.toml")?;
+    aspects.check()?;
     match cli.command {
         Command::Build {
             scratch,
             no_publish,
-        } => build::run(&scratch, &config, &overrides, &acceptance, !no_publish).await,
+        } => {
+            let settings = build::Settings {
+                config,
+                overrides,
+                aspects,
+                fixture: false,
+            };
+            build::run(&scratch, &settings, &acceptance, !no_publish).await
+        }
+        Command::Bench {
+            scratch,
+            users,
+            report,
+            quick,
+            set,
+            only,
+            device,
+        } => {
+            let mut config = config;
+            config.model = override_model(&config.model, &set)?;
+            let paths = build::Paths::new(&scratch);
+            let report = world_build::trace::spawn_blocking("world.bench", move || {
+                let duck = world_build::trace::Duck::open(
+                    &paths.database,
+                    &config.duckdb.memory_limit,
+                    config.duckdb.threads,
+                    &paths.duckdb_temp,
+                )?;
+                bench::run_full(
+                    &duck,
+                    &config,
+                    aspects.aspect.len(),
+                    &paths.model,
+                    users,
+                    report,
+                    quick,
+                    &only,
+                    device,
+                )
+            })
+            .await?;
+            // The report is aggregates only (PLAN.md rule 13); it goes to the terminal.
+            println!("{report}");
+            Ok(())
+        }
         Command::Fixture { out, fixtures } => {
             let manifest =
-                fixture::build(&fixtures, &out, &config, &overrides, &acceptance).await?;
+                fixture::build(&fixtures, &out, &config, &overrides, &aspects, &acceptance).await?;
             tracing::info!(files = manifest.files.len(), "fixture world built");
+            Ok(())
+        }
+        Command::EmbedCheck => {
+            let worst = world_build::embed::check(&config.embed)?;
+            tracing::info!(
+                worst = f64::from(worst),
+                "the embedding matches the reference"
+            );
             Ok(())
         }
         Command::Publish { version } => {
@@ -226,4 +316,17 @@ fn telemetry() -> anyhow::Result<Providers> {
         .with(bridge)
         .try_init()?;
     Ok(Some((spans, logs)))
+}
+
+/// `[model]` with `name=value` overrides (TOML values); unknown names are refused.
+fn override_model(model: &taste::Hyper, set: &[String]) -> anyhow::Result<taste::Hyper> {
+    let mut table = toml::Table::try_from(model)?;
+    for item in set {
+        let (name, value) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--set {item}: expected name=value"))?;
+        let parsed: toml::Table = toml::from_str(&format!("v = {value}"))?;
+        table.insert(name.trim().to_string(), parsed["v"].clone());
+    }
+    Ok(table.try_into()?)
 }

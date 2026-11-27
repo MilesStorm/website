@@ -8,16 +8,20 @@ use std::time::Instant;
 use anyhow::Context as _;
 use world::{InputFile, Manifest, World};
 
-use crate::config::{Acceptance, Config, SeriesOverrides};
+use crate::config::{Acceptance, Aspects, Config, SeriesOverrides};
 use crate::download::{self, Source};
 use crate::trace::{self, Bucket, Duck, Peer};
-use crate::{pack, publish, report, stages, verify};
+use crate::{bench, pack, publish, report, stages, vectors, verify};
 
 /// Every environment variable kindred-world reads (directly or through the OpenTelemetry SDK).
 /// Nothing else: in particular no database credentials (02-world-data.md §1 invariant 1).
 /// tests/fixture.rs checks the code and the CronJob against this list.
-pub const ENVIRONMENT: [&str; 6] = [
+pub const ENVIRONMENT: [&str; 8] = [
     "GIT_SHA",
+    // Read by ONNX Runtime's loader (crate `ort`): where the library is (set in the image).
+    "ORT_DYLIB_PATH",
+    // Read by rayon's global thread pool: the Rust stages' threads (set in the CronJob).
+    "RAYON_NUM_THREADS",
     "RUST_LOG",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_RESOURCE_ATTRIBUTES",
@@ -36,6 +40,7 @@ pub struct Paths {
     pub database: PathBuf,
     pub duckdb_temp: PathBuf,
     pub world: PathBuf,
+    pub model: PathBuf,
 }
 
 impl Paths {
@@ -46,23 +51,32 @@ impl Paths {
             database: scratch.join("world.duckdb"),
             duckdb_temp: scratch.join("duckdb-tmp"),
             world: scratch.join("world"),
+            model: scratch.join("model"),
         }
     }
+}
+
+/// What a build reads besides its downloads.
+#[derive(Clone)]
+pub struct Settings {
+    pub config: Config,
+    pub overrides: SeriesOverrides,
+    pub aspects: Aspects,
+    /// The fixture world: the embedding stand-in instead of the model.
+    pub fixture: bool,
 }
 
 /// The stages from ingest to pack: the world in `out`, with its manifest.
 pub async fn assemble(
     scratch: &Path,
     out: &Path,
-    config: &Config,
-    overrides: &SeriesOverrides,
+    settings: &Settings,
     sources: &[Source],
     inputs: &[InputFile],
 ) -> anyhow::Result<Manifest> {
     let paths = Paths::new(scratch);
-    let (config, overrides, sources, inputs, out) = (
-        config.clone(),
-        overrides.clone(),
+    let (settings, sources, inputs, out) = (
+        settings.clone(),
         sources.to_vec(),
         inputs.to_vec(),
         out.to_owned(),
@@ -71,14 +85,18 @@ pub async fn assemble(
         std::fs::create_dir_all(&paths.duckdb_temp)?;
         let duck = Duck::open(
             &paths.database,
-            &config.duckdb.memory_limit,
-            config.duckdb.threads,
+            &settings.config.duckdb.memory_limit,
+            settings.config.duckdb.threads,
             &paths.duckdb_temp,
         )?;
+        let config = &settings.config;
         let run = stages::Run {
             duck: &duck,
-            config: &config,
-            overrides: &overrides,
+            config,
+            overrides: &settings.overrides,
+            aspects: &settings.aspects,
+            model: paths.model.clone(),
+            fixture: settings.fixture,
             downloads: &paths.downloads,
             markers: paths.markers.clone(),
             sources: &sources,
@@ -90,12 +108,32 @@ pub async fn assemble(
             std::fs::remove_dir_all(&out)?;
         }
         let started = Instant::now();
-        let writer = pack::write(&duck, &out)?;
+        let layout = vectors::layout(&run);
+        let vectors = vectors::Vectors::read(&paths.model, false, layout)?;
+        let neighbours = crate::neighbours::read(&crate::neighbours::path(&paths.model, false))?;
+        let writer = pack::write(&duck, &out, &vectors, &neighbours)?;
+        drop(neighbours);
         durations.push(("pack".into(), Some(started.elapsed().as_secs_f64())));
-        let report = report::compute(&duck, &durations)?;
+        let report = report::compute(&duck, &durations, &paths.model)?;
+        let gate: bench::GateResult =
+            serde_json::from_slice(&std::fs::read(bench::gate_path(&paths.model))?)?;
+        let model = world::Model {
+            layout,
+            aspects: settings.aspects.aspect.clone(),
+            hyper: config.model.clone(),
+            prior: serde_json::from_slice(&std::fs::read(bench::prior_path(&paths.model))?)?,
+            confidence_cuts: gate.confidence_cuts,
+            bench: serde_json::to_value(&gate)?,
+        };
         let built_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let manifest =
-            writer.finish(built_at, builder(), inputs, config.search.params(), report)?;
+        let manifest = writer.finish(
+            built_at,
+            builder(),
+            inputs,
+            config.search.params(),
+            report,
+            model,
+        )?;
         // One log line with every number (no titles, PLAN.md rule 14).
         tracing::info!(report = %manifest.report, "build report");
         Ok(manifest)
@@ -155,11 +193,11 @@ pub async fn verify_then_publish(
 #[tracing::instrument(name = "world.build", skip_all)]
 pub async fn run(
     scratch: &Path,
-    config: &Config,
-    overrides: &SeriesOverrides,
+    settings: &Settings,
     acceptance: &Acceptance,
     publish: bool,
 ) -> anyhow::Result<()> {
+    let config = &settings.config;
     let paths = Paths::new(scratch);
     // Before the long part: a wrong key fails in seconds, not hours.
     let bucket = if publish { Some(bucket(config)?) } else { None };
@@ -178,7 +216,7 @@ pub async fn run(
     let sources = download::sources(config);
     let inputs = download::fetch_all(&client, &paths.downloads, &sources).await?;
 
-    assemble(scratch, &paths.world, config, overrides, &sources, &inputs).await?;
+    assemble(scratch, &paths.world, settings, &sources, &inputs).await?;
     let sha = builder();
     let base = format!(
         "{}-{}",

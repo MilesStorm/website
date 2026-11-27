@@ -10,6 +10,17 @@ path = "src/main.rs"
 
 [dependencies]
 world = { path = "../world" }
+# The taste model: the benchmark measures exactly the code the service runs (04-benchmark.md §1)
+taste = { path = "../taste" }
+# Ridge regressions of the text maps, the star factorization's row solves
+nalgebra = "0.34"
+# The factorizations' rows and the benchmark's users in parallel
+rayon = "1"
+# The text embedding model: ONNX Runtime loaded at run time (the image ships Microsoft's CUDA
+# build, as services/ai_pipeline does), and its tokenizer in pure Rust
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "cuda", "api-22"] }
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+bytemuck.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
@@ -38,6 +49,10 @@ object_store = { version = "0.14", features = ["aws"] }
 rand = "0.9"
 rand_chacha = "0.9"
 tempfile = "3"
+# The benchmark's per-reader work on an NVIDIA GPU (bench/gpu.rs, `bench --device cuda`): the
+# CUDA driver, cuBLAS, cuSOLVER and NVRTC loaded at run time, as the image's CUDA 13.0 runtime
+# (Dockerfile, nvidia/cuda:13.0.2) ships them; nothing linked at build time.
+cudarc = { version = "0.19.4", optional = true, default-features = false, features = ["std", "driver", "cublas", "cusolver", "nvrtc", "dynamic-loading", "cuda-13000"] }
 
 # Traces and logs (OTLP → Alloy → Tempo / logs), as the other services
 opentelemetry = "0.32"
@@ -46,6 +61,12 @@ opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "logs"] }
 opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
 
+[features]
+# `kindred-world bench --device cuda` (bench/gpu.rs).
+gpu = ["dep:cudarc"]
+
 [dev-dependencies]
+# Planted models in the factorization's tests
+rand_distr = "0.5"
 # Reads allowed_raw_io.toml in tests/allowed_raw_io.rs, Cargo.toml in tests/fixture.rs
 toml.workspace = true

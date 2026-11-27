@@ -16,6 +16,17 @@ pub mod flags {
     pub const NOT_A_BOOK: u8 = 1;
     /// A description of 200 characters or more.
     pub const HAS_DESCRIPTION: u8 = 2;
+    /// May be picked: searchable, has a vector and a cover, is a book, popular enough
+    /// (02-world-data.md §4).
+    pub const RECOMMENDABLE: u8 = 4;
+}
+
+/// Bits of a vector's source byte: where its blocks came from (03-engine.md §3).
+pub mod source {
+    /// The collaborative block was placed from the work's text, not from reading data.
+    pub const C_FROM_TEXT: u8 = 1;
+    /// The aspect block was predicted from the text, not from shelves and subjects.
+    pub const A_FROM_TEXT: u8 = 2;
 }
 
 /// A row number: private to one world version. Never store one.
@@ -34,6 +45,12 @@ pub struct World {
     series_offsets: Column<u64>,
     series_text: Column<u8>,
     redirects: Column<u64>,
+    vector_rows: Column<u32>,
+    vectors: Column<f32>,
+    vector_source: Column<u8>,
+    neighbour_offsets: Column<u64>,
+    neighbour_rows: Column<u32>,
+    neighbour_sims: Column<f32>,
     fields: Fields,
     search: IndexReader,
 }
@@ -137,6 +154,48 @@ impl World {
             });
         }
 
+        let d = manifest.model.layout.d();
+        let vector_rows = Column::<u32>::open(&col(files::VECTOR_ROWS))?;
+        let vectors = Column::<f32>::open(&col(files::VECTORS))?;
+        let vector_source = Column::<u8>::open(&col(files::VECTOR_SOURCE))?;
+        let count = vector_source.len();
+        if vector_rows.len() != n
+            || vectors.len() != count * d
+            || vector_rows
+                .as_slice()
+                .iter()
+                .any(|&r| r != u32::MAX && r as usize >= count)
+        {
+            return Err(Error::Corrupt {
+                path: files::VECTORS.into(),
+                what: format!("{count} vectors of {d} numbers do not match the works"),
+            });
+        }
+        if manifest.model.aspects.len() != manifest.model.layout.a {
+            return Err(Error::Corrupt {
+                path: files::MANIFEST.into(),
+                what: "the aspects do not match the vector layout".into(),
+            });
+        }
+
+        let neighbour_offsets = Column::<u64>::open(&col(files::NEIGHBOUR_OFFSETS))?;
+        let neighbour_rows = Column::<u32>::open(&col(files::NEIGHBOUR_ROWS))?;
+        let neighbour_sims = Column::<f32>::open(&col(files::NEIGHBOUR_SIMS))?;
+        let offsets = neighbour_offsets.as_slice();
+        if offsets.len() != n + 1
+            || offsets.first() != Some(&0)
+            || offsets.last() != Some(&(neighbour_rows.len() as u64))
+            || offsets.windows(2).any(|p| p[0] > p[1])
+            || neighbour_sims.len() != neighbour_rows.len()
+            || neighbour_rows.as_slice().iter().any(|&r| r as usize >= n)
+            || neighbour_sims.as_slice().iter().any(|s| !s.is_finite())
+        {
+            return Err(Error::Corrupt {
+                path: files::NEIGHBOUR_OFFSETS.into(),
+                what: "bad offsets, rows or similarities".into(),
+            });
+        }
+
         let index = Index::open_in_dir(dir.join(files::SEARCH_DIR))?;
         search::register_tokenizer(&index);
         let (_, fields) = search::schema();
@@ -157,6 +216,12 @@ impl World {
             series_offsets,
             series_text,
             redirects,
+            vector_rows,
+            vectors,
+            vector_source,
+            neighbour_offsets,
+            neighbour_rows,
+            neighbour_sims,
             fields,
             search,
         })
@@ -231,6 +296,37 @@ impl World {
         }
     }
 
+    /// The work's book vector, when it has one.
+    pub fn vector(&self, row: Row) -> Option<&[f32]> {
+        let v = self.vector_rows.as_slice()[row.0 as usize];
+        if v == u32::MAX {
+            return None;
+        }
+        let d = self.manifest.model.layout.d();
+        Some(&self.vectors.as_slice()[v as usize * d..(v as usize + 1) * d])
+    }
+
+    /// The work's pick-up neighbours (03-engine.md §8), nearest first: what readers who liked it
+    /// also liked, with the similarity.
+    pub fn neighbours(&self, row: Row) -> impl Iterator<Item = (Row, f32)> + '_ {
+        let o = self.neighbour_offsets.as_slice();
+        let range = o[row.0 as usize] as usize..o[row.0 as usize + 1] as usize;
+        self.neighbour_rows.as_slice()[range.clone()]
+            .iter()
+            .zip(&self.neighbour_sims.as_slice()[range])
+            .map(|(&r, &s)| (Row(r), s))
+    }
+
+    /// Where the work's vector blocks came from ([`source`]); 0 without a vector.
+    pub fn vector_source(&self, row: Row) -> u8 {
+        let v = self.vector_rows.as_slice()[row.0 as usize];
+        if v == u32::MAX {
+            0
+        } else {
+            self.vector_source.as_slice()[v as usize]
+        }
+    }
+
     pub fn search(&self, text: &str, limit: usize) -> Result<Vec<Hit>> {
         search::search(
             &self.search,
@@ -244,5 +340,22 @@ impl World {
     /// What a search result would show for one work, if it is searchable.
     pub fn book(&self, key: WorkKey) -> Result<Option<Hit>> {
         search::by_key(&self.search, &self.fields, key)
+    }
+}
+
+/// The taste model reads vectors by world row (`taste::Row` is a [`Row`]'s number).
+impl taste::Vectors for World {
+    fn layout(&self) -> taste::Layout {
+        self.manifest.model.layout
+    }
+
+    fn phi(&self, work: taste::Row) -> Option<&[f32]> {
+        ((work.0 as usize) < self.len())
+            .then(|| self.vector(Row(work.0)))
+            .flatten()
+    }
+
+    fn text_sourced(&self, work: taste::Row) -> bool {
+        (work.0 as usize) < self.len() && self.vector_source(Row(work.0)) & source::C_FROM_TEXT != 0
     }
 }

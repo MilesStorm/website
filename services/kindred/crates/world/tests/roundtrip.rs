@@ -3,7 +3,30 @@
 use std::collections::BTreeMap;
 
 use proptest::prelude::*;
-use world::{BookDoc, SearchParams, WorkKey, WorkRow, World, WorldWriter};
+use world::{BookDoc, Model, SearchParams, VectorTable, WorkKey, WorkRow, World, WorldWriter};
+
+/// A small vector layout: d = 1 + 2 + 2 + 1 + 5.
+fn model() -> Model {
+    Model {
+        layout: taste::Layout { k: 2, r: 2, a: 1 },
+        aspects: vec![world::Aspect {
+            id: "dark".into(),
+            group: "tone".into(),
+            label: "how dark it is".into(),
+            phrase: "a dark tone".into(),
+            shelves: vec!["dark".into()],
+            subjects: vec![],
+            chip: true,
+            steer: "dark".into(),
+        }],
+        hyper: taste::Hyper::default(),
+        prior: taste::Prior {
+            m0_meta: [0.5, 0.25, 0.0, 0.0, 0.1],
+        },
+        confidence_cuts: [0.5, 0.8],
+        bench: serde_json::json!({"ndcg10_n20": 0.1}),
+    }
+}
 
 fn params() -> SearchParams {
     SearchParams {
@@ -78,7 +101,9 @@ proptest! {
         let path = dir.path().join("w");
         let mut writer = WorldWriter::create(&path).unwrap();
         let rows: Vec<WorkRow> = input.works.iter().map(|(&k, &(popularity, quality, year, not_a_book, has_description, series))| WorkRow {
-            key: WorkKey(k), popularity, quality, year, not_a_book, has_description, series,
+            key: WorkKey(k), popularity, quality, year, not_a_book, has_description,
+            // Every third work has a vector; of those, every other one is recommendable.
+            recommendable: k % 6 == 0, series,
         }).collect();
         let books: Vec<BookDoc> = rows.iter().zip(&input.titles).map(|(r, title)| BookDoc {
             key: r.key,
@@ -99,8 +124,52 @@ proptest! {
         // Reversed: the writer sorts.
         writer.write_works(rows.iter().rev().cloned().collect(), &input.series).unwrap();
         writer.write_redirects(input.redirects.iter().map(|(&a, &b)| (WorkKey(a), WorkKey(b))).collect()).unwrap();
+        let d = model().layout.d();
+        // Vectors for every third work, plus one for a work that is not in the world.
+        let mut table = VectorTable { d, keys: vec![], data: vec![], source: vec![] };
+        let mut vector_keys: Vec<u64> = rows.iter().map(|r| r.key.0).filter(|k| k % 3 == 0).collect();
+        vector_keys.push(1_000_003);
+        vector_keys.sort_unstable();
+        vector_keys.dedup();
+        for &k in &vector_keys {
+            table.keys.push(WorkKey(k));
+            table.data.extend((0..d).map(|i| (k as f32) * 0.001 + i as f32));
+            table.source.push((k % 4) as u8 & 3);
+        }
+        let recommendable: Vec<WorkKey> = rows.iter().filter(|r| r.recommendable).map(|r| r.key).collect();
+        writer.write_vectors(&table, &recommendable).unwrap();
+        // Neighbours for every second work: the first three works (not itself), weakest first,
+        // plus one work that is not in the world; and a list for a work that is not in it.
+        let mut sorted_keys: Vec<WorkKey> = rows.iter().map(|r| r.key).collect();
+        sorted_keys.sort_unstable();
+        let expected_neighbours = |k: WorkKey| -> Vec<(WorkKey, f32)> {
+            if !k.0.is_multiple_of(2) {
+                return vec![];
+            }
+            let mut v: Vec<(WorkKey, f32)> = sorted_keys
+                .iter()
+                .copied()
+                .filter(|&o| o != k)
+                .take(3)
+                .enumerate()
+                .map(|(i, o)| (o, 0.5 / (i as f32 + 1.0)))
+                .collect();
+            v.sort_by(|a, b| b.1.total_cmp(&a.1));
+            v
+        };
+        let mut lists: Vec<(WorkKey, Vec<(WorkKey, f32)>)> = sorted_keys
+            .iter()
+            .map(|&k| {
+                let mut l = expected_neighbours(k);
+                l.reverse();
+                l.push((WorkKey(1_000_003), 0.9));
+                (k, l)
+            })
+            .collect();
+        lists.push((WorkKey(1_000_003), sorted_keys.first().map(|&k| (k, 0.1)).into_iter().collect()));
+        writer.write_neighbours(&lists).unwrap();
         let report = serde_json::json!({"works": rows.len()});
-        let manifest = writer.finish("2026-11-13T00:00:00Z".into(), "test".into(), vec![], params(), report).unwrap();
+        let manifest = writer.finish("2026-11-13T00:00:00Z".into(), "test".into(), vec![], params(), report, model()).unwrap();
 
         let world = World::open(&path).unwrap();
         prop_assert_eq!(world.manifest(), &manifest);
@@ -113,6 +182,19 @@ proptest! {
             prop_assert_eq!(world.year(row), r.year);
             prop_assert_eq!(world.flags(row) & world::reader::flags::NOT_A_BOOK != 0, r.not_a_book);
             prop_assert_eq!(world.flags(row) & world::reader::flags::HAS_DESCRIPTION != 0, r.has_description);
+            prop_assert_eq!(world.flags(row) & world::reader::flags::RECOMMENDABLE != 0, r.recommendable);
+            match world.vector(row) {
+                Some(v) => {
+                    prop_assert!(r.key.0 % 3 == 0);
+                    prop_assert_eq!(v.len(), d);
+                    prop_assert_eq!(v[1], (r.key.0 as f32) * 0.001 + 1.0);
+                    prop_assert_eq!(world.vector_source(row), (r.key.0 % 4) as u8 & 3);
+                    prop_assert_eq!(taste::Vectors::phi(&world, taste::Row(row.0)), Some(v));
+                }
+                None => prop_assert!(r.key.0 % 3 != 0),
+            }
+            let got: Vec<(WorkKey, f32)> = world.neighbours(row).map(|(o, s)| (world.key(o), s)).collect();
+            prop_assert_eq!(got, expected_neighbours(r.key));
             let expected = r.series.map(|(s, p)| (input.series[s as usize].as_str(), p));
             prop_assert_eq!(world.series(row), expected);
         }
@@ -161,10 +243,28 @@ fn refuses_unknown_format_and_bad_checksums() {
         year: Some(1965),
         not_a_book: false,
         has_description: true,
+        recommendable: true,
         series: None,
     };
     writer.write_works(vec![row], &[]).unwrap();
     writer.write_redirects(vec![]).unwrap();
+    let d = model().layout.d();
+    // A recommendable work must have a vector.
+    let none = VectorTable {
+        d,
+        keys: vec![],
+        data: vec![],
+        source: vec![],
+    };
+    assert!(writer.write_vectors(&none, &[WorkKey(1)]).is_err());
+    let table = VectorTable {
+        d,
+        keys: vec![WorkKey(1)],
+        data: vec![0.5; d],
+        source: vec![0],
+    };
+    writer.write_vectors(&table, &[WorkKey(1)]).unwrap();
+    writer.write_neighbours(&[]).unwrap();
     writer
         .finish(
             "t".into(),
@@ -172,6 +272,7 @@ fn refuses_unknown_format_and_bad_checksums() {
             vec![],
             params(),
             serde_json::json!({}),
+            model(),
         )
         .unwrap();
     assert_eq!(
@@ -196,11 +297,11 @@ fn refuses_unknown_format_and_bad_checksums() {
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(
         &manifest,
-        text.replace("\"format_version\": 1", "\"format_version\": 2"),
+        text.replace("\"format_version\": 4", "\"format_version\": 5"),
     )
     .unwrap();
     assert!(matches!(
         World::open(&path),
-        Err(world::Error::Format { found: 2 })
+        Err(world::Error::Format { found: 5 })
     ));
 }
